@@ -218,6 +218,26 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 .ferr{font-size:13px;color:var(--err);margin-top:6px;min-height:18px}
 .admin-badge{background:rgba(124,108,240,0.15);color:var(--accent2);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 8px;font-size:11px;font-family:var(--fm);text-transform:uppercase}
 .buglevel-chip{padding:3px 9px;border-radius:4px;font-size:11px;font-family:var(--fm);font-weight:500;text-transform:uppercase}
+/* LEADERBOARD */
+.lb-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.lb-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;overflow:hidden}
+.lb-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+.lb-title{font-family:var(--fh);font-size:15px;font-weight:700}
+.lb-row{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);transition:background .15s}
+.lb-row:last-child{border-bottom:none}
+.lb-row:hover{background:var(--bg3)}
+.lb-rank{font-family:var(--fh);font-size:18px;font-weight:800;min-width:32px;text-align:center}
+.lb-rank.gold{color:#fbbf24}.lb-rank.silver{color:#94a3b8}.lb-rank.bronze{color:#b45309}
+.lb-name{flex:1;font-size:14px;font-weight:500}
+.lb-sub{font-size:11px;color:var(--text3);font-family:var(--fm)}
+.lb-count{font-family:var(--fh);font-size:22px;font-weight:800;color:var(--accent2)}
+.lb-bar{height:4px;background:var(--bg4);border-radius:99px;overflow:hidden;margin-top:4px}
+.lb-barfill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.lb-empty{padding:32px;text-align:center;color:var(--text3);font-family:var(--fm);font-size:13px}
+.lb-stat{background:var(--bg3);border-radius:8px;padding:10px 14px;text-align:center}
+.lb-stat-num{font-family:var(--fh);font-size:24px;font-weight:800}
+.lb-stat-lbl{font-size:10px;color:var(--text3);font-family:var(--fm);text-transform:uppercase;letter-spacing:1px;margin-top:2px}
+
 /* CONVERSATION */
 .conv-tab{display:flex;border-bottom:1px solid var(--border);margin-bottom:16px}
 .conv-tab-btn{padding:8px 16px;cursor:pointer;font-size:13px;color:var(--text3);border-bottom:2px solid transparent;transition:all .15s;user-select:none;font-weight:500}
@@ -836,6 +856,70 @@ window.doChangePassword=async()=>{
   catch(e){errEl.textContent=e.message;}
 };
 
+
+function leaderboardHtml(){
+  // Only count accepted (non-queued) bug/crash reports
+  const accepted = state.reports.filter(r => !r.queued && (r.type === 'bug' || r.type === 'crash'));
+  const suggestions = state.reports.filter(r => !r.queued && r.type === 'suggestion');
+
+  // Tally by discordUser
+  function tally(arr){
+    const map = {};
+    arr.forEach(r => {
+      const key = r.discordUserId || r.discordUser;
+      const name = r.discordUser || 'Unknown';
+      if (!map[key]) map[key] = { name, count: 0, minor: 0, moderate: 0, major: 0 };
+      map[key].count++;
+      if (r.bugLevel) map[key][r.bugLevel] = (map[key][r.bugLevel] || 0) + 1;
+    });
+    return Object.values(map).sort((a,b) => b.count - a.count);
+  }
+
+  const bugReporters = tally(accepted);
+  const suggReporters = tally(suggestions);
+  const max = bugReporters[0]?.count || 1;
+  const maxS = suggReporters[0]?.count || 1;
+
+  const rankClass = i => i === 0 ? 'gold' : i === 1 ? 'silver' : i === 2 ? 'bronze' : '';
+  const rankIcon = i => i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i+1}`;
+
+  function rowHtml(u, i, maxCount){
+    const pct = Math.round(u.count / maxCount * 100);
+    return`<div class="lb-row">
+      <div class="lb-rank ${rankClass(i)}">${rankIcon(i)}</div>
+      <div style="flex:1;min-width:0">
+        <div class="lb-name">${escHtml(u.name)}</div>
+        <div class="lb-sub">${u.minor?`${u.minor} minor `:''} ${u.moderate?`${u.moderate} moderate `:''} ${u.major?`${u.major} major`:''}</div>
+        <div class="lb-bar"><div class="lb-barfill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="lb-count">${u.count}</div>
+    </div>`;
+  }
+
+  // Overall stats
+  const totalReports = state.reports.filter(r => !r.queued).length;
+  const uniqueReporters = new Set(state.reports.filter(r=>!r.queued).map(r=>r.discordUserId||r.discordUser)).size;
+  const thisWeek = state.reports.filter(r => !r.queued && (Date.now() - new Date(r.createdAt).getTime()) < 7*24*60*60*1000).length;
+
+  return`<div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:20px">
+      <div class="lb-stat"><div class="lb-stat-num" style="color:var(--accent2)">${totalReports}</div><div class="lb-stat-lbl">Accepted Reports</div></div>
+      <div class="lb-stat"><div class="lb-stat-num" style="color:var(--ok)">${uniqueReporters}</div><div class="lb-stat-lbl">Unique Reporters</div></div>
+      <div class="lb-stat"><div class="lb-stat-num" style="color:var(--warn)">${thisWeek}</div><div class="lb-stat-lbl">This Week</div></div>
+    </div>
+    <div class="lb-grid">
+      <div class="lb-card">
+        <div class="lb-head"><span style="font-size:18px">🐛</span><span class="lb-title">Bug Reporters</span><span style="margin-left:auto;font-size:11px;color:var(--text3);font-family:var(--fm)">${accepted.length} accepted</span></div>
+        ${bugReporters.length ? bugReporters.slice(0,10).map((u,i)=>rowHtml(u,i,max)).join('') : '<div class="lb-empty">No accepted bug reports yet</div>'}
+      </div>
+      <div class="lb-card">
+        <div class="lb-head"><span style="font-size:18px">💡</span><span class="lb-title">Suggestion Contributors</span><span style="margin-left:auto;font-size:11px;color:var(--text3);font-family:var(--fm)">${suggestions.length} accepted</span></div>
+        ${suggReporters.length ? suggReporters.slice(0,10).map((u,i)=>rowHtml(u,i,maxS)).join('') : '<div class="lb-empty">No accepted suggestions yet</div>'}
+      </div>
+    </div>
+  </div>`;
+}
+
 // ── Main render ───────────────────────────────────────────────────────────────
 function render(){
   const root=document.getElementById('root');
@@ -866,10 +950,11 @@ function render(){
     {k:'tasks',ic:'☑',lbl:'Task Board'},
     {k:'team',ic:'◉',lbl:'Team'},
     {k:'admin',ic:'⚙',lbl:CURRENT_USER.role==='admin'?'Admin':'My Account'},
+    {k:'leaderboard',ic:'🏆',lbl:'Leaderboard'},
   ];
   const navHtml=navItems.map(n=>`<div class="ni${nav===n.k?' on':''}" onclick="setNav('${n.k}')">${n.ic} ${n.lbl}${n.badge?`<span class="nbadge ${n.bc||''}">${n.badge}</span>`:''}</div>`).join('');
   const engHtml=users.slice(0,8).map((u,i)=>`<div class="eng-row">${avHtml(u,24,i)}<div><div style="font-size:13px;color:var(--text);font-weight:500">${escHtml(u.name)}</div><div style="font-size:11px;color:var(--text3)">${escHtml(u.role)}</div></div><div class="dot"></div></div>`).join('');
-  const titles={queue:'Bug Queue',overview:'Overview',bugs:'Bug Reports',suggestions:'Suggestions',kanban:'Kanban Board',tasks:'Task Board',team:'Team',admin:CURRENT_USER.role==='admin'?'Admin Panel':'My Account'};
+  const titles={queue:'Bug Queue',overview:'Overview',bugs:'Bug Reports',suggestions:'Suggestions',kanban:'Kanban Board',tasks:'Task Board',team:'Team',admin:CURRENT_USER.role==='admin'?'Admin Panel':'My Account',leaderboard:'Reporter Leaderboard'};
 
   let content='';
   if(loading){content=`<div class="loading"><div class="spinner"></div>Loading from database...</div>`;}
@@ -918,6 +1003,7 @@ function render(){
     }).join('')}</div>`;
   }
   else if(nav==='admin'){content=adminPageHtml();}
+  else if(nav==='leaderboard'){content=leaderboardHtml();}
 
   root.innerHTML=`
     <div class="app">
