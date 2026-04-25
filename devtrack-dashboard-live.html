@@ -944,7 +944,7 @@ function render(){
   const navItems=[
     {k:'queue',ic:'⬤',lbl:'Bug Queue',badge:queuedCount,bc:'warn'},
     {k:'overview',ic:'◈',lbl:'Overview'},
-    {k:'bugs',ic:'⬡',lbl:'Bug Reports',badge:bugs,bc:''},
+    {k:'bugs',ic:'⬡',lbl:'Bug Reports',badge:activeReports.filter(r=>(r.type==='bug'||r.type==='crash')&&r.status!=='resolved').length||null,bc:''},
     {k:'suggestions',ic:'◇',lbl:'Suggestions',badge:sugg,bc:'p'},
     {k:'kanban',ic:'▦',lbl:'Kanban'},
     {k:'tasks',ic:'☑',lbl:'Task Board'},
