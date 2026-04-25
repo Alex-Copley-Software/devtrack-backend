@@ -1,0 +1,6 @@
+BOT_SECRET="dd883c6e88d47f57ffcd7d7f411b68c9848d0eab861aa8642d0ab5efd903b1b8"
+BOT_WEBHOOK_URL="http://devtrack-bot.railway.internal:3002"
+CORS_ORIGIN="https://lambent-lily-7bf643.netlify.app"
+DATABASE_URL="postgresql://postgres:CFUIWyanutoZCFdklkYtCqcSghgaheUM@postgres.railway.internal:5432/railway"
+JWT_SECRET="064158ac968a7ea56942563d5518538cd6186830e0cb3e76ee027c42f714963a"
+PORT="3001"
