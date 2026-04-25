@@ -19,7 +19,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
-// Simple bot auth via shared secret
 function botAuth(req, res, next) {
   const secret = req.headers['x-bot-secret'];
   if (!secret || secret !== process.env.BOT_SECRET) {
@@ -28,42 +27,25 @@ function botAuth(req, res, next) {
   next();
 }
 
-// POST /api/bot/report
-// Called by the Discord bot when a new forum post is detected
+// POST /api/bot/report — new Discord forum post
 router.post('/report', botAuth, upload.array('attachments', 10), async (req, res) => {
-  const {
-    type, title, description, tags,
-    discordUser, discordChannel, discordMessageId,
-    priority, attachmentUrls // Discord CDN URLs as JSON string
-  } = req.body;
+  const { type, title, description, tags, discordUser, discordChannel, discordMessageId, priority, attachmentUrls } = req.body;
 
   if (!type || !title || !description) {
     return res.status(400).json({ error: 'type, title, and description required' });
   }
 
-  console.log('[Bot] Incoming fields:', {
-    discordUser: req.body.discordUser,
-    discordUserId: req.body.discordUserId,
-    discordThreadId: req.body.discordThreadId,
-    discordMessageId: req.body.discordMessageId,
-  });
-
   try {
-    const parsedTags = tags
-      ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim()))
-      : [];
-
+    const parsedTags = tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [];
     const parsedUrls = attachmentUrls ? JSON.parse(attachmentUrls) : [];
 
-    // Download Discord CDN attachments and store locally
     const downloadedAttachments = [];
     for (const att of parsedUrls) {
       try {
         const response = await axios.get(att.url, { responseType: 'arraybuffer' });
         const ext = path.extname(att.filename) || '.bin';
         const fname = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
-        const fpath = path.join(uploadsDir, fname);
-        fs.writeFileSync(fpath, response.data);
+        fs.writeFileSync(path.join(uploadsDir, fname), response.data);
         downloadedAttachments.push({
           type: att.contentType?.startsWith('image/') ? 'image' : 'video',
           url: `/uploads/${fname}`,
@@ -74,7 +56,6 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
       }
     }
 
-    // Also handle directly uploaded files (multipart)
     const uploadedAttachments = (req.files || []).map(f => ({
       type: f.mimetype.startsWith('image/') ? 'image' : 'video',
       url: `/uploads/${f.filename}`,
@@ -94,25 +75,34 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
         discordChannel: discordChannel || 'unknown',
         discordMessageId: discordMessageId || null,
         queued: true,
-        status: "queued",
-        attachments: {
-          create: [...downloadedAttachments, ...uploadedAttachments]
-        }
+        status: 'queued',
+        attachments: { create: [...downloadedAttachments, ...uploadedAttachments] }
       },
       include: { attachments: true }
     });
 
     res.status(201).json({ success: true, reportId: report.id });
   } catch (err) {
-    if (err.code === 'P2002') {
-      return res.status(409).json({ error: 'This Discord message has already been submitted' });
-    }
+    if (err.code === 'P2002') return res.status(409).json({ error: 'Already submitted' });
     console.error(err);
     res.status(500).json({ error: 'Could not create report from bot' });
   }
 });
 
-// GET /api/bot/report-by-thread/:threadId — bot looks up reportId by Discord thread
+// PATCH /api/bot/report/:id — bot updates report fields (notifyOwner etc)
+router.patch('/report/:id', botAuth, async (req, res) => {
+  try {
+    const data = {};
+    if (req.body.notifyOwner !== undefined) data.notifyOwner = req.body.notifyOwner;
+    await prisma.report.update({ where: { id: req.params.id }, data });
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Bot PATCH] Error:', err.message);
+    res.status(500).json({ error: 'Could not update report' });
+  }
+});
+
+// GET /api/bot/report-by-thread/:threadId — look up reportId by Discord thread
 router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
   try {
     const report = await prisma.report.findFirst({
