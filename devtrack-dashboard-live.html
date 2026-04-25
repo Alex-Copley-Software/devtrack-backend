@@ -218,6 +218,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 .ferr{font-size:13px;color:var(--err);margin-top:6px;min-height:18px}
 .admin-badge{background:rgba(124,108,240,0.15);color:var(--accent2);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 8px;font-size:11px;font-family:var(--fm);text-transform:uppercase}
 .buglevel-chip{padding:3px 9px;border-radius:4px;font-size:11px;font-family:var(--fm);font-weight:500;text-transform:uppercase}
+/* DELETE MODAL */
+.delete-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:28px;width:480px;max-width:100%}
+.delete-modal-title{font-family:var(--fh);font-size:18px;font-weight:700;margin-bottom:6px}
+.delete-modal-sub{font-size:13px;color:var(--text2);margin-bottom:20px;line-height:1.6}
+.delete-report-title{font-size:13px;color:var(--text3);font-family:var(--fm);background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:18px;line-height:1.5}
+
 .buglevel-chip.minor{background:rgba(52,211,153,0.12);color:var(--ok);border:1px solid rgba(52,211,153,0.25)}
 .buglevel-chip.moderate{background:rgba(251,191,36,0.12);color:var(--warn);border:1px solid rgba(251,191,36,0.25)}
 .buglevel-chip.major{background:rgba(248,113,113,0.12);color:var(--err);border:1px solid rgba(248,113,113,0.25)}
@@ -226,7 +232,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 <body>
 <div id="root"></div>
 <script>
-const API='https://devtrack-backend-production.up.railway.app';
+const API='http://localhost:3001';
 let TOKEN=localStorage.getItem('devtrack_token');
 let CURRENT_USER=JSON.parse(localStorage.getItem('devtrack_user')||'null');
 
@@ -254,7 +260,7 @@ const updateUser=(id,d)=>api('PATCH',`/api/auth/users/${id}`,d);
 const deleteUser=(id)=>api('DELETE',`/api/auth/users/${id}`);
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'}};
+let state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false};
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 let toastTimer;
@@ -290,7 +296,7 @@ async function login(email,password){
 function logout(){
   TOKEN=null;CURRENT_USER=null;
   localStorage.removeItem('devtrack_token');localStorage.removeItem('devtrack_user');
-  state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'}};
+  state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false};
   renderLogin();
 }
 
@@ -485,15 +491,55 @@ window.doAccept=async(id)=>{
   }catch(e){showToast('Failed: '+e.message,'err');}
 };
 
-window.doDelete=async(id,title)=>{
-  if(!confirm(`Permanently delete "${title}"?\n\nThis cannot be undone.`))return;
+// Delete modal state
+let deleteState={id:null,title:null};
+
+window.doDelete=(id,title)=>{
+  deleteState={id,title};
+  state.deleteModal=true;
+  render();
+};
+
+window.closeDeleteModal=()=>{
+  deleteState={id:null,title:null};
+  state.deleteModal=false;
+  render();
+};
+
+window.confirmDelete=async()=>{
+  const reason=document.getElementById('delete-reason')?.value.trim()||'';
+  const{id}=deleteState;
   try{
+    // Patch devNotes with reason before deleting so backend sends it to Discord
+    if(reason){
+      await patchReport(id,{devNotes:reason});
+    }
     await deleteReport(id);
     state.reports=state.reports.filter(r=>r.id!==id);
     if(state.reviewId===id){state.reviewId=null;state.similar=[];}
-    showToast('Report deleted');render();
+    state.deleteModal=false;
+    state.modal=null;
+    deleteState={id:null,title:null};
+    showToast('Report declined and removed');render();
   }catch(e){showToast('Delete failed: '+e.message,'err');}
 };
+
+function deleteModalHtml(){
+  const{title}=deleteState;
+  return`<div class="modal-overlay" onclick="if(event.target===this)closeDeleteModal()">
+    <div class="delete-modal">
+      <div class="delete-modal-title">🗑 Decline & Remove Report</div>
+      <div class="delete-modal-sub">This will remove the report from DevTrack and notify the reporter in Discord that it won't be actioned.</div>
+      <div class="delete-report-title">${escHtml(title||'')}</div>
+      <span class="albl">Reason for declining (optional)</span>
+      <textarea class="atextarea" id="delete-reason" placeholder="e.g. This is working as intended, duplicate of another report, out of scope..." style="margin-bottom:18px"></textarea>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn-err" onclick="confirmDelete()" style="flex:1;justify-content:center">Decline & Remove</button>
+        <button class="btn btn-g" onclick="closeDeleteModal()" style="flex:1;justify-content:center">Cancel</button>
+      </div>
+    </div>
+  </div>`;
+}
 
 // ── Report card (active reports) ──────────────────────────────────────────────
 function reportCard(r){
@@ -789,6 +835,7 @@ function render(){
       </div>
     </div>
     ${modal?modalHtml(modal):''}
+    ${state.deleteModal?deleteModalHtml():''}
     <div id="toast" class="toast ok" style="display:none"></div>`;
 }
 
