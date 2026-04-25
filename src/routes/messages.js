@@ -26,14 +26,10 @@ router.get('/:reportId', auth, async (req, res) => {
   }
 });
 
-// POST /api/messages — bot posts a message
+// POST /api/messages
 router.post('/', botAuth, async (req, res) => {
   const { reportId, content, authorName, authorId, authorAvatar, attachments, isBot } = req.body;
-
-  if (!reportId || !content) {
-    return res.status(400).json({ error: 'reportId and content required' });
-  }
-
+  if (!reportId || !content) return res.status(400).json({ error: 'reportId and content required' });
   try {
     const message = await prisma.message.create({
       data: {
