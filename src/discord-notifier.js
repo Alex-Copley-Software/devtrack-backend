@@ -28,7 +28,7 @@ async function notify({ threadId, reportType, action, bugLevel, devNotes, discor
     console.log(`[Notifier] Discord notified: ${action} on thread ${threadId}`);
   } catch (err) {
     // Non-fatal — log but don't break the API response
-    console.error(`[Notifier] Failed to notify Discord:`, err.message);
+    console.error(`[Notifier] Failed to notify Discord:`, err.message, err.code, err.response?.status, err.response?.data);
   }
 }
 
