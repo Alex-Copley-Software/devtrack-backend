@@ -11,6 +11,7 @@ async function notify({ threadId, reportType, action, bugLevel, devNotes, discor
     console.log('[Notifier] No threadId — skipping Discord notification');
     return;
   }
+  console.log('[Notifier] Sending:', { action, notifyOwner, discordUserId }); // ADD THIS
 
   try {
     await axios.post(`${BOT_WEBHOOK}/action`, {
