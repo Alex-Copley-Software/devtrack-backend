@@ -112,16 +112,17 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
   }
 });
 
-// PATCH /api/bot/report/:id — bot updates report fields
-router.patch('/report/:id', botAuth, async (req, res) => {
+// GET /api/bot/report-by-thread/:threadId — bot looks up reportId by Discord thread
+router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
   try {
-    await prisma.report.update({
-      where: { id: req.params.id },
-      data: { notifyOwner: req.body.notifyOwner }
+    const report = await prisma.report.findFirst({
+      where: { discordThreadId: req.params.threadId },
+      select: { id: true }
     });
-    res.json({ success: true });
+    if (!report) return res.status(404).json({ error: 'Not found' });
+    res.json({ reportId: report.id });
   } catch (err) {
-    res.status(500).json({ error: 'Could not update report' });
+    res.status(500).json({ error: 'Lookup failed' });
   }
 });
 
