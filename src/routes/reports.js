@@ -85,7 +85,12 @@ router.get('/similar', auth, async (req, res) => {
       };
     });
 
-    res.json(scored.filter(c => c._score >= 3).sort((a,b) => b._score - a._score).slice(0, 6));
+    const results = scored
+      .filter(c => c._score >= 3)
+      .sort((a,b) => b._score - a._score)
+      .slice(0, 6)
+      .filter(c => c._titlePct >= 50 || c._descPct >= 50);
+    res.json(results);
   } catch (err) {
     res.status(500).json({ error: 'Could not search similar' });
   }
