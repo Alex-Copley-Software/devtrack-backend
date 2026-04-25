@@ -4,7 +4,6 @@ const auth = require('../middleware/auth');
 
 const prisma = new PrismaClient();
 
-// Bot auth middleware
 function botAuth(req, res, next) {
   const secret = req.headers['x-bot-secret'];
   if (!secret || secret !== process.env.BOT_SECRET) {
@@ -13,7 +12,7 @@ function botAuth(req, res, next) {
   next();
 }
 
-// GET /api/messages/:reportId — get all messages for a report
+// GET /api/messages/:reportId
 router.get('/:reportId', auth, async (req, res) => {
   try {
     const messages = await prisma.message.findMany({
@@ -22,33 +21,35 @@ router.get('/:reportId', auth, async (req, res) => {
     });
     res.json(messages);
   } catch (err) {
+    console.error('[Messages GET] Error:', err.message);
     res.status(500).json({ error: 'Could not fetch messages' });
   }
 });
 
-// POST /api/messages — bot posts a new message
+// POST /api/messages — bot posts a message
 router.post('/', botAuth, async (req, res) => {
   const { reportId, content, authorName, authorId, authorAvatar, attachments, isBot } = req.body;
-  if (!reportId || !content) return res.status(400).json({ error: 'reportId and content required' });
-  try {
-    // Check report exists
-    const report = await prisma.report.findUnique({ where: { id: reportId } });
-    if (!report) return res.status(404).json({ error: 'Report not found' });
 
+  if (!reportId || !content) {
+    return res.status(400).json({ error: 'reportId and content required' });
+  }
+
+  try {
     const message = await prisma.message.create({
       data: {
         reportId,
-        content,
-        authorName: authorName || 'Unknown',
-        authorId: authorId || '',
-        authorAvatar: authorAvatar || null,
-        attachments: attachments || [],
-        isBot: isBot || false,
+        content: String(content),
+        authorName: String(authorName || 'Unknown'),
+        authorId: String(authorId || ''),
+        authorAvatar: authorAvatar ? String(authorAvatar) : null,
+        attachments: Array.isArray(attachments) ? attachments.map(String) : [],
+        isBot: Boolean(isBot),
       }
     });
     res.status(201).json(message);
   } catch (err) {
-    res.status(500).json({ error: 'Could not save message' });
+    console.error('[Messages POST] Error:', err.message, '| reportId:', reportId);
+    res.status(500).json({ error: 'Could not save message', detail: err.message });
   }
 });
 
