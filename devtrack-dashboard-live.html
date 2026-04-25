@@ -218,6 +218,27 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 .ferr{font-size:13px;color:var(--err);margin-top:6px;min-height:18px}
 .admin-badge{background:rgba(124,108,240,0.15);color:var(--accent2);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 8px;font-size:11px;font-family:var(--fm);text-transform:uppercase}
 .buglevel-chip{padding:3px 9px;border-radius:4px;font-size:11px;font-family:var(--fm);font-weight:500;text-transform:uppercase}
+/* CONVERSATION */
+.conv-tab{display:flex;border-bottom:1px solid var(--border);margin-bottom:16px}
+.conv-tab-btn{padding:8px 16px;cursor:pointer;font-size:13px;color:var(--text3);border-bottom:2px solid transparent;transition:all .15s;user-select:none;font-weight:500}
+.conv-tab-btn.on{color:var(--accent2);border-bottom-color:var(--accent)}
+.conv-tab-btn:hover:not(.on){color:var(--text2)}
+.conv-messages{display:flex;flex-direction:column;gap:12px;max-height:340px;overflow-y:auto;padding-right:4px}
+.conv-msg{display:flex;gap:10px;align-items:flex-start}
+.conv-msg.bot-msg{opacity:.7}
+.conv-avatar{width:32px;height:32px;border-radius:50%;background:var(--bg4);border:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;font-family:var(--fh);overflow:hidden}
+.conv-avatar img{width:100%;height:100%;object-fit:cover}
+.conv-body{flex:1;min-width:0}
+.conv-header{display:flex;align-items:baseline;gap:8px;margin-bottom:3px}
+.conv-name{font-size:13px;font-weight:600;color:var(--text)}
+.conv-time{font-size:10px;color:var(--text3);font-family:var(--fm)}
+.conv-content{font-size:13px;color:var(--text2);line-height:1.6;word-break:break-word}
+.conv-attachments{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.conv-attachment{font-size:10px;color:var(--info);font-family:var(--fm);background:rgba(96,165,250,0.1);border:1px solid rgba(96,165,250,0.2);border-radius:4px;padding:2px 7px;text-decoration:none}
+.conv-attachment:hover{background:rgba(96,165,250,0.2)}
+.conv-empty{text-align:center;padding:32px;color:var(--text3);font-size:12px;font-family:var(--fm)}
+.conv-loading{text-align:center;padding:20px;color:var(--text3);font-size:12px;font-family:var(--fm)}
+
 /* DELETE MODAL */
 .delete-modal{background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:28px;width:480px;max-width:100%}
 .delete-modal-title{font-family:var(--fh);font-size:18px;font-weight:700;margin-bottom:6px}
@@ -255,12 +276,13 @@ const getSimilar=(title,excludeId)=>api('GET',`/api/reports/similar?title=${enco
 const toggleTask=(id,done)=>api('PATCH',`/api/tasks/${id}`,{done});
 const createTask=(text,userId)=>api('POST','/api/tasks',{text,userId,tag:'feature'});
 const changePassword=(c,n)=>api('POST','/api/auth/change-password',{currentPassword:c,newPassword:n});
+const getMessages=(reportId)=>api('GET',`/api/messages/${reportId}`);
 const registerUser=(d)=>api('POST','/api/auth/register',d);
 const updateUser=(id,d)=>api('PATCH',`/api/auth/users/${id}`,d);
 const deleteUser=(id)=>api('DELETE',`/api/auth/users/${id}`);
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false};
+let state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 let toastTimer;
@@ -296,7 +318,7 @@ async function login(email,password){
 function logout(){
   TOKEN=null;CURRENT_USER=null;
   localStorage.removeItem('devtrack_token');localStorage.removeItem('devtrack_user');
-  state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false};
+  state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
   renderLogin();
 }
 
@@ -567,7 +589,21 @@ function reportCard(r){
 }
 
 // ── Report detail modal ───────────────────────────────────────────────────────
-function openModal(id){state.modal=state.reports.find(r=>r.id===id)||null;render();}
+function openModal(id){
+  state.modal=state.reports.find(r=>r.id===id)||null;
+  state.modalTab='details';
+  state.modalMessages=[];
+  render();
+  // Load messages async
+  if(state.modal){
+    state.modalMessagesLoading=true;
+    getMessages(state.modal.id).then(msgs=>{
+      state.modalMessages=msgs||[];
+      state.modalMessagesLoading=false;
+      render();
+    }).catch(()=>{state.modalMessagesLoading=false;render();});
+  }
+}
 window.closeModal=()=>{state.modal=null;render();}
 window.saveModal=async()=>{
   const s=document.getElementById('m-status');
@@ -579,6 +615,41 @@ window.saveModal=async()=>{
     state.reports=state.reports.map(r=>r.id===updated.id?updated:r);
     state.modal=null;showToast('Report updated');render();
   }catch(e){showToast('Save failed: '+e.message,'err');}
+}
+
+window.setModalTab=(tab)=>{state.modalTab=tab;render();};
+
+function timeAgoFull(d){
+  const diff=Date.now()-new Date(d).getTime(),m=Math.floor(diff/60000);
+  if(m<1)return'just now';if(m<60)return m+'m ago';
+  const h=Math.floor(m/60);if(h<24)return h+'h ago';
+  return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function convHtml(){
+  if(state.modalMessagesLoading)return`<div class="conv-loading">Loading conversation...</div>`;
+  if(!state.modalMessages.length)return`<div class="conv-empty">No messages yet — Discord replies will appear here automatically</div>`;
+  return`<div class="conv-messages">${state.modalMessages.map(m=>{
+    const initl=m.authorName.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+    const avatarHtml=m.authorAvatar
+      ?`<img src="${escHtml(m.authorAvatar)}" onerror="this.style.display='none'">`
+      :initl;
+    const atts=(m.attachments||[]).map(url=>{
+      const fname=url.split('/').pop()||'attachment';
+      return`<a class="conv-attachment" href="${escHtml(url)}" target="_blank">📎 ${escHtml(fname)}</a>`;
+    }).join('');
+    return`<div class="conv-msg${m.isBot?' bot-msg':''}">
+      <div class="conv-avatar">${avatarHtml}</div>
+      <div class="conv-body">
+        <div class="conv-header">
+          <span class="conv-name">${escHtml(m.authorName)}</span>
+          <span class="conv-time">${timeAgoFull(m.createdAt)}</span>
+        </div>
+        <div class="conv-content">${escHtml(m.content)}</div>
+        ${atts?`<div class="conv-attachments">${atts}</div>`:''}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
 }
 
 function modalHtml(r){
