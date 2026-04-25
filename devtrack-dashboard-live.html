@@ -593,10 +593,10 @@ function openModal(id){
   state.modal=state.reports.find(r=>r.id===id)||null;
   state.modalTab='details';
   state.modalMessages=[];
+  state.modalMessagesLoading=true;
   render();
   // Load messages async
   if(state.modal){
-    state.modalMessagesLoading=true;
     getMessages(state.modal.id).then(msgs=>{
       state.modalMessages=msgs||[];
       state.modalMessagesLoading=false;
@@ -652,7 +652,39 @@ function convHtml(){
   }).join('')}</div>`;
 }
 
+function timeAgoFull(d){
+  const diff=Date.now()-new Date(d).getTime(),m=Math.floor(diff/60000);
+  if(m<1)return'just now';if(m<60)return m+'m ago';
+  const h=Math.floor(m/60);if(h<24)return h+'h ago';
+  return new Date(d).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+}
+
+function convHtml(){
+  if(state.modalMessagesLoading)return`<div style="text-align:center;padding:32px;color:var(--text3);font-family:var(--fm);font-size:13px">Loading conversation...</div>`;
+  if(!state.modalMessages||!state.modalMessages.length)return`<div style="text-align:center;padding:32px;color:var(--text3);font-family:var(--fm);font-size:13px">No messages yet — Discord replies will appear here automatically</div>`;
+  return`<div class="conv-messages">${state.modalMessages.map(m=>{
+    const initl=(m.authorName||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+    const atts=(m.attachments||[]).map(url=>{
+      const fname=url.split('/').pop()||'attachment';
+      return`<a class="conv-attachment" href="${escHtml(url)}" target="_blank">📎 ${escHtml(fname)}</a>`;
+    }).join('');
+    return`<div class="conv-msg">
+      <div class="conv-avatar">${initl}</div>
+      <div class="conv-body">
+        <div class="conv-header">
+          <span class="conv-name">${escHtml(m.authorName)}</span>
+          <span class="conv-time">${timeAgoFull(m.createdAt)}</span>
+        </div>
+        <div class="conv-content">${escHtml(m.content)}</div>
+        ${atts?`<div class="conv-attachments">${atts}</div>`:''}
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 function modalHtml(r){
+  const tab=state.modalTab||'details';
+  const msgCount=state.modalMessages?state.modalMessages.length:0;
   const opts=state.users.map((u,i)=>`<option value="${u.id}" ${(r.assignees||[]).find(a=>a.id===u.id)?'selected':''}>${escHtml(u.name)}</option>`).join('');
   return`<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">
     <div class="mth"><div>
@@ -664,6 +696,12 @@ function modalHtml(r){
       <div class="mttl">${escHtml(r.title)}</div>
     </div><button class="mclose" onclick="closeModal()">✕</button></div>
 
+    <div class="conv-tab">
+      <div class="conv-tab-btn${tab==='details'?' on':''}" onclick="setModalTab('details')">Details</div>
+      <div class="conv-tab-btn${tab==='conversation'?' on':''}" onclick="setModalTab('conversation')">Conversation${msgCount?' ('+msgCount+')':''}</div>
+    </div>
+
+    ${tab==='details'?`
     <span class="mlbl">Description</span>
     <div class="mval">${escHtml(r.description)}</div>
 
@@ -692,9 +730,10 @@ function modalHtml(r){
 
     <div style="display:flex;gap:8px;padding-top:14px;border-top:1px solid var(--border)">
       <button class="btn btn-p" onclick="saveModal()" style="flex:1">Save Changes</button>
-      <button class="btn btn-err" onclick="doDelete('${r.id}','${escHtml(r.title)}').then(()=>closeModal())">Delete</button>
+      <button class="btn btn-err" onclick="doDelete('${r.id}','${escHtml(r.title)}')">Delete</button>
       <button class="btn btn-g" onclick="closeModal()">Cancel</button>
     </div>
+    `:convHtml()}
   </div></div>`;
 }
 
