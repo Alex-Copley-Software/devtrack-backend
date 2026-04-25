@@ -115,7 +115,7 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
 // PATCH /api/bot/report/:id — bot updates report fields
 router.patch('/report/:id', botAuth, async (req, res) => {
   try {
-    const report = await prisma.report.update({
+    await prisma.report.update({
       where: { id: req.params.id },
       data: { notifyOwner: req.body.notifyOwner }
     });
