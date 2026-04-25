@@ -28,6 +28,12 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.get('/api/config', (req, res) => {
+  res.json({
+    discordServerId: process.env.DISCORD_SERVER_ID || null,
+  });
+});
+
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ error: 'Internal server error' });

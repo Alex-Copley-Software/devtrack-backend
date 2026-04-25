@@ -302,6 +302,7 @@ const updateUser=(id,d)=>api('PATCH',`/api/auth/users/${id}`,d);
 const deleteUser=(id)=>api('DELETE',`/api/auth/users/${id}`);
 
 // ── State ─────────────────────────────────────────────────────────────────────
+let DISCORD_SERVER_ID=null;
 let state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
@@ -319,7 +320,8 @@ function showToast(msg,type='ok'){
 async function loadAll(){
   state.loading=true;render();
   try{
-    const[reports,users,tasks]=await Promise.all([getReports(),getUsers(),getTasks()]);
+    const[reports,users,tasks,config]=await Promise.all([getReports(),getUsers(),getTasks(),fetch(API+'/api/config').then(r=>r.json()).catch(()=>({}))]);
+    if(config.discordServerId) DISCORD_SERVER_ID=config.discordServerId;
     state.reports=reports||[];state.users=users||[];state.tasks=tasks||[];
     // If reviewing a report that no longer exists, clear it
     if(state.reviewId&&!state.reports.find(r=>r.id===state.reviewId))state.reviewId=null;
@@ -352,6 +354,10 @@ function avHtml(user,size,idx){
 }
 function statusLabel(s){return{queued:'Queued',open:'Open',in_progress:'In Progress',reviewing:'Reviewing',resolved:'Resolved'}[s]||s;}
 function timeAgo(d){const diff=Date.now()-new Date(d).getTime(),m=Math.floor(diff/60000);if(m<60)return m+'m ago';const h=Math.floor(m/60);if(h<24)return h+'h ago';return Math.floor(h/24)+'d ago';}
+function discordThreadUrl(threadId){
+  if(!threadId||!DISCORD_SERVER_ID)return null;
+  return`https://discord.com/channels/${DISCORD_SERVER_ID}/${threadId}`;
+}
 function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 const TAGC={bug:'rgba(248,113,113,0.15)|#f87171',feature:'rgba(124,108,240,0.15)|#a29bfe',review:'rgba(96,165,250,0.15)|#60a5fa',docs:'rgba(52,211,153,0.15)|#34d399',tests:'rgba(251,191,36,0.15)|#fbbf24',qa:'rgba(244,114,182,0.15)|#f472b6',ops:'rgba(96,165,250,0.15)|#60a5fa'};
 function tagStyle(t){const tc=(TAGC[t]||'rgba(255,255,255,0.05)|var(--text3)').split('|');return`background:${tc[0]};color:${tc[1]}`;}
@@ -438,7 +444,9 @@ function reviewPanelHtml(r){
       <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:center">
         <span class="tbadge ${r.type}">${r.type}</span>
         <span class="disc-badge">⬡ ${escHtml(r.discordUser)} · ${escHtml(r.discordChannel)}</span>
-        <span style="font-size:12px;color:var(--text3);font-family:var(--fm);margin-left:auto">${timeAgo(r.createdAt)}</span>
+        ${discordThreadUrl(r.discordThreadId)?`<a href="${discordThreadUrl(r.discordThreadId)}" target="_blank" style="font-size:11px;color:var(--accent2);font-family:var(--fm);text-decoration:none;padding:2px 8px;background:rgba(124,108,240,0.1);border:1px solid rgba(124,108,240,0.25);border-radius:4px">↗ Open in Discord</a>`:''}
+        ${discordThreadUrl(r.discordThreadId)?`<a href="${discordThreadUrl(r.discordThreadId)}" target="_blank" style="font-size:11px;color:var(--accent2);font-family:var(--fm);text-decoration:none;padding:2px 8px;background:rgba(124,108,240,0.1);border:1px solid rgba(124,108,240,0.25);border-radius:4px">↗ Discord</a>`:''}
+        <span style="font-size:12px;color:var(--text3);font-family:var(--fm)">${timeAgo(r.createdAt)}</span>
       </div>
       <div style="font-family:var(--fh);font-size:18px;font-weight:700;margin-bottom:12px;line-height:1.3">${escHtml(r.title)}</div>
       <div style="font-size:14px;color:var(--text2);line-height:1.7;margin-bottom:${(r.attachments||[]).length?12:0}px">${escHtml(r.description)}</div>
@@ -712,6 +720,7 @@ function modalHtml(r){
         <span class="tbadge ${r.type}">${r.type}</span>
         ${r.bugLevel?`<span class="buglevel-chip ${r.bugLevel}">${r.bugLevel}</span>`:''}
         <span class="disc-badge">⬡ ${escHtml(r.discordUser)} · ${escHtml(r.discordChannel)}</span>
+        ${discordThreadUrl(r.discordThreadId)?`<a href="${discordThreadUrl(r.discordThreadId)}" target="_blank" style="font-size:11px;color:var(--accent2);font-family:var(--fm);text-decoration:none;padding:2px 8px;background:rgba(124,108,240,0.1);border:1px solid rgba(124,108,240,0.25);border-radius:4px">↗ Open in Discord</a>`:''}
       </div>
       <div class="mttl">${escHtml(r.title)}</div>
     </div><button class="mclose" onclick="closeModal()">✕</button></div>
