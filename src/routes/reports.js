@@ -146,6 +146,7 @@ router.patch('/:id', auth, async (req, res) => {
   if (tags      !== undefined) data.tags     = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim());
   if (devNotes  !== undefined) data.devNotes = devNotes;
   if (queued    !== undefined) data.queued   = queued;
+  if (req.body.notifyOwner !== undefined) data.notifyOwner = req.body.notifyOwner;
   if (assigneeIds !== undefined) data.assignees = { set: assigneeIds.map(id => ({ id })) };
 
   try {
@@ -161,6 +162,7 @@ router.patch('/:id', auth, async (req, res) => {
         devNotes:      report.devNotes,
         discordUserId: report.discordUserId,
         assigneeName,
+        notifyOwner:   report.notifyOwner,
       });
     }
 
@@ -186,8 +188,7 @@ router.post('/:id/accept', auth, async (req, res) => {
       },
       include
     });
-    //TEST BELOW DEBUGGING
-    console.log('[Accept] Discord fields:', { threadId: report.discordThreadId, userId: report.discordUserId, type: report.type });
+
     // Notify Discord of acceptance
     const assigneeName = report.assignees?.[0]?.name || null;
     notify({
@@ -198,6 +199,7 @@ router.post('/:id/accept', auth, async (req, res) => {
       devNotes:      report.devNotes,
       discordUserId: report.discordUserId,
       assigneeName,
+      notifyOwner:   report.notifyOwner,
     });
 
     res.json(report);
@@ -222,6 +224,7 @@ router.delete('/:id', auth, async (req, res) => {
         action:        'declined',
         devNotes:      report.devNotes,
         discordUserId: report.discordUserId,
+        notifyOwner:   report.notifyOwner,
       });
     }
 

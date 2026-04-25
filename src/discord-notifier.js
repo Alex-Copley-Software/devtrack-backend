@@ -6,7 +6,7 @@ const axios = require('axios');
 const BOT_WEBHOOK = process.env.BOT_WEBHOOK_URL || 'http://localhost:3002';
 const BOT_SECRET  = process.env.BOT_SECRET;
 
-async function notify({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName }) {
+async function notify({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner }) {
   if (!threadId) {
     console.log('[Notifier] No threadId — skipping Discord notification');
     return;
@@ -21,6 +21,7 @@ async function notify({ threadId, reportType, action, bugLevel, devNotes, discor
       devNotes,
       discordUserId,
       assigneeName,
+      notifyOwner: !!notifyOwner,
     }, {
       headers: { 'x-bot-secret': BOT_SECRET },
       timeout: 5000,
@@ -28,7 +29,7 @@ async function notify({ threadId, reportType, action, bugLevel, devNotes, discor
     console.log(`[Notifier] Discord notified: ${action} on thread ${threadId}`);
   } catch (err) {
     // Non-fatal — log but don't break the API response
-    console.error(`[Notifier] Failed to notify Discord:`, err.message, err.code, err.response?.status, err.response?.data);
+    console.error(`[Notifier] Failed to notify Discord:`, err.message);
   }
 }
 
