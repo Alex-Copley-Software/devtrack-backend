@@ -21,6 +21,7 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
 function botAuth(req, res, next) {
   const secret = req.headers['x-bot-secret'];
+  console.log('[BotAuth] received:', JSON.stringify(secret), 'expected:', JSON.stringify(process.env.BOT_SECRET));
   if (!secret || secret !== process.env.BOT_SECRET) {
     return res.status(401).json({ error: 'Unauthorized bot request' });
   }
@@ -100,6 +101,7 @@ router.patch('/report/:id', botAuth, async (req, res) => {
     console.error('[Bot PATCH] Error:', err.message);
     res.status(500).json({ error: 'Could not update report' });
   }
+  
 });
 
 // GET /api/bot/report-by-thread/:threadId — look up reportId by Discord thread
