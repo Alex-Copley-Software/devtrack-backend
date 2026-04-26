@@ -33,7 +33,7 @@ model Report {
   tags             String[]
   devNotes         String?
   notifyOwner      Boolean  @default(false)
-  publishStatus    PublishStatus @default(unpublished)
+  publishStatus    String        @default("unpublished")
   discordUser      String
   discordUserId    String?
   discordChannel   String
@@ -102,11 +102,6 @@ enum BugLevel {
   minor
   moderate
   major
-}
-
-enum PublishStatus {
-  unpublished
-  published
 }
 
 enum Status {
