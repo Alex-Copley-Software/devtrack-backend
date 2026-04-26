@@ -157,13 +157,18 @@ router.patch('/:id', auth, async (req, res) => {
   try {
     const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
 
-    // If marked resolved, notify Discord
-    if (status === 'resolved') {
+    // Notify Discord on status changes
+    if (status && ['in_progress','reviewing','resolved'].includes(status)) {
       const assigneeName = report.assignees?.[0]?.name || null;
+      const actionMap = {
+        in_progress: 'in_progress',
+        reviewing:   'reviewing',
+        resolved:    'resolved',
+      };
       notify({
         threadId:      report.discordThreadId,
         reportType:    report.type,
-        action:        'resolved',
+        action:        actionMap[status],
         devNotes:      report.devNotes,
         discordUserId: report.discordUserId,
         assigneeName,

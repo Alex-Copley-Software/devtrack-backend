@@ -204,6 +204,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 .role-chip{padding:3px 9px;border-radius:4px;font-size:11px;font-family:var(--fm);font-weight:500;text-transform:uppercase}
 .role-chip.admin{background:rgba(124,108,240,0.15);color:var(--accent2);border:1px solid rgba(124,108,240,0.25)}
 .role-chip.engineer{background:rgba(52,211,153,0.1);color:var(--ok);border:1px solid rgba(52,211,153,0.2)}
+.role-chip.qa{background:rgba(96,165,250,0.1);color:var(--info);border:1px solid rgba(96,165,250,0.2)}
 .fi{width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:var(--ff);font-size:14px;outline:none;transition:border .15s;margin-top:4px}
 .fi:focus{border-color:var(--accent)}.fi::placeholder{color:var(--text3)}
 .fl{font-size:11px;font-family:var(--fm);letter-spacing:1px;text-transform:uppercase;color:var(--text3);display:block;margin-top:10px}
@@ -218,6 +219,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 .ferr{font-size:13px;color:var(--err);margin-top:6px;min-height:18px}
 .admin-badge{background:rgba(124,108,240,0.15);color:var(--accent2);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 8px;font-size:11px;font-family:var(--fm);text-transform:uppercase}
 .buglevel-chip{padding:3px 9px;border-radius:4px;font-size:11px;font-family:var(--fm);font-weight:500;text-transform:uppercase}
+.card-status-sel.open{background:rgba(248,113,113,0.12);color:var(--err)}
+.card-status-sel.in_progress{background:rgba(251,191,36,0.12);color:var(--warn)}
+.card-status-sel.reviewing{background:rgba(96,165,250,0.12);color:var(--info)}
+.card-status-sel.resolved{background:rgba(52,211,153,0.12);color:var(--ok)}
 /* QA REVIEW */
 .qa-list{display:flex;flex-direction:column;gap:10px}
 .qa-item{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:16px 18px;transition:border .2s}
@@ -322,7 +327,7 @@ const deleteUser=(id)=>api('DELETE',`/api/auth/users/${id}`);
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let DISCORD_SERVER_ID=null;
-let state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
+let state={nav:'queue',reports:[],users:[],tasks:[],filter:'open',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 let toastTimer;
@@ -359,7 +364,7 @@ async function login(email,password){
 function logout(){
   TOKEN=null;CURRENT_USER=null;
   localStorage.removeItem('devtrack_token');localStorage.removeItem('devtrack_user');
-  state={nav:'queue',reports:[],users:[],tasks:[],filter:'all',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
+  state={nav:'queue',reports:[],users:[],tasks:[],filter:'open',search:'',modal:null,loading:true,newTaskInputs:{},editingUser:null,reviewId:null,similar:[],acceptForm:{bugLevel:'',assigneeId:'',devNotes:'',priority:'medium'},deleteModal:false,modalTab:'details',modalMessages:[],modalMessagesLoading:false};
   renderLogin();
 }
 
@@ -804,7 +809,7 @@ function adminPageHtml(){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
         <div><label class="fl">Name</label><input class="fi" id="edit-name" value="${escHtml(u.name)}"></div>
         <div><label class="fl">Email</label><input class="fi" id="edit-email" value="${escHtml(u.email)}"></div>
-        <div><label class="fl">Role</label><select class="fsel" id="edit-role"><option value="engineer" ${u.role==='engineer'?'selected':''}>Engineer</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></div>
+        <div><label class="fl">Role</label><select class="fsel" id="edit-role"><option value="engineer" ${u.role==='engineer'?'selected':''}>Engineer</option><option value="qa" ${u.role==='qa'?'selected':''}>Quality Assurance</option><option value="admin" ${u.role==='admin'?'selected':''}>Admin</option></select></div>
         <div><label class="fl">New Password (optional)</label><input class="fi" id="edit-pass" type="password" placeholder="Leave blank to keep current"></div>
       </div>
       <div style="display:flex;gap:8px"><button class="btn btn-p" onclick="doUpdateUser('${u.id}')">Save</button><button class="btn btn-g" onclick="cancelEdit()">Cancel</button></div>
@@ -816,7 +821,7 @@ function adminPageHtml(){
     <div class="side-sub">New engineers will log in with the email and password you set here.</div>
     <label class="fl">Full Name</label><input class="fi" id="new-name" placeholder="Alex Rivera">
     <label class="fl">Email</label><input class="fi" id="new-email" type="email" placeholder="alex@yourco.com">
-    <label class="fl">Role</label><select class="fsel" id="new-role"><option value="engineer">Engineer</option><option value="admin">Admin</option></select>
+    <label class="fl">Role</label><select class="fsel" id="new-role"><option value="engineer">Engineer</option><option value="qa">Quality Assurance</option><option value="admin">Admin</option></select>
     <label class="fl">Temporary Password</label><input class="fi" id="new-pass" type="password" placeholder="Min 8 characters">
     <div class="ferr" id="add-err"></div>
     <button class="btn btn-p" onclick="doAddUser()" style="width:100%;margin-top:12px;justify-content:center">Add Engineer</button>
@@ -1067,7 +1072,7 @@ function render(){
       <div class="scard sc-p"><div class="slbl">Suggestions</div><div class="snum p">${sugg}</div><div class="sdelta">from community</div></div>
       <div class="scard sc-r"><div class="slbl">Resolved</div><div class="snum r">${res}</div><div class="sdelta">closed out</div></div>
     </div>`:'';
-    const filterTabs=['all','bug','crash','suggestion','minor','moderate','major','open','in_progress','resolved'].map(f=>`<div class="ftab${filter===f?' on':''}" onclick="setFilter('${f}')">${f==='in_progress'?'In Progress':f==='all'?'All':f.charAt(0).toUpperCase()+f.slice(1)}</div>`).join('');
+    const filterTabs=['open','in_progress','reviewing','resolved','minor','moderate','major','all'].map(f=>`<div class="ftab${filter===f?' on':''}" onclick="setFilter('${f}')">${f==='in_progress'?'In Progress':f==='all'?'All':f.charAt(0).toUpperCase()+f.slice(1)}</div>`).join('');
     content=`${statsHtml}<div class="fbar"><div class="ftabs">${filterTabs}</div><button class="btn btn-g" onclick="loadAll()" style="margin-left:auto">↻ Refresh</button></div><div class="cgrid">${shown.length?shown.map(reportCard).join(''):'<div class="empty">No reports match your filter</div>'}</div>`;
   }
   else if(nav==='kanban'){
@@ -1126,7 +1131,7 @@ function render(){
           <div class="uprof" onclick="setNav('admin')">
             ${avHtml(CURRENT_USER,26,curIdx>=0?curIdx:0)}
             <span style="font-size:14px;font-weight:500">${escHtml(CURRENT_USER.name.split(' ')[0])}</span>
-            ${CURRENT_USER.role==='admin'?'<span class="admin-badge">admin</span>':''}
+            ${CURRENT_USER.role==='admin'?'<span class="admin-badge">admin</span>':CURRENT_USER.role==='qa'?'<span class="admin-badge" style="background:rgba(96,165,250,0.15);color:var(--info);border-color:rgba(96,165,250,0.25)">qa</span>':''}
           </div>
         </div>
         <div class="content">${content}</div>
@@ -1171,6 +1176,16 @@ window.qaFailConfirm=async(id)=>{
   }catch(e){showToast('Failed: '+e.message,'err');}
 };
 
+window.quickStatus=async(id,status,el)=>{
+  // Update class immediately for visual feedback
+  el.className=`card-status-sel schip ${status}`;
+  try{
+    const updated=await patchReport(id,{status});
+    state.reports=state.reports.map(r=>r.id===id?updated:r);
+    showToast('Status updated');
+    render();
+  }catch(e){showToast('Failed to update status','err');}
+};
 window.setNav=k=>{state.nav=k;state.editingUser=null;render();};
 window.setFilter=f=>{state.filter=f;render();};
 window.setSearch=v=>{state.search=v;render();};
