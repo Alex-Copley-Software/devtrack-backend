@@ -152,6 +152,7 @@ router.patch('/:id', auth, async (req, res) => {
   if (devNotes  !== undefined) data.devNotes = devNotes;
   if (queued    !== undefined) data.queued   = queued;
   if (req.body.notifyOwner !== undefined) data.notifyOwner = req.body.notifyOwner;
+  if (req.body.publishStatus !== undefined) data.publishStatus = req.body.publishStatus;
   if (assigneeIds !== undefined) data.assignees = { set: assigneeIds.map(id => ({ id })) };
 
   try {
@@ -241,6 +242,19 @@ router.delete('/:id', auth, async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Could not delete report' });
+  }
+});
+
+// POST /api/reports/publish-all — mark all resolved+unpublished as published
+router.post('/publish-all', auth, async (req, res) => {
+  try {
+    const result = await prisma.report.updateMany({
+      where: { status: 'resolved', publishStatus: 'unpublished' },
+      data: { publishStatus: 'published' }
+    });
+    res.json({ success: true, count: result.count });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not publish reports' });
   }
 });
 

@@ -219,6 +219,14 @@ body{background:var(--bg);color:var(--text);font-family:var(--ff);font-size:15px
 .ferr{font-size:13px;color:var(--err);margin-top:6px;min-height:18px}
 .admin-badge{background:rgba(124,108,240,0.15);color:var(--accent2);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 8px;font-size:11px;font-family:var(--fm);text-transform:uppercase}
 .buglevel-chip{padding:3px 9px;border-radius:4px;font-size:11px;font-family:var(--fm);font-weight:500;text-transform:uppercase}
+/* PUBLISH STATUS */
+.pub-chip{padding:2px 8px;border-radius:4px;font-size:9px;font-family:var(--fm);font-weight:500;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;border:1px solid transparent;transition:all .15s}
+.pub-chip.unpublished{background:rgba(251,191,36,0.12);color:var(--warn);border-color:rgba(251,191,36,0.3)}
+.pub-chip.published{background:rgba(52,211,153,0.12);color:var(--ok);border-color:rgba(52,211,153,0.3)}
+.pub-chip:hover{opacity:.8}
+.publish-all-btn{background:linear-gradient(135deg,var(--ok),#059669);color:#fff;border:none;border-radius:8px;padding:8px 18px;font-family:var(--fh);font-size:13px;font-weight:700;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:8px}
+.publish-all-btn:hover{opacity:.9;transform:translateY(-1px)}
+
 .card-status-sel.open{background:rgba(248,113,113,0.12);color:var(--err)}
 .card-status-sel.in_progress{background:rgba(251,191,36,0.12);color:var(--warn)}
 .card-status-sel.reviewing{background:rgba(96,165,250,0.12);color:var(--info)}
@@ -321,6 +329,7 @@ const toggleTask=(id,done)=>api('PATCH',`/api/tasks/${id}`,{done});
 const createTask=(text,userId)=>api('POST','/api/tasks',{text,userId,tag:'feature'});
 const changePassword=(c,n)=>api('POST','/api/auth/change-password',{currentPassword:c,newPassword:n});
 const getMessages=(reportId)=>api('GET',`/api/messages/${reportId}`);
+const publishAll=()=>api('POST','/api/reports/publish-all');
 const registerUser=(d)=>api('POST','/api/auth/register',d);
 const updateUser=(id,d)=>api('PATCH',`/api/auth/users/${id}`,d);
 const deleteUser=(id)=>api('DELETE',`/api/auth/users/${id}`);
@@ -659,6 +668,7 @@ function reportCard(r){
     ${tags?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">${tags}</div>`:''}
     <div class="cf">
       ${statusSelectHtml(r)}
+      ${r.status==='resolved'?`<span class="pub-chip ${r.publishStatus||'unpublished'}" onclick="event.stopPropagation();togglePublish('${r.id}','${r.publishStatus||'unpublished'}')" title="Click to toggle">${r.publishStatus==='published'?'✓ Published':'⏳ Unpublished'}</span>`:''}
       ${mc?`<span style="font-size:12px;color:var(--text3);font-family:var(--fm)">📎 ${mc}</span>`:''}
       <div style="margin-left:auto;display:flex">${assHtml}</div>
       <span style="font-size:11px;color:var(--text3);font-family:var(--fm)">${timeAgo(r.createdAt)}</span>
@@ -1064,7 +1074,9 @@ function render(){
   const activeReports=reports.filter(r=>!r.queued);
   const queuedCount=reports.filter(r=>r.queued).length;
   const filtered=activeReports.filter(r=>{
-    const mf=filter==='all'||r.type===filter||r.status===filter||r.bugLevel===filter;
+    const publishFilters=['unpublished','published'];
+    const mf=filter==='all'||r.type===filter||r.status===filter||r.bugLevel===filter
+      ||(publishFilters.includes(filter)&&(r.publishStatus||'unpublished')===filter);
     const ms=!search||r.title.toLowerCase().includes(search.toLowerCase())||(r.description||'').toLowerCase().includes(search.toLowerCase());
     return mf&&ms;
   });
@@ -1104,8 +1116,14 @@ function render(){
       <div class="scard sc-p"><div class="slbl">Suggestions</div><div class="snum p">${sugg}</div><div class="sdelta">from community</div></div>
       <div class="scard sc-r"><div class="slbl">Resolved</div><div class="snum r">${res}</div><div class="sdelta">closed out</div></div>
     </div>`:'';
-    const filterTabs=['open','in_progress','reviewing','resolved','minor','moderate','major','all'].map(f=>`<div class="ftab${filter===f?' on':''}" onclick="setFilter('${f}')">${f==='in_progress'?'In Progress':f==='all'?'All':f.charAt(0).toUpperCase()+f.slice(1)}</div>`).join('');
-    content=`${statsHtml}<div class="fbar"><div class="ftabs">${filterTabs}</div><button class="btn btn-g" onclick="loadAll()" style="margin-left:auto">↻ Refresh</button></div><div class="cgrid">${shown.length?shown.map(reportCard).join(''):'<div class="empty">No reports match your filter</div>'}</div>`;
+    const filterTabs=['open','in_progress','reviewing','resolved','unpublished','published','minor','moderate','major','all'].map(f=>`<div class="ftab${filter===f?' on':''}" onclick="setFilter('${f}')">${f==='in_progress'?'In Progress':f==='all'?'All':f.charAt(0).toUpperCase()+f.slice(1)}</div>`).join('');
+    const unpubCount=activeReports.filter(r=>r.status==='resolved'&&(r.publishStatus||'unpublished')==='unpublished').length;
+    content=`${statsHtml}<div class="fbar"><div class="ftabs">${filterTabs}</div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        ${unpubCount>0?`<button class="publish-all-btn" onclick="doPublishAll()">🚀 Publish All (${unpubCount} pending)</button>`:''}
+        <button class="btn btn-g" onclick="loadAll()">↻ Refresh</button>
+      </div></div>
+      <div class="cgrid">${shown.length?shown.map(reportCard).join(''):'<div class="empty">No reports match your filter</div>'}</div>`;
   }
   else if(nav==='kanban'){
     const cols=[{k:'open',lbl:'Open',c:'var(--err)'},{k:'in_progress',lbl:'In Progress',c:'var(--warn)'},{k:'reviewing',lbl:'Reviewing',c:'var(--info)'},{k:'resolved',lbl:'Resolved',c:'var(--ok)'}];
@@ -1217,6 +1235,29 @@ window.quickStatus=async(id,status,el)=>{
     showToast('Status updated');
     render();
   }catch(e){showToast('Failed to update status','err');}
+};
+
+window.togglePublish=async(id,current)=>{
+  const next=current==='published'?'unpublished':'published';
+  try{
+    const updated=await patchReport(id,{publishStatus:next});
+    state.reports=state.reports.map(r=>r.id===id?updated:r);
+    showToast(next==='published'?'Marked as Published':'Marked as Unpublished');
+    render();
+  }catch(e){showToast('Failed: '+e.message,'err');}
+};
+
+window.doPublishAll=async()=>{
+  if(!confirm('Mark all resolved & unpublished reports as Published?\n\nThis means all pending fixes are now live for players.'))return;
+  try{
+    const res=await publishAll();
+    state.reports=state.reports.map(r=>
+      r.status==='resolved'&&(r.publishStatus||'unpublished')==='unpublished'
+        ?{...r,publishStatus:'published'}:r
+    );
+    showToast(`${res.count} report${res.count!==1?'s':''} marked as Published 🚀`);
+    render();
+  }catch(e){showToast('Failed: '+e.message,'err');}
 };
 window.setNav=k=>{state.nav=k;state.editingUser=null;render();};
 window.setFilter=f=>{state.filter=f;render();};
