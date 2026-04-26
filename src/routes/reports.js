@@ -248,14 +248,53 @@ router.delete('/:id', auth, async (req, res) => {
   }
 });
 
-// POST /api/reports/publish-all — mark all resolved+unpublished as published
+// POST /api/reports/publish-all — move all in_progress+flagged to reviewing
 router.post('/publish-all', auth, async (req, res) => {
   try {
-    const result = await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE status = 'resolved' AND "publishStatus" = 'unpublished'`;
-    res.json({ success: true, count: result });
+    // Find all in_progress reports flagged as ready (publishStatus = 'flagged')
+    const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
+    if (!flagged.length) return res.json({ success: true, count: 0 });
+
+    // Move them all to reviewing
+    await prisma.$executeRaw`UPDATE "Report" SET status = 'reviewing', "publishStatus" = 'unpublished' WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
+
+    // Notify Discord for each
+    const { notify } = require('../discord-notifier');
+    for (const r of flagged) {
+      notify({
+        threadId: r.discordThreadId,
+        reportType: r.type,
+        action: 'reviewing',
+        devNotes: r.devNotes,
+        discordUserId: r.discordUserId,
+        notifyOwner: r.notifyOwner,
+      });
+    }
+
+    res.json({ success: true, count: flagged.length });
   } catch (err) {
     console.error('[PublishAll]', err.message);
     res.status(500).json({ error: 'Could not publish reports' });
+  }
+});
+
+// POST /api/reports/:id/publish-resolved — QA approved, mark as resolved+published
+router.post('/:id/publish-resolved', auth, async (req, res) => {
+  try {
+    await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
+    const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
+    const { notify } = require('../discord-notifier');
+    notify({
+      threadId: report.discordThreadId,
+      reportType: report.type,
+      action: 'resolved',
+      devNotes: report.devNotes,
+      discordUserId: report.discordUserId,
+      notifyOwner: report.notifyOwner,
+    });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not resolve report' });
   }
 });
 
