@@ -460,7 +460,7 @@ function reviewPanelHtml(r){
     </div>`;
   }).join(''):`<div class="no-dups">✓ No similar active reports found</div>`;
 
-  const userOpts=state.users.map((u,i)=>`<option value="${u.id}" ${af.assigneeId===u.id?'selected':''}>${escHtml(u.name)}</option>`).join('');
+  const userOpts=state.users.filter(u=>u.role==='engineer'||u.role==='admin').map((u,i)=>`<option value="${u.id}" ${af.assigneeId===u.id?'selected':''}>${escHtml(u.name)}</option>`).join('');
 
   return`<div style="display:flex;flex-direction:column;gap:12px">
     <!-- Report detail -->
@@ -619,12 +619,15 @@ function deleteModalHtml(){
 function statusSelectHtml(r){
   const isQA=CURRENT_USER.role==='qa';
   if(isQA) return`<span class="schip ${r.status}">${statusLabel(r.status)}</span>`;
-  return`<select class="card-status-sel schip ${r.status}" onclick="event.stopPropagation()" onchange="quickStatus('${r.id}',this.value,this)" style="border:none;cursor:pointer;font-family:var(--fm);font-size:11px;font-weight:500;text-transform:uppercase;padding:3px 8px;border-radius:4px;outline:none;-webkit-appearance:none;appearance:none">
-    <option value="open" ${r.status==='open'?'selected':''}>Open</option>
-    <option value="in_progress" ${r.status==='in_progress'?'selected':''}>In Progress</option>
-    <option value="reviewing" ${r.status==='reviewing'?'selected':''}>Reviewing</option>
-    <option value="resolved" ${r.status==='resolved'?'selected':''}>Resolved</option>
-  </select>`;
+  return`<div style="position:relative;display:inline-flex;align-items:center" onclick="event.stopPropagation()">
+    <select class="card-status-sel schip ${r.status}" onchange="quickStatus('${r.id}',this.value,this)" style="border:none;cursor:pointer;font-family:var(--fm);font-size:11px;font-weight:500;text-transform:uppercase;padding:3px 24px 3px 8px;border-radius:4px;outline:none;-webkit-appearance:none;appearance:none;min-width:80px">
+      <option value="open" ${r.status==='open'?'selected':''}>Open</option>
+      <option value="in_progress" ${r.status==='in_progress'?'selected':''}>In Progress</option>
+      <option value="reviewing" ${r.status==='reviewing'?'selected':''}>Reviewing</option>
+      <option value="resolved" ${r.status==='resolved'?'selected':''}>Resolved</option>
+    </select>
+    <span style="position:absolute;right:6px;pointer-events:none;font-size:8px;opacity:0.7">▼</span>
+  </div>`;
 }
 
 function reportCard(r){
@@ -748,7 +751,7 @@ function convHtml(){
 function modalHtml(r){
   const tab=state.modalTab||'details';
   const msgCount=state.modalMessages?state.modalMessages.length:0;
-  const opts=state.users.map((u,i)=>`<option value="${u.id}" ${(r.assignees||[]).find(a=>a.id===u.id)?'selected':''}>${escHtml(u.name)}</option>`).join('');
+  const opts=state.users.filter(u=>u.role==='engineer'||u.role==='admin').map((u,i)=>`<option value="${u.id}" ${(r.assignees||[]).find(a=>a.id===u.id)?'selected':''}>${escHtml(u.name)}</option>`).join('');
   return`<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">
     <div class="mth"><div>
       <div style="display:flex;gap:7px;margin-bottom:8px;flex-wrap:wrap">
