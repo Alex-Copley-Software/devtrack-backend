@@ -152,10 +152,13 @@ router.patch('/:id', auth, async (req, res) => {
   if (devNotes  !== undefined) data.devNotes = devNotes;
   if (queued    !== undefined) data.queued   = queued;
   if (req.body.notifyOwner !== undefined) data.notifyOwner = req.body.notifyOwner;
-  if (req.body.publishStatus !== undefined) data.publishStatus = req.body.publishStatus;
   if (assigneeIds !== undefined) data.assignees = { set: assigneeIds.map(id => ({ id })) };
 
   try {
+    // Handle publishStatus via raw SQL since Prisma client may not have it generated yet
+    if (req.body.publishStatus !== undefined) {
+      await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = ${req.body.publishStatus} WHERE id = ${req.params.id}`;
+    }
     const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
 
     // Notify Discord on status changes
@@ -248,12 +251,10 @@ router.delete('/:id', auth, async (req, res) => {
 // POST /api/reports/publish-all — mark all resolved+unpublished as published
 router.post('/publish-all', auth, async (req, res) => {
   try {
-    const result = await prisma.report.updateMany({
-      where: { status: 'resolved', publishStatus: 'unpublished' },
-      data: { publishStatus: 'published' }
-    });
-    res.json({ success: true, count: result.count });
+    const result = await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE status = 'resolved' AND "publishStatus" = 'unpublished'`;
+    res.json({ success: true, count: result });
   } catch (err) {
+    console.error('[PublishAll]', err.message);
     res.status(500).json({ error: 'Could not publish reports' });
   }
 });
