@@ -47,14 +47,15 @@ model Report {
 }
 
 model Attachment {
-  id        String   @id @default(uuid())
-  reportId  String
-  type      String
-  url       String
-  filename  String
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  reportId   String
+  type       String
+  url        String
+  discordUrl String?
+  filename   String
+  createdAt  DateTime @default(now())
 
-  report    Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  report     Report   @relation(fields: [reportId], references: [id], onDelete: Cascade)
 }
 
 model Task {

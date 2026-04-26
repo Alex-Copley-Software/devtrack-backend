@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
+const { uploadBuffer, uploadFile } = require('../r2');
 
 const prisma = new PrismaClient();
 
@@ -21,14 +22,56 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
 function botAuth(req, res, next) {
   const secret = req.headers['x-bot-secret'];
-  console.log('[BotAuth] received:', JSON.stringify(secret), 'expected:', JSON.stringify(process.env.BOT_SECRET));
   if (!secret || secret !== process.env.BOT_SECRET) {
     return res.status(401).json({ error: 'Unauthorized bot request' });
   }
   next();
 }
 
-// POST /api/bot/report — new Discord forum post
+// Download a Discord CDN attachment, upload to R2, return URLs
+async function processAttachment(att) {
+  const { url: discordUrl, filename, contentType } = att;
+  const ext = path.extname(filename) || '.bin';
+  const key = `attachments/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+  const type = contentType?.startsWith('image/') ? 'image' : 'video';
+
+  let primaryUrl = null;
+
+  try {
+    // Download from Discord CDN
+    const response = await axios.get(discordUrl, {
+      responseType: 'arraybuffer',
+      timeout: 30000,
+    });
+    const buffer = Buffer.from(response.data);
+
+    // Try to upload to R2
+    primaryUrl = await uploadBuffer(buffer, key, contentType);
+
+    // Also save locally as fallback
+    const localFname = path.basename(key);
+    const localPath = path.join(uploadsDir, localFname);
+    fs.writeFileSync(localPath, buffer);
+
+    if (!primaryUrl) {
+      // R2 not configured — use local path
+      primaryUrl = `/uploads/${localFname}`;
+    }
+  } catch (err) {
+    console.error('[Bot] Failed to process attachment:', filename, err.message);
+    // Fall back to Discord CDN URL directly
+    primaryUrl = discordUrl;
+  }
+
+  return {
+    type,
+    url: primaryUrl,
+    discordUrl,   // always store original Discord URL as backup
+    filename,
+  };
+}
+
+// POST /api/bot/report
 router.post('/report', botAuth, upload.array('attachments', 10), async (req, res) => {
   const { type, title, description, tags, discordUser, discordChannel, discordMessageId, priority, attachmentUrls } = req.body;
 
@@ -36,32 +79,39 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
     return res.status(400).json({ error: 'type, title, and description required' });
   }
 
+  console.log('[Bot] Incoming fields:', {
+    discordUser: req.body.discordUser,
+    discordUserId: req.body.discordUserId,
+    discordThreadId: req.body.discordThreadId,
+    discordMessageId: req.body.discordMessageId,
+  });
+
   try {
     const parsedTags = tags ? (Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim())) : [];
     const parsedUrls = attachmentUrls ? JSON.parse(attachmentUrls) : [];
 
-    const downloadedAttachments = [];
+    // Process all Discord CDN attachments
+    const processedAttachments = [];
     for (const att of parsedUrls) {
-      try {
-        const response = await axios.get(att.url, { responseType: 'arraybuffer' });
-        const ext = path.extname(att.filename) || '.bin';
-        const fname = Date.now() + '-' + Math.round(Math.random() * 1e9) + ext;
-        fs.writeFileSync(path.join(uploadsDir, fname), response.data);
-        downloadedAttachments.push({
-          type: att.contentType?.startsWith('image/') ? 'image' : 'video',
-          url: `/uploads/${fname}`,
-          filename: att.filename
-        });
-      } catch (dlErr) {
-        console.error('Failed to download attachment:', att.url, dlErr.message);
-      }
+      const processed = await processAttachment(att);
+      processedAttachments.push(processed);
     }
 
-    const uploadedAttachments = (req.files || []).map(f => ({
-      type: f.mimetype.startsWith('image/') ? 'image' : 'video',
-      url: `/uploads/${f.filename}`,
-      filename: f.originalname
-    }));
+    // Handle directly uploaded files
+    const uploadedAttachments = [];
+    for (const f of (req.files || [])) {
+      const localPath = path.join(uploadsDir, f.filename);
+      const key = `attachments/${f.filename}`;
+      const r2Url = await uploadFile(localPath, key, f.mimetype);
+      uploadedAttachments.push({
+        type: f.mimetype.startsWith('image/') ? 'image' : 'video',
+        url: r2Url || `/uploads/${f.filename}`,
+        discordUrl: null,
+        filename: f.originalname,
+      });
+    }
+
+    const allAttachments = [...processedAttachments, ...uploadedAttachments];
 
     const report = await prisma.report.create({
       data: {
@@ -77,7 +127,13 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
         discordMessageId: discordMessageId || null,
         queued: true,
         status: 'queued',
-        attachments: { create: [...downloadedAttachments, ...uploadedAttachments] }
+        attachments: {
+          create: allAttachments.map(a => ({
+            type: a.type,
+            url: a.url,
+            filename: a.filename,
+          }))
+        }
       },
       include: { attachments: true }
     });
@@ -90,7 +146,7 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
   }
 });
 
-// PATCH /api/bot/report/:id — bot updates report fields (notifyOwner etc)
+// PATCH /api/bot/report/:id
 router.patch('/report/:id', botAuth, async (req, res) => {
   try {
     const data = {};
@@ -101,10 +157,9 @@ router.patch('/report/:id', botAuth, async (req, res) => {
     console.error('[Bot PATCH] Error:', err.message);
     res.status(500).json({ error: 'Could not update report' });
   }
-  
 });
 
-// GET /api/bot/report-by-thread/:threadId — look up reportId by Discord thread
+// GET /api/bot/report-by-thread/:threadId
 router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
   try {
     const report = await prisma.report.findFirst({

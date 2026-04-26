@@ -391,8 +391,14 @@ function mediaHtml(attachments){
   if(!attachments||!attachments.length)return'';
   return`<div class="media-grid">${attachments.map(a=>{
     const url=a.url.startsWith('http')?a.url:API+a.url;
-    if(a.type==='image')return`<div class="media-card"><img src="${url}" alt="${escHtml(a.filename)}" onclick="window.open('${url}','_blank')" onerror="this.style.display='none'"><div class="media-label">🖼 ${escHtml(a.filename)}</div></div>`;
-    return`<div class="media-card"><video controls preload="metadata"><source src="${url}"></video><div class="media-label">🎬 ${escHtml(a.filename)}</div></div>`;
+    const fallback=a.discordUrl||url;
+    if(a.type==='image')return`<div class="media-card">
+      <img src="${url}" alt="${escHtml(a.filename)}" onclick="window.open('${url}','_blank')"
+        onerror="if(this.src!=='${fallback}'){this.src='${fallback}';}else{this.style.display='none';}">
+      <div class="media-label">🖼 ${escHtml(a.filename)}</div></div>`;
+    return`<div class="media-card"><video controls preload="metadata">
+      <source src="${url}" onerror="this.src='${fallback}'">
+    </video><div class="media-label">🎬 ${escHtml(a.filename)}</div></div>`;
   }).join('')}</div>`;
 }
 
