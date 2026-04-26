@@ -1096,7 +1096,7 @@ function render(){
   const isQA=CURRENT_USER.role==='qa';
   const allNavItems=[
     {k:'queue',   ic:'⬤', lbl:'Bug Queue',    badge:queuedCount, bc:'warn', qaOk:true},
-    {k:'overview',ic:'◈', lbl:'Overview',      badge:null,        bc:'',     qaOk:true},
+    {k:'overview',ic:'◈', lbl:'Overview',      badge:null,        bc:'',     qaOk:false},
     {k:'bugs',    ic:'⬡', lbl:'Bug Reports',   badge:activeReports.filter(r=>(r.type==='bug'||r.type==='crash')&&r.status!=='resolved').length||null, bc:'', qaOk:false},
     {k:'suggestions',ic:'◇',lbl:'Suggestions', badge:sugg,        bc:'p',    qaOk:false},
     {k:'kanban',  ic:'▦', lbl:'Kanban',        badge:null,        bc:'',     qaOk:false},
@@ -1107,6 +1107,10 @@ function render(){
     {k:'admin',   ic:'⚙', lbl:CURRENT_USER.role==='admin'?'Admin':'My Account', badge:null, bc:'', qaOk:true},
   ];
   const navItems=isQA?allNavItems.filter(n=>n.qaOk):allNavItems;
+  // Redirect QA users away from restricted pages
+  if(isQA&&!['queue','qa','leaderboard','admin'].includes(nav)){
+    state.nav='queue'; return render();
+  }
   const navHtml=navItems.map(n=>`<div class="ni${nav===n.k?' on':''}" onclick="setNav('${n.k}')">${n.ic} ${n.lbl}${n.badge?`<span class="nbadge ${n.bc||''}">${n.badge}</span>`:''}</div>`).join('');
   const engHtml=users.slice(0,8).map((u,i)=>`<div class="eng-row">${avHtml(u,24,i)}<div><div style="font-size:13px;color:var(--text);font-weight:500">${escHtml(u.name)}</div><div style="font-size:11px;color:var(--text3)">${escHtml(u.role)}</div></div><div class="dot"></div></div>`).join('');
   const titles={queue:'Bug Queue',qa:'QA Review',overview:'Overview',bugs:'Bug Reports',suggestions:'Suggestions',kanban:'Kanban Board',tasks:'Task Board',team:'Team',admin:CURRENT_USER.role==='admin'?'Admin Panel':'My Account',leaderboard:'Reporter Leaderboard'};
