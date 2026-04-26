@@ -616,6 +616,17 @@ function deleteModalHtml(){
 }
 
 // ── Report card (active reports) ──────────────────────────────────────────────
+function statusSelectHtml(r){
+  const isQA=CURRENT_USER.role==='qa';
+  if(isQA) return`<span class="schip ${r.status}">${statusLabel(r.status)}</span>`;
+  return`<select class="card-status-sel schip ${r.status}" onclick="event.stopPropagation()" onchange="quickStatus('${r.id}',this.value,this)" style="border:none;cursor:pointer;font-family:var(--fm);font-size:11px;font-weight:500;text-transform:uppercase;padding:3px 8px;border-radius:4px;outline:none;-webkit-appearance:none;appearance:none">
+    <option value="open" ${r.status==='open'?'selected':''}>Open</option>
+    <option value="in_progress" ${r.status==='in_progress'?'selected':''}>In Progress</option>
+    <option value="reviewing" ${r.status==='reviewing'?'selected':''}>Reviewing</option>
+    <option value="resolved" ${r.status==='resolved'?'selected':''}>Resolved</option>
+  </select>`;
+}
+
 function reportCard(r){
   const asses=r.assignees||[];
   const assHtml=asses.length?asses.map((u,i)=>`<div style="width:18px;height:18px;border-radius:50%;background:${userColor(u,i)}22;color:${userColor(u,i)};border:1px solid ${userColor(u,i)}44;display:inline-flex;align-items:center;justify-content:center;font-size:7px;font-weight:700;margin-left:${i?-4:0}px">${initials(u.name)}</div>`).join(''):`<span style="font-size:9px;color:var(--text3)">unassigned</span>`;
@@ -632,7 +643,7 @@ function reportCard(r){
     <div class="cdesc">${escHtml(r.description)}</div>
     ${tags?`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px">${tags}</div>`:''}
     <div class="cf">
-      <span class="schip ${r.status}">${statusLabel(r.status)}</span>
+      ${statusSelectHtml(r)}
       ${mc?`<span style="font-size:12px;color:var(--text3);font-family:var(--fm)">📎 ${mc}</span>`:''}
       <div style="margin-left:auto;display:flex">${assHtml}</div>
       <span style="font-size:11px;color:var(--text3);font-family:var(--fm)">${timeAgo(r.createdAt)}</span>
@@ -772,7 +783,10 @@ function modalHtml(r){
         </select>
       </div>
       <div><span class="mlbl">Assign to</span>
-        <select class="msel" id="m-assignee"><option value="">Unassigned</option>${opts}</select>
+        ${CURRENT_USER.role==='qa'
+          ? `<div class="mval" style="padding:7px 11px">${(r.assignees||[]).map(a=>escHtml(a.name)).join(', ')||'Unassigned'}</div>`
+          : `<select class="msel" id="m-assignee"><option value="">Unassigned</option>${opts}</select>`
+        }
       </div>
     </div>
 
@@ -1007,8 +1021,9 @@ function qaPageHtml(){
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--border)">
         <div style="display:flex;gap:6px;flex-wrap:wrap">${assHtml}</div>
         <div style="margin-left:auto;display:flex;gap:8px">
-          <button class="btn btn-err" style="font-size:12px" onclick="qaFail('${r.id}')">✕ Failed — Send Back</button>
-          <button class="btn btn-ok" style="font-size:12px" onclick="qaVerify('${r.id}')">✓ Verified — Mark Resolved</button>
+          <button class="btn btn-g" style="font-size:12px" onclick="openModal('${r.id}')">View Details</button>
+          <button class="btn btn-err" style="font-size:12px" onclick="qaFail('${r.id}')">✕ Failed</button>
+          <button class="btn btn-ok" style="font-size:12px" onclick="qaVerify('${r.id}')">✓ Verified</button>
         </div>
       </div>
 
@@ -1046,18 +1061,20 @@ function render(){
   const res=activeReports.filter(r=>r.status==='resolved').length;
   const curIdx=users.findIndex(u=>u.id===CURRENT_USER.id);
 
-  const navItems=[
-    {k:'queue',ic:'⬤',lbl:'Bug Queue',badge:queuedCount,bc:'warn'},
-    {k:'overview',ic:'◈',lbl:'Overview'},
-    {k:'bugs',ic:'⬡',lbl:'Bug Reports',badge:activeReports.filter(r=>(r.type==='bug'||r.type==='crash')&&r.status!=='resolved').length||null,bc:''},
-    {k:'suggestions',ic:'◇',lbl:'Suggestions',badge:sugg,bc:'p'},
-    {k:'kanban',ic:'▦',lbl:'Kanban'},
-    {k:'qa',ic:'🔬',lbl:'QA Review',badge:activeReports.filter(r=>r.status==='reviewing').length||null,bc:'p'},
-    {k:'tasks',ic:'☑',lbl:'Task Board'},
-    {k:'team',ic:'◉',lbl:'Team'},
-    {k:'admin',ic:'⚙',lbl:CURRENT_USER.role==='admin'?'Admin':'My Account'},
-    {k:'leaderboard',ic:'🏆',lbl:'Leaderboard'},
+  const isQA=CURRENT_USER.role==='qa';
+  const allNavItems=[
+    {k:'queue',   ic:'⬤', lbl:'Bug Queue',    badge:queuedCount, bc:'warn', qaOk:true},
+    {k:'overview',ic:'◈', lbl:'Overview',      badge:null,        bc:'',     qaOk:true},
+    {k:'bugs',    ic:'⬡', lbl:'Bug Reports',   badge:activeReports.filter(r=>(r.type==='bug'||r.type==='crash')&&r.status!=='resolved').length||null, bc:'', qaOk:false},
+    {k:'suggestions',ic:'◇',lbl:'Suggestions', badge:sugg,        bc:'p',    qaOk:false},
+    {k:'kanban',  ic:'▦', lbl:'Kanban',        badge:null,        bc:'',     qaOk:false},
+    {k:'qa',      ic:'🔬',lbl:'QA Review',     badge:activeReports.filter(r=>r.status==='reviewing').length||null, bc:'p', qaOk:true},
+    {k:'tasks',   ic:'☑', lbl:'Task Board',    badge:null,        bc:'',     qaOk:false},
+    {k:'team',    ic:'◉', lbl:'Team',          badge:null,        bc:'',     qaOk:false},
+    {k:'leaderboard',ic:'🏆',lbl:'Leaderboard',badge:null,        bc:'',     qaOk:true},
+    {k:'admin',   ic:'⚙', lbl:CURRENT_USER.role==='admin'?'Admin':'My Account', badge:null, bc:'', qaOk:true},
   ];
+  const navItems=isQA?allNavItems.filter(n=>n.qaOk):allNavItems;
   const navHtml=navItems.map(n=>`<div class="ni${nav===n.k?' on':''}" onclick="setNav('${n.k}')">${n.ic} ${n.lbl}${n.badge?`<span class="nbadge ${n.bc||''}">${n.badge}</span>`:''}</div>`).join('');
   const engHtml=users.slice(0,8).map((u,i)=>`<div class="eng-row">${avHtml(u,24,i)}<div><div style="font-size:13px;color:var(--text);font-weight:500">${escHtml(u.name)}</div><div style="font-size:11px;color:var(--text3)">${escHtml(u.role)}</div></div><div class="dot"></div></div>`).join('');
   const titles={queue:'Bug Queue',qa:'QA Review',overview:'Overview',bugs:'Bug Reports',suggestions:'Suggestions',kanban:'Kanban Board',tasks:'Task Board',team:'Team',admin:CURRENT_USER.role==='admin'?'Admin Panel':'My Account',leaderboard:'Reporter Leaderboard'};
