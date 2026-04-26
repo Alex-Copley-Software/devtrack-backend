@@ -1021,8 +1021,8 @@ function qaPageHtml(){
       ? asses.map((u,i)=>`<div style="display:inline-flex;align-items:center;gap:5px;background:${userColor(u,i)}22;color:${userColor(u,i)};border:1px solid ${userColor(u,i)}44;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600">${initials(u.name)} ${escHtml(u.name)}</div>`).join(' ')
       : '<span style="font-size:11px;color:var(--text3)">unassigned</span>';
 
-    const discordLink = discordThreadUrl(r.discordThreadId)
-      ? `<a href="${discordThreadUrl(r.discordThreadId)}" target="_blank" style="font-size:11px;color:var(--accent2);font-family:var(--fm);text-decoration:none;padding:2px 7px;background:rgba(124,108,240,0.1);border:1px solid rgba(124,108,240,0.25);border-radius:4px">↗ Discord</a>`
+    const discordLink = r.discordThreadId&&DISCORD_SERVER_ID
+      ? `<button onclick="openDiscord('${r.discordThreadId}')" style="font-size:11px;color:var(--accent2);font-family:var(--fm);background:rgba(124,108,240,0.1);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 7px;cursor:pointer;border-style:solid">↗ Discord</button>`
       : '';
 
     return`<div class="qa-item" id="qa-${r.id}">
@@ -1032,7 +1032,7 @@ function qaPageHtml(){
             <span class="tbadge ${r.type}">${r.type}</span>
             ${r.bugLevel?`<span class="buglevel-chip ${r.bugLevel}">${r.bugLevel}</span>`:''}
             <span style="font-size:11px;color:var(--text3);font-family:var(--fm)">⬡ ${escHtml(r.discordUser)}</span>
-            ${r.discordThreadId&&DISCORD_SERVER_ID?`<button onclick="openDiscord('${r.discordThreadId}')" style="font-size:11px;color:var(--accent2);font-family:var(--fm);background:rgba(124,108,240,0.1);border:1px solid rgba(124,108,240,0.25);border-radius:4px;padding:2px 7px;cursor:pointer;border-style:solid">↗ Discord</button>`:''}`
+            ${discordLink}
             <span style="font-size:11px;color:var(--text3);font-family:var(--fm);margin-left:auto">${timeAgo(r.createdAt)}</span>
           </div>
           <div class="qa-title">${escHtml(r.title)}</div>
