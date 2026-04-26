@@ -173,6 +173,7 @@ router.patch('/:id', auth, async (req, res) => {
         threadId:      report.discordThreadId,
         reportType:    report.type,
         action:        actionMap[status],
+        bugLevel:      report.bugLevel,
         devNotes:      report.devNotes,
         discordUserId: report.discordUserId,
         assigneeName,
@@ -252,7 +253,7 @@ router.delete('/:id', auth, async (req, res) => {
 router.post('/publish-all', auth, async (req, res) => {
   try {
     // Find all in_progress reports flagged as ready (publishStatus = 'flagged')
-    const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
+    const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", "bugLevel", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
     if (!flagged.length) return res.json({ success: true, count: 0 });
 
     // Move them all to reviewing
@@ -262,12 +263,13 @@ router.post('/publish-all', auth, async (req, res) => {
     const { notify } = require('../discord-notifier');
     for (const r of flagged) {
       notify({
-        threadId: r.discordThreadId,
-        reportType: r.type,
-        action: 'reviewing',
-        devNotes: r.devNotes,
+        threadId:      r.discordThreadId,
+        reportType:    r.type,
+        action:        'reviewing',
+        bugLevel:      r.bugLevel,
+        devNotes:      r.devNotes,
         discordUserId: r.discordUserId,
-        notifyOwner: r.notifyOwner,
+        notifyOwner:   r.notifyOwner,
       });
     }
 
@@ -285,12 +287,13 @@ router.post('/:id/publish-resolved', auth, async (req, res) => {
     const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
     const { notify } = require('../discord-notifier');
     notify({
-      threadId: report.discordThreadId,
-      reportType: report.type,
-      action: 'resolved',
-      devNotes: report.devNotes,
+      threadId:      report.discordThreadId,
+      reportType:    report.type,
+      action:        'resolved',
+      bugLevel:      report.bugLevel,
+      devNotes:      report.devNotes,
       discordUserId: report.discordUserId,
-      notifyOwner: report.notifyOwner,
+      notifyOwner:   report.notifyOwner,
     });
     res.json(report);
   } catch (err) {
