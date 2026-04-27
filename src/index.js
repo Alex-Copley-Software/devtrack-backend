@@ -9,6 +9,7 @@ const taskRoutes = require('./routes/tasks');
 const userRoutes = require('./routes/users');
 const botRoutes = require('./routes/bot');
 const messageRoutes = require('./routes/messages');
+const historyRoutes = require('./routes/history');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -23,6 +24,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/bot', botRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/history', historyRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

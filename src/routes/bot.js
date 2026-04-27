@@ -141,6 +141,10 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
     // Set publishStatus via raw SQL since Prisma client may not have it generated yet
     await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'unpublished' WHERE id = ${report.id}`.catch(()=>{});
 
+    // Log initial queue entry to history
+    const { log } = require('../history-logger');
+    await log({ reportId: report.id, action: 'queued', detail: `Submitted by ${discordUser||'unknown'} via Discord`, actorName: discordUser||'Discord', actorId: req.body.discordUserId||'' });
+
     res.status(201).json({ success: true, reportId: report.id });
   } catch (err) {
     if (err.code === 'P2002') return res.status(409).json({ error: 'Already submitted' });

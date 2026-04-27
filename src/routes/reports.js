@@ -5,6 +5,7 @@ const fs = require('fs');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { notify } = require('../discord-notifier');
+const { log } = require('../history-logger');
 
 const prisma = new PrismaClient();
 
@@ -185,6 +186,18 @@ router.patch('/:id', auth, async (req, res) => {
     }
     const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
 
+    // Log status changes to history
+    if (status && status !== report.status) {
+      await log({ reportId: req.params.id, action: status, actorName: req.user.name, actorId: req.user.id });
+    }
+    if (assigneeIds !== undefined && assigneeIds.length > 0) {
+      const assigneeNames = report.assignees?.map(a=>a.name).join(', ') || 'Unassigned';
+      await log({ reportId: req.params.id, action: 'assigned', detail: assigneeNames, actorName: req.user.name, actorId: req.user.id });
+    }
+    if (req.body.devNotes !== undefined && req.body.devNotes !== report.devNotes) {
+      await log({ reportId: req.params.id, action: 'devnotes', actorName: req.user.name, actorId: req.user.id });
+    }
+
     // Auto-publish when manually resolved via dropdown
     if (status === 'resolved' && req.body.publishStatus === undefined) {
       await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = ${req.params.id}`;
@@ -246,6 +259,12 @@ router.post('/:id/accept', auth, async (req, res) => {
       notifyOwner:   report.notifyOwner,
     });
 
+    // Log accept to history
+    const assigneeName = report.assignees?.[0]?.name;
+    await log({ reportId: req.params.id, action: 'accepted', detail: `${report.bugLevel||''}${assigneeName?' → '+assigneeName:''}`, actorName: req.user.name, actorId: req.user.id });
+    if (assigneeName) await log({ reportId: req.params.id, action: 'assigned', detail: assigneeName, actorName: req.user.name, actorId: req.user.id });
+    if (report.bugLevel) await log({ reportId: req.params.id, action: 'buglevel', detail: report.bugLevel, actorName: req.user.name, actorId: req.user.id });
+
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not accept report' });
@@ -288,8 +307,15 @@ router.post('/publish-all', auth, async (req, res) => {
     // Move them all to reviewing
     await prisma.$executeRaw`UPDATE "Report" SET status = 'reviewing', "publishStatus" = 'unpublished' WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
 
+    // Log to history for each flagged report
+    const { log: histLog } = require('../history-logger');
+    for (const r of flagged) {
+      await histLog({ reportId: r.id, action: 'reviewing', actorName: req.user.name, actorId: req.user.id });
+    }
+
     // Notify Discord for each
     const { notify } = require('../discord-notifier');
+const { log } = require('../history-logger');
     for (const r of flagged) {
       notify({
         threadId:      r.discordThreadId,
@@ -315,6 +341,7 @@ router.post('/:id/publish-resolved', auth, async (req, res) => {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
     const { notify } = require('../discord-notifier');
+const { log } = require('../history-logger');
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,
@@ -324,6 +351,9 @@ router.post('/:id/publish-resolved', auth, async (req, res) => {
       discordUserId: report.discordUserId,
       notifyOwner:   report.notifyOwner,
     });
+    await log({ reportId: req.params.id, action: 'resolved', actorName: req.user.name, actorId: req.user.id });
+    await log({ reportId: req.params.id, action: 'published', actorName: req.user.name, actorId: req.user.id });
+
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not resolve report' });
