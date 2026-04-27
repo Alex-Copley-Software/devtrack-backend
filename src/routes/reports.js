@@ -260,9 +260,8 @@ router.post('/:id/accept', auth, async (req, res) => {
     });
 
     // Log accept to history
-    const assigneeName = report.assignees?.[0]?.name;
-    await log({ reportId: req.params.id, action: 'accepted', detail: `${report.bugLevel||''}${assigneeName?' → '+assigneeName:''}`, actorName: req.user.name, actorId: req.user.id });
-    if (assigneeName) await log({ reportId: req.params.id, action: 'assigned', detail: assigneeName, actorName: req.user.name, actorId: req.user.id });
+    await log({ reportId: req.params.id, action: 'accepted', detail: `${report.bugLevel||''}${report.assignees?.[0]?.name?' → '+report.assignees[0].name:''}`, actorName: req.user.name, actorId: req.user.id });
+    if (report.assignees?.[0]?.name) await log({ reportId: req.params.id, action: 'assigned', detail: report.assignees[0].name, actorName: req.user.name, actorId: req.user.id });
     if (report.bugLevel) await log({ reportId: req.params.id, action: 'buglevel', detail: report.bugLevel, actorName: req.user.name, actorId: req.user.id });
 
     res.json(report);
