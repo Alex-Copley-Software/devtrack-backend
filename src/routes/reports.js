@@ -51,45 +51,69 @@ router.get('/similar', auth, async (req, res) => {
   const { title, description, excludeId } = req.query;
   if (!title && !description) return res.json([]);
 
-  const stopWords = new Set(['this','that','with','have','from','they','been','were','when','what','your','will','would','could','should','there','their','about','which','after','before','other','also','more','just','than','then','into','over','some','such','these','those','only','even','most']);
-  const titleWords = (title||'').toLowerCase().split(/\W+/).filter(w => w.length > 3 && !stopWords.has(w));
-  const descWords  = (description||'').toLowerCase().split(/\W+/).filter(w => w.length > 4 && !stopWords.has(w));
-  const allWords   = [...new Set([...titleWords, ...descWords.slice(0, 10)])];
-  if (!allWords.length) return res.json([]);
+  // Expanded stop words to avoid common gaming/bug terms inflating scores
+  const stopWords = new Set([
+    'this','that','with','have','from','they','been','were','when','what','your','will','would',
+    'could','should','there','their','about','which','after','before','other','also','more','just',
+    'than','then','into','over','some','such','these','those','only','even','most','very','game',
+    'using','unit','units','does','not','can','still','being','used','show','appear','able','gets',
+    'cant','cannot','make','makes','made','like','same','different','another','issue','problem',
+    'report','minor','major','moderate','feedback','feature','request','please','screen','menu',
+    'button','click','select','when','where','mode','page','area','section'
+  ]);
+
+  // Only use meaningful words — min 5 chars for title, 6 for description
+  const titleWords = (title||'').toLowerCase().split(/\W+/).filter(w => w.length >= 5 && !stopWords.has(w));
+  const descWords  = (description||'').toLowerCase().split(/\W+/).filter(w => w.length >= 6 && !stopWords.has(w));
+
+  if (!titleWords.length) return res.json([]);
 
   try {
+    // Only search by title words — description matches alone are too noisy
     const candidates = await prisma.report.findMany({
       where: {
         id: excludeId ? { not: excludeId } : undefined,
-        OR: [
-          ...titleWords.map(w => ({ title: { contains: w, mode: 'insensitive' } })),
-          ...descWords.slice(0, 6).map(w => ({ description: { contains: w, mode: 'insensitive' } })),
-        ]
+        OR: titleWords.map(w => ({ title: { contains: w, mode: 'insensitive' } }))
       },
       include,
       orderBy: { createdAt: 'desc' },
-      take: 20
+      take: 15
     });
 
     const scored = candidates.map(c => {
       const ct = c.title.toLowerCase();
       const cd = c.description.toLowerCase();
-      let score = 0, titleHits = 0, descHits = 0;
-      titleWords.forEach(w => { if(ct.includes(w)){score+=3;titleHits++;} if(cd.includes(w)) score+=1; });
-      descWords.slice(0,10).forEach(w => { if(ct.includes(w)) score+=2; if(cd.includes(w)){score+=2;descHits++;} });
-      return {
-        ...c,
-        _score: score,
-        _titlePct: titleWords.length ? Math.round(titleHits/titleWords.length*100) : 0,
-        _descPct:  descWords.length  ? Math.round(descHits/Math.min(descWords.length,10)*100) : 0
-      };
+
+      // Count exact word matches in title (whole word boundary)
+      let titleHits = 0;
+      titleWords.forEach(w => {
+        // Require whole-word match to avoid partial false positives
+        const regex = new RegExp(`\b${w}\b`, 'i');
+        if (regex.test(ct)) titleHits++;
+      });
+
+      // Count desc word matches in candidate description
+      let descHits = 0;
+      descWords.slice(0, 8).forEach(w => {
+        const regex = new RegExp(`\b${w}\b`, 'i');
+        if (regex.test(cd)) descHits++;
+      });
+
+      const titlePct = titleWords.length >= 2 ? Math.round(titleHits / titleWords.length * 100) : (titleHits > 0 ? 100 : 0);
+      const descPct  = descWords.length >= 2  ? Math.round(descHits  / Math.min(descWords.length, 8) * 100) : 0;
+
+      // Combined score — title match is primary signal
+      const combinedScore = (titlePct * 0.7) + (descPct * 0.3);
+
+      return { ...c, _score: combinedScore, _titlePct: titlePct, _descPct: descPct };
     });
 
+    // Only show results where title match is 60%+ OR both title+desc are 50%+
     const results = scored
-      .filter(c => c._score >= 3)
-      .sort((a,b) => b._score - a._score)
-      .slice(0, 6)
-      .filter(c => c._titlePct >= 50 || c._descPct >= 50);
+      .filter(c => c._titlePct >= 60 || (c._titlePct >= 50 && c._descPct >= 50))
+      .sort((a, b) => b._score - a._score)
+      .slice(0, 5);
+
     res.json(results);
   } catch (err) {
     res.status(500).json({ error: 'Could not search similar' });
