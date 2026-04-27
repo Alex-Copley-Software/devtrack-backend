@@ -185,6 +185,11 @@ router.patch('/:id', auth, async (req, res) => {
     }
     const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
 
+    // Auto-publish when manually resolved via dropdown
+    if (status === 'resolved' && req.body.publishStatus === undefined) {
+      await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = ${req.params.id}`;
+    }
+
     // Notify Discord on status changes
     if (status && ['in_progress','reviewing','resolved'].includes(status)) {
       const assigneeName = report.assignees?.[0]?.name || null;
