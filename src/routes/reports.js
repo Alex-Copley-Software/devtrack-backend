@@ -47,76 +47,75 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// GET /api/reports/similar
+// GET /api/reports/similar — Jaccard similarity duplicate check
 router.get('/similar', auth, async (req, res) => {
   const { title, description, excludeId } = req.query;
-  if (!title && !description) return res.json([]);
-
-  // Expanded stop words to avoid common gaming/bug terms inflating scores
-  const stopWords = new Set([
-    'this','that','with','have','from','they','been','were','when','what','your','will','would',
-    'could','should','there','their','about','which','after','before','other','also','more','just',
-    'than','then','into','over','some','such','these','those','only','even','most','very','game',
-    'using','unit','units','does','not','can','still','being','used','show','appear','able','gets',
-    'cant','cannot','make','makes','made','like','same','different','another','issue','problem',
-    'report','minor','major','moderate','feedback','feature','request','please','screen','menu',
-    'button','click','select','when','where','mode','page','area','section'
-  ]);
-
-  // Only use meaningful words — min 5 chars for title, 6 for description
-  const titleWords = (title||'').toLowerCase().split(/\W+/).filter(w => w.length >= 5 && !stopWords.has(w));
-  const descWords  = (description||'').toLowerCase().split(/\W+/).filter(w => w.length >= 6 && !stopWords.has(w));
-
-  if (!titleWords.length) return res.json([]);
+  if (!title) return res.json([]);
 
   try {
-    // Only search by title words — description matches alone are too noisy
     const candidates = await prisma.report.findMany({
       where: {
         id: excludeId ? { not: excludeId } : undefined,
-        OR: titleWords.map(w => ({ title: { contains: w, mode: 'insensitive' } }))
+        queued: false,
       },
       include,
       orderBy: { createdAt: 'desc' },
-      take: 15
+      take: 100,
     });
+
+    function tokenize(str) {
+      return new Set(
+        (str || '').toLowerCase()
+          .replace(/[*_#`]/g, '')
+          .split(/\W+/)
+          .filter(w => w.length >= 3)
+      );
+    }
+
+    function jaccard(setA, setB) {
+      if (!setA.size || !setB.size) return 0;
+      const intersection = new Set([...setA].filter(x => setB.has(x)));
+      const union = new Set([...setA, ...setB]);
+      return intersection.size / union.size;
+    }
+
+    function containsSimilarity(a, b) {
+      const tokA = tokenize(a);
+      const tokB = tokenize(b);
+      if (!tokA.size || !tokB.size) return 0;
+      const smaller = tokA.size <= tokB.size ? tokA : tokB;
+      const larger  = tokA.size <= tokB.size ? tokB : tokA;
+      const hits = [...smaller].filter(w => larger.has(w)).length;
+      return hits / smaller.size;
+    }
+
+    const titleToks = tokenize(title);
+    const descToks  = tokenize(description || '');
 
     const scored = candidates.map(c => {
-      const ct = c.title.toLowerCase();
-      const cd = c.description.toLowerCase();
+      const cTitleToks = tokenize(c.title);
+      const cDescToks  = tokenize(c.description);
 
-      // Count exact word matches in title (whole word boundary)
-      let titleHits = 0;
-      titleWords.forEach(w => {
-        // Require whole-word match to avoid partial false positives
-        const regex = new RegExp(`\b${w}\b`, 'i');
-        if (regex.test(ct)) titleHits++;
-      });
+      const titleJaccard  = jaccard(titleToks, cTitleToks);
+      const titleContains = containsSimilarity(title, c.title);
+      const descJaccard   = jaccard(descToks, cDescToks);
 
-      // Count desc word matches in candidate description
-      let descHits = 0;
-      descWords.slice(0, 8).forEach(w => {
-        const regex = new RegExp(`\b${w}\b`, 'i');
-        if (regex.test(cd)) descHits++;
-      });
+      const combined  = (Math.max(titleJaccard, titleContains) * 0.75) + (descJaccard * 0.25);
+      const pct       = Math.round(combined * 100);
+      const titlePct  = Math.round(Math.max(titleJaccard, titleContains) * 100);
+      const descPct   = Math.round(descJaccard * 100);
 
-      const titlePct = titleWords.length >= 2 ? Math.round(titleHits / titleWords.length * 100) : (titleHits > 0 ? 100 : 0);
-      const descPct  = descWords.length >= 2  ? Math.round(descHits  / Math.min(descWords.length, 8) * 100) : 0;
-
-      // Combined score — title match is primary signal
-      const combinedScore = (titlePct * 0.7) + (descPct * 0.3);
-
-      return { ...c, _score: combinedScore, _titlePct: titlePct, _descPct: descPct };
+      return { ...c, _score: combined, _titlePct: titlePct, _descPct: descPct, _pct: pct };
     });
 
-    // Only show results where title match is 60%+ OR both title+desc are 50%+
     const results = scored
-      .filter(c => c._titlePct >= 60 || (c._titlePct >= 50 && c._descPct >= 50))
+      .filter(c => c._pct >= 40 || c._titlePct >= 55)
       .sort((a, b) => b._score - a._score)
-      .slice(0, 5);
+      .slice(0, 6);
 
     res.json(results);
   } catch (err) {
+    console.error('[Similar]', err.message);
     res.status(500).json({ error: 'Could not search similar' });
   }
 });
@@ -184,37 +183,33 @@ router.patch('/:id', auth, async (req, res) => {
     if (req.body.publishStatus !== undefined) {
       await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = ${req.body.publishStatus} WHERE id = ${req.params.id}`;
     }
+
     const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
 
-    // Log status changes to history
+    // Log history
     if (status && status !== report.status) {
       await log({ reportId: req.params.id, action: status, actorName: req.user.name, actorId: req.user.id });
     }
     if (assigneeIds !== undefined && assigneeIds.length > 0) {
-      const assigneeNames = report.assignees?.map(a=>a.name).join(', ') || 'Unassigned';
+      const assigneeNames = report.assignees?.map(a => a.name).join(', ') || 'Unassigned';
       await log({ reportId: req.params.id, action: 'assigned', detail: assigneeNames, actorName: req.user.name, actorId: req.user.id });
     }
     if (req.body.devNotes !== undefined && req.body.devNotes !== report.devNotes) {
       await log({ reportId: req.params.id, action: 'devnotes', actorName: req.user.name, actorId: req.user.id });
     }
 
-    // Auto-publish when manually resolved via dropdown
+    // Auto-publish when manually resolved
     if (status === 'resolved' && req.body.publishStatus === undefined) {
       await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     }
 
     // Notify Discord on status changes
-    if (status && ['in_progress','reviewing','resolved'].includes(status)) {
+    if (status && ['in_progress', 'reviewing', 'resolved'].includes(status)) {
       const assigneeName = report.assignees?.[0]?.name || null;
-      const actionMap = {
-        in_progress: 'in_progress',
-        reviewing:   'reviewing',
-        resolved:    'resolved',
-      };
       notify({
         threadId:      report.discordThreadId,
         reportType:    report.type,
-        action:        actionMap[status],
+        action:        status,
         bugLevel:      report.bugLevel,
         devNotes:      report.devNotes,
         discordUserId: report.discordUserId,
@@ -225,6 +220,7 @@ router.patch('/:id', auth, async (req, res) => {
 
     res.json(report);
   } catch (err) {
+    console.error('[PATCH]', err.message);
     res.status(500).json({ error: 'Could not update report' });
   }
 });
@@ -246,8 +242,6 @@ router.post('/:id/accept', auth, async (req, res) => {
       include
     });
 
-    // Notify Discord of acceptance
-    const assigneeName = report.assignees?.[0]?.name || null;
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,
@@ -255,12 +249,11 @@ router.post('/:id/accept', auth, async (req, res) => {
       bugLevel:      report.bugLevel,
       devNotes:      report.devNotes,
       discordUserId: report.discordUserId,
-      assigneeName,
+      assigneeName:  report.assignees?.[0]?.name || null,
       notifyOwner:   report.notifyOwner,
     });
 
-    // Log accept to history
-    await log({ reportId: req.params.id, action: 'accepted', detail: `${report.bugLevel||''}${report.assignees?.[0]?.name?' → '+report.assignees[0].name:''}`, actorName: req.user.name, actorId: req.user.id });
+    await log({ reportId: req.params.id, action: 'accepted', detail: `${report.bugLevel||''}${report.assignees?.[0]?.name ? ' → ' + report.assignees[0].name : ''}`, actorName: req.user.name, actorId: req.user.id });
     if (report.assignees?.[0]?.name) await log({ reportId: req.params.id, action: 'assigned', detail: report.assignees[0].name, actorName: req.user.name, actorId: req.user.id });
     if (report.bugLevel) await log({ reportId: req.params.id, action: 'buglevel', detail: report.bugLevel, actorName: req.user.name, actorId: req.user.id });
 
@@ -273,12 +266,8 @@ router.post('/:id/accept', auth, async (req, res) => {
 // DELETE /api/reports/:id
 router.delete('/:id', auth, async (req, res) => {
   try {
-    // Fetch before deleting so we have the Discord info
     const report = await prisma.report.findUnique({ where: { id: req.params.id } });
-
     await prisma.report.delete({ where: { id: req.params.id } });
-
-    // Notify Discord of decline
     if (report) {
       notify({
         threadId:      report.discordThreadId,
@@ -289,33 +278,22 @@ router.delete('/:id', auth, async (req, res) => {
         notifyOwner:   report.notifyOwner,
       });
     }
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Could not delete report' });
   }
 });
 
-// POST /api/reports/publish-all — move all in_progress+flagged to reviewing
+// POST /api/reports/publish-all — move in_progress+flagged to reviewing
 router.post('/publish-all', auth, async (req, res) => {
   try {
-    // Find all in_progress reports flagged as ready (publishStatus = 'flagged')
     const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", "bugLevel", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
     if (!flagged.length) return res.json({ success: true, count: 0 });
 
-    // Move them all to reviewing
     await prisma.$executeRaw`UPDATE "Report" SET status = 'reviewing', "publishStatus" = 'unpublished' WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
 
-    // Log to history for each flagged report
-    const { log: histLog } = require('../history-logger');
     for (const r of flagged) {
-      await histLog({ reportId: r.id, action: 'reviewing', actorName: req.user.name, actorId: req.user.id });
-    }
-
-    // Notify Discord for each
-    const { notify } = require('../discord-notifier');
-const { log } = require('../history-logger');
-    for (const r of flagged) {
+      await log({ reportId: r.id, action: 'reviewing', actorName: req.user.name, actorId: req.user.id });
       notify({
         threadId:      r.discordThreadId,
         reportType:    r.type,
@@ -334,13 +312,11 @@ const { log } = require('../history-logger');
   }
 });
 
-// POST /api/reports/:id/publish-resolved — QA approved, mark as resolved+published
+// POST /api/reports/:id/publish-resolved — QA approved
 router.post('/:id/publish-resolved', auth, async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
-    const { notify } = require('../discord-notifier');
-const { log } = require('../history-logger');
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,
@@ -352,7 +328,6 @@ const { log } = require('../history-logger');
     });
     await log({ reportId: req.params.id, action: 'resolved', actorName: req.user.name, actorId: req.user.id });
     await log({ reportId: req.params.id, action: 'published', actorName: req.user.name, actorId: req.user.id });
-
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not resolve report' });
