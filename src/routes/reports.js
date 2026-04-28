@@ -334,6 +334,94 @@ router.post('/:id/publish-resolved', auth, async (req, res) => {
   }
 });
 
+
+// POST /api/reports/:id/approve-suggestion
+router.post('/:id/approve-suggestion', auth, async (req, res) => {
+  try {
+    const report = await prisma.report.update({
+      where: { id: req.params.id },
+      data: { status: 'open', queued: false },
+      include
+    });
+    notify({
+      threadId:      report.discordThreadId,
+      reportType:    report.type,
+      action:        'accepted',
+      devNotes:      report.devNotes,
+      discordUserId: report.discordUserId,
+      notifyOwner:   report.notifyOwner,
+    });
+    await log({ reportId: req.params.id, action: 'accepted', actorName: req.user.name, actorId: req.user.id });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not approve suggestion' });
+  }
+});
+
+// POST /api/reports/:id/decline-suggestion
+router.post('/:id/decline-suggestion', auth, async (req, res) => {
+  const { devNotes } = req.body;
+  try {
+    const report = await prisma.report.update({
+      where: { id: req.params.id },
+      data: { status: 'resolved', queued: false, devNotes: devNotes || null },
+      include
+    });
+    notify({
+      threadId:      report.discordThreadId,
+      reportType:    report.type,
+      action:        'declined',
+      devNotes:      report.devNotes,
+      discordUserId: report.discordUserId,
+      notifyOwner:   report.notifyOwner,
+    });
+    await log({ reportId: req.params.id, action: 'declined', detail: devNotes || null, actorName: req.user.name, actorId: req.user.id });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not decline suggestion' });
+  }
+});
+
+// POST /api/reports/:id/implement-suggestion
+router.post('/:id/implement-suggestion', auth, async (req, res) => {
+  try {
+    const report = await prisma.report.update({
+      where: { id: req.params.id },
+      data: { status: 'resolved', publishStatus: 'published' },
+      include
+    });
+    await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = ${req.params.id}`;
+    notify({
+      threadId:      report.discordThreadId,
+      reportType:    report.type,
+      action:        'resolved',
+      devNotes:      report.devNotes,
+      discordUserId: report.discordUserId,
+      notifyOwner:   report.notifyOwner,
+    });
+    await log({ reportId: req.params.id, action: 'resolved', detail: 'Implemented', actorName: req.user.name, actorId: req.user.id });
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not implement suggestion' });
+  }
+});
+
+// PATCH /api/reports/:id/upvotes — sync star count from Discord
+router.patch('/:id/upvotes', async (req, res) => {
+  const secret = req.headers['x-bot-secret'];
+  if (!secret || secret !== process.env.BOT_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  try {
+    const { upvotes } = req.body;
+    const report = await prisma.report.update({
+      where: { id: req.params.id },
+      data: { upvotes: parseInt(upvotes) || 0 }
+    });
+    res.json({ upvotes: report.upvotes });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not update upvotes' });
+  }
+});
+
 // POST /api/reports/:id/upvote
 router.post('/:id/upvote', auth, async (req, res) => {
   try {
