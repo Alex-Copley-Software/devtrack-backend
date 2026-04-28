@@ -56,7 +56,7 @@ router.get('/similar', auth, async (req, res) => {
     const candidates = await prisma.report.findMany({
       where: {
         id: excludeId ? { not: excludeId } : undefined,
-        queued: false,
+        // Search all reports including queued ones
       },
       include,
       orderBy: { createdAt: 'desc' },
