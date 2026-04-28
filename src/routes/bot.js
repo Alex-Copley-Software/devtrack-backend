@@ -180,4 +180,18 @@ router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
   }
 });
 
+// GET /api/bot/report-by-message/:messageId
+router.get('/report-by-message/:messageId', botAuth, async (req, res) => {
+  try {
+    const report = await prisma.report.findFirst({
+      where: { discordMessageId: req.params.messageId },
+      select: { id: true }
+    });
+    if (!report) return res.status(404).json({ error: 'Not found' });
+    res.json({ reportId: report.id });
+  } catch (err) {
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
 module.exports = router;
