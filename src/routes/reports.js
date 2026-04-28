@@ -385,12 +385,8 @@ router.post('/:id/decline-suggestion', auth, async (req, res) => {
 // POST /api/reports/:id/implement-suggestion
 router.post('/:id/implement-suggestion', auth, async (req, res) => {
   try {
-    const report = await prisma.report.update({
-      where: { id: req.params.id },
-      data: { status: 'resolved', publishStatus: 'published' },
-      include
-    });
-    await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = ${req.params.id}`;
+    await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
+    const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,
@@ -403,6 +399,26 @@ router.post('/:id/implement-suggestion', auth, async (req, res) => {
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not implement suggestion' });
+  }
+});
+
+
+// POST /api/reports/sync-stars — bot syncs all suggestion star counts
+router.post('/sync-stars', async (req, res) => {
+  const secret = req.headers['x-bot-secret'];
+  if (!secret || secret !== process.env.BOT_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  const { updates } = req.body; // [{reportId, upvotes}]
+  if (!Array.isArray(updates)) return res.status(400).json({ error: 'updates array required' });
+  try {
+    for (const u of updates) {
+      await prisma.report.update({
+        where: { id: u.reportId },
+        data: { upvotes: parseInt(u.upvotes) || 0 }
+      });
+    }
+    res.json({ success: true, count: updates.length });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not sync stars' });
   }
 });
 
