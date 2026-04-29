@@ -194,4 +194,21 @@ router.get('/report-by-message/:messageId', botAuth, async (req, res) => {
   }
 });
 
+// GET /api/bot/reports — bot fetches all reports for leaderboard
+router.get('/reports', botAuth, async (req, res) => {
+  try {
+    const reports = await prisma.report.findMany({
+      where: { queued: false },
+      select: {
+        id: true, type: true, bugLevel: true, status: true,
+        discordUser: true, discordUserId: true, queued: true,
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json(reports);
+  } catch (err) {
+    res.status(500).json({ error: 'Could not fetch reports' });
+  }
+});
+
 module.exports = router;
