@@ -26,6 +26,30 @@ const include = {
   attachments: true
 };
 
+// Raw SQL helper — bypasses Prisma enum deserialization for 'declined' etc.
+async function fetchReports(whereClauses = [], values = [], extra = '') {
+  const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
+  const sql = `
+    SELECT r.*,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email))
+        FILTER (WHERE u.id IS NOT NULL), '[]'
+      ) AS assignees,
+      COALESCE(
+        json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename))
+        FILTER (WHERE a.id IS NOT NULL), '[]'
+      ) AS attachments
+    FROM "Report" r
+    LEFT JOIN "_AssignedReports" ar ON ar."B" = r.id
+    LEFT JOIN "User" u ON u.id = ar."A"
+    LEFT JOIN "Attachment" a ON a."reportId" = r.id
+    ${where}
+    GROUP BY r.id
+    ${extra}
+  `;
+  return prisma.$queryRawUnsafe(sql, ...values);
+}
+
 // GET /api/reports
 router.get('/', auth, async (req, res) => {
   const { type, status, priority, search, assigneeId, queued } = req.query;
@@ -40,9 +64,22 @@ router.get('/', auth, async (req, res) => {
   ];
   if (assigneeId) where.assignees = { some: { id: assigneeId } };
   try {
-    const reports = await prisma.report.findMany({ where, include, orderBy: { createdAt: 'desc' } });
+    const whereClauses = [];
+    const vals = [];
+    let idx = 1;
+    if (type)       { whereClauses.push(`r.type = $${idx++}::"ReportType"`); vals.push(type); }
+    if (status)     { whereClauses.push(`r.status = $${idx++}::"Status"`);   vals.push(status); }
+    if (priority)   { whereClauses.push(`r.priority = $${idx++}::"Priority"`); vals.push(priority); }
+    if (queued !== undefined) { whereClauses.push(`r.queued = $${idx++}`);   vals.push(queued === 'true'); }
+    if (assigneeId) { whereClauses.push(`EXISTS (SELECT 1 FROM "_AssignedReports" x WHERE x."B" = r.id AND x."A" = $${idx++})`); vals.push(assigneeId); }
+    if (search) {
+      whereClauses.push(`(r.title ILIKE $${idx} OR r.description ILIKE $${idx++})`);
+      vals.push('%' + search + '%');
+    }
+    const reports = await fetchReports(whereClauses, vals, 'ORDER BY r."createdAt" DESC');
     res.json(reports);
   } catch (err) {
+    console.error('[GET reports]', err.message);
     res.status(500).json({ error: 'Could not fetch reports' });
   }
 });
@@ -53,15 +90,20 @@ router.get('/similar', auth, async (req, res) => {
   if (!title) return res.json([]);
 
   try {
-    const candidates = await prisma.report.findMany({
-      where: {
-        id: excludeId ? { not: excludeId } : undefined,
-        // Search all reports including queued ones
-      },
-      include,
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
+    const candidateRows = await prisma.$queryRawUnsafe(`
+      SELECT r.*, r.status::text AS status,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
+      FROM "Report" r
+      LEFT JOIN "_AssignedReports" ar ON ar."B" = r.id
+      LEFT JOIN "User" u ON u.id = ar."A"
+      LEFT JOIN "Attachment" a ON a."reportId" = r.id
+      ${excludeId ? `WHERE r.id != '${excludeId.replace(/'/g,"''")}'` : ''}
+      GROUP BY r.id
+      ORDER BY r."createdAt" DESC
+      LIMIT 100
+    `);
+    const candidates = candidateRows;
 
     function tokenize(str) {
       return new Set(
@@ -123,10 +165,12 @@ router.get('/similar', auth, async (req, res) => {
 // GET /api/reports/:id
 router.get('/:id', auth, async (req, res) => {
   try {
-    const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
+    const rows = await fetchReports(['r.id = $1'], [req.params.id]);
+    const report = rows[0];
     if (!report) return res.status(404).json({ error: 'Report not found' });
     res.json(report);
   } catch (err) {
+    console.error('[GET report]', err.message);
     res.status(500).json({ error: 'Could not fetch report' });
   }
 });
@@ -303,7 +347,7 @@ router.post('/:id/accept', auth, async (req, res) => {
 // DELETE /api/reports/:id
 router.delete('/:id', auth, async (req, res) => {
   try {
-    const report = await prisma.report.findUnique({ where: { id: req.params.id } });
+    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     await prisma.report.delete({ where: { id: req.params.id } });
     if (report) {
       notify({
@@ -353,7 +397,7 @@ router.post('/publish-all', auth, async (req, res) => {
 router.post('/:id/publish-resolved', auth, async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
-    const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
+    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,
@@ -423,7 +467,7 @@ router.post('/:id/decline-suggestion', auth, async (req, res) => {
 router.post('/:id/implement-suggestion', auth, async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
-    const report = await prisma.report.findUnique({ where: { id: req.params.id }, include });
+    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,
