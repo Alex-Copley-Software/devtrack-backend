@@ -123,4 +123,5 @@ enum Status {
   in_progress
   reviewing
   resolved
+  declined
 }
