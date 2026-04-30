@@ -7,6 +7,7 @@ const prisma = new PrismaClient();
 const ACTION_LABELS = {
   queued:      '📥 Report received from Discord',
   accepted:    '✅ Report accepted',
+  declined:    '✕ Report declined',
   declined:    '❌ Report declined and removed',
   in_progress: '🔧 Status changed to In Progress',
   reviewing:   '🔬 Sent to QA Review',

@@ -204,14 +204,14 @@ router.patch('/:id', auth, async (req, res) => {
     }
 
     // Notify Discord on status changes
-    if (status && ['in_progress', 'reviewing', 'resolved'].includes(status)) {
+    if (status && ['in_progress', 'reviewing', 'resolved', 'declined'].includes(status)) {
       const assigneeName = report.assignees?.[0]?.name || null;
       notify({
         threadId:      report.discordThreadId,
         reportType:    report.type,
         action:        status,
         bugLevel:      report.bugLevel,
-        devNotes:      report.devNotes,
+        devNotes:      devNotes || report.devNotes,
         discordUserId: report.discordUserId,
         assigneeName,
         notifyOwner:   report.notifyOwner,
