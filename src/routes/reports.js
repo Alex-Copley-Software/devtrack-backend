@@ -168,50 +168,82 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
 // PATCH /api/reports/:id
 router.patch('/:id', auth, async (req, res) => {
   const { status, priority, bugLevel, assigneeIds, tags, devNotes, queued } = req.body;
-  const data = {};
-  if (status    !== undefined) data.status   = status;
-  if (priority  !== undefined) data.priority = priority;
-  if (bugLevel  !== undefined) data.bugLevel = bugLevel || null;
-  if (tags      !== undefined) data.tags     = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim());
-  if (devNotes  !== undefined) data.devNotes = devNotes;
-  if (queued    !== undefined) data.queued   = queued;
-  if (req.body.notifyOwner !== undefined) data.notifyOwner = req.body.notifyOwner;
-  if (assigneeIds !== undefined) data.assignees = { set: assigneeIds.map(id => ({ id })) };
+  const id = req.params.id;
 
   try {
-    // Handle publishStatus via raw SQL since Prisma client may not have it generated yet
-    if (req.body.publishStatus !== undefined) {
-      await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = ${req.body.publishStatus} WHERE id = ${req.params.id}`;
+    // Build raw SQL SET clauses — fully bypasses Prisma enum validation
+    const setClauses = [];
+    const values     = [];
+    let   idx        = 1;
+
+    if (status      !== undefined) { setClauses.push(`status = $${idx++}::"Status"`);        values.push(status); }
+    if (priority    !== undefined) { setClauses.push(`priority = $${idx++}::"Priority"`);    values.push(priority); }
+    if (bugLevel    !== undefined) { setClauses.push(`"bugLevel" = $${idx++}::"BugLevel"`);  values.push(bugLevel === '' ? null : bugLevel); }
+    if (devNotes    !== undefined) { setClauses.push(`"devNotes" = $${idx++}`);               values.push(devNotes); }
+    if (queued      !== undefined) { setClauses.push(`queued = $${idx++}`);                   values.push(queued); }
+    if (req.body.publishStatus !== undefined) { setClauses.push(`"publishStatus" = $${idx++}`); values.push(req.body.publishStatus); }
+    if (req.body.notifyOwner   !== undefined) { setClauses.push(`"notifyOwner" = $${idx++}`);   values.push(req.body.notifyOwner); }
+    if (tags !== undefined) {
+      const arr = Array.isArray(tags) ? tags : tags.split(',').map(t => t.trim());
+      setClauses.push(`tags = $${idx++}`);
+      values.push(arr);
     }
 
-    // Handle status via raw SQL to avoid Prisma enum cache issues with newer values like 'declined'
-    if (status !== undefined) {
-      await prisma.$executeRaw`UPDATE "Report" SET status = ${status}::"Status", "updatedAt" = NOW() WHERE id = ${req.params.id}`;
-      delete data.status;
+    setClauses.push(`"updatedAt" = NOW()`);
+    values.push(id);
+    const sql = `UPDATE "Report" SET ${setClauses.join(', ')} WHERE id = $${idx}`;
+    await prisma.$executeRawUnsafe(sql, ...values);
+
+    // Handle assignees separately (Prisma relation, no enum involved)
+    if (assigneeIds !== undefined) {
+      await prisma.report.update({
+        where: { id },
+        data:  { assignees: { set: assigneeIds.map(i => ({ id: i })) } },
+      });
     }
 
-    const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
+    // Auto-publish when resolved
+    if (status === 'resolved' && req.body.publishStatus === undefined) {
+      await prisma.$executeRawUnsafe(`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = $1`, id);
+    }
+
+    // Read back with raw SQL to avoid Prisma enum deserialization on 'declined' etc.
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT r.*,
+        COALESCE(
+          json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email))
+          FILTER (WHERE u.id IS NOT NULL), '[]'
+        ) AS assignees,
+        COALESCE(
+          json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename))
+          FILTER (WHERE a.id IS NOT NULL), '[]'
+        ) AS attachments
+      FROM "Report" r
+      LEFT JOIN "_AssignedReports" ar ON ar."B" = r.id
+      LEFT JOIN "User" u ON u.id = ar."A"
+      LEFT JOIN "Attachment" a ON a."reportId" = r.id
+      WHERE r.id = $1
+      GROUP BY r.id
+    `, id);
+
+    const report = rows[0];
+    if (!report) return res.status(404).json({ error: 'Report not found' });
 
     // Log history
-    if (status && status !== report.status) {
-      await log({ reportId: req.params.id, action: status, actorName: req.user.name, actorId: req.user.id });
+    if (status) {
+      await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
     }
     if (assigneeIds !== undefined && assigneeIds.length > 0) {
-      const assigneeNames = report.assignees?.map(a => a.name).join(', ') || 'Unassigned';
-      await log({ reportId: req.params.id, action: 'assigned', detail: assigneeNames, actorName: req.user.name, actorId: req.user.id });
+      const assigneeNames = Array.isArray(report.assignees) ? report.assignees.map(a => a.name).join(', ') : 'Unassigned';
+      await log({ reportId: id, action: 'assigned', detail: assigneeNames, actorName: req.user.name, actorId: req.user.id });
     }
-    if (req.body.devNotes !== undefined && req.body.devNotes !== report.devNotes) {
-      await log({ reportId: req.params.id, action: 'devnotes', actorName: req.user.name, actorId: req.user.id });
-    }
-
-    // Auto-publish when manually resolved
-    if (status === 'resolved' && req.body.publishStatus === undefined) {
-      await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'published' WHERE id = ${req.params.id}`;
+    if (devNotes !== undefined) {
+      await log({ reportId: id, action: 'devnotes', actorName: req.user.name, actorId: req.user.id });
     }
 
     // Notify Discord on status changes
     if (status && ['in_progress', 'reviewing', 'resolved', 'declined'].includes(status)) {
-      const assigneeName = report.assignees?.[0]?.name || null;
+      const assigneeName = Array.isArray(report.assignees) ? report.assignees[0]?.name || null : null;
       notify({
         threadId:      report.discordThreadId,
         reportType:    report.type,
@@ -230,7 +262,6 @@ router.patch('/:id', auth, async (req, res) => {
     res.status(500).json({ error: 'Could not update report' });
   }
 });
-
 // POST /api/reports/:id/accept
 router.post('/:id/accept', auth, async (req, res) => {
   const { bugLevel, assigneeIds, devNotes, priority } = req.body;
