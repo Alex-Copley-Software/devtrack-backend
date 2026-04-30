@@ -184,6 +184,12 @@ router.patch('/:id', auth, async (req, res) => {
       await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = ${req.body.publishStatus} WHERE id = ${req.params.id}`;
     }
 
+    // Handle status via raw SQL to avoid Prisma enum cache issues with newer values like 'declined'
+    if (status !== undefined) {
+      await prisma.$executeRaw`UPDATE "Report" SET status = ${status}::"Status", "updatedAt" = NOW() WHERE id = ${req.params.id}`;
+      delete data.status;
+    }
+
     const report = await prisma.report.update({ where: { id: req.params.id }, data, include });
 
     // Log history
