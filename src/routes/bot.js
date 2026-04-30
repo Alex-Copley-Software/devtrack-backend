@@ -7,6 +7,7 @@ const { PrismaClient } = require('@prisma/client');
 const { uploadBuffer, uploadFile } = require('../r2');
 
 const prisma = new PrismaClient();
+const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'resolved', 'declined'];
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -156,6 +157,42 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
 // PATCH /api/bot/report/:id
 router.patch('/report/:id', botAuth, async (req, res) => {
   try {
+    if (req.body.status !== undefined) {
+      const status = String(req.body.status);
+      if (!VALID_STATUSES.includes(status)) {
+        return res.status(400).json({ error: 'Invalid status' });
+      }
+
+      const existing = await prisma.$queryRawUnsafe(
+        'SELECT id, status::text AS status FROM "Report" WHERE id = $1 LIMIT 1',
+        req.params.id
+      );
+      if (!existing.length) return res.status(404).json({ error: 'Report not found' });
+
+      const queued = status === 'queued';
+      const publishStatus = status === 'resolved' ? 'published' : 'unpublished';
+
+      await prisma.$executeRawUnsafe(
+        'UPDATE "Report" SET status = $1::"Status", queued = $2, "publishStatus" = $3, "updatedAt" = NOW() WHERE id = $4',
+        status,
+        queued,
+        publishStatus,
+        req.params.id
+      );
+
+      const { log } = require('../history-logger');
+      const actorName = req.body.actorName || 'Discord';
+      const actorId = req.body.actorId || '';
+      const detail = req.body.detail || `Moved from ${existing[0].status} to ${status} via Discord /reopen`;
+      await log({ reportId: req.params.id, action: status, detail, actorName, actorId });
+
+      const updated = await prisma.$queryRawUnsafe(
+        'SELECT id, status::text AS status, queued, "publishStatus" FROM "Report" WHERE id = $1 LIMIT 1',
+        req.params.id
+      );
+      return res.json({ success: true, report: updated[0] });
+    }
+
     const data = {};
     if (req.body.notifyOwner !== undefined) data.notifyOwner = req.body.notifyOwner;
     await prisma.report.update({ where: { id: req.params.id }, data });
@@ -169,12 +206,13 @@ router.patch('/report/:id', botAuth, async (req, res) => {
 // GET /api/bot/report-by-thread/:threadId
 router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
   try {
-    const report = await prisma.report.findFirst({
-      where: { discordThreadId: req.params.threadId },
-      select: { id: true }
-    });
-    if (!report) return res.status(404).json({ error: 'Not found' });
-    res.json({ reportId: report.id });
+    const reports = await prisma.$queryRawUnsafe(
+      'SELECT id, title, type::text AS type, status::text AS status, queued FROM "Report" WHERE "discordThreadId" = $1 ORDER BY "createdAt" DESC LIMIT 1',
+      req.params.threadId
+    );
+    if (!reports.length) return res.status(404).json({ error: 'Not found' });
+    const report = reports[0];
+    res.json({ reportId: report.id, report });
   } catch (err) {
     res.status(500).json({ error: 'Lookup failed' });
   }
@@ -183,12 +221,13 @@ router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
 // GET /api/bot/report-by-message/:messageId
 router.get('/report-by-message/:messageId', botAuth, async (req, res) => {
   try {
-    const report = await prisma.report.findFirst({
-      where: { discordMessageId: req.params.messageId },
-      select: { id: true }
-    });
-    if (!report) return res.status(404).json({ error: 'Not found' });
-    res.json({ reportId: report.id });
+    const reports = await prisma.$queryRawUnsafe(
+      'SELECT id, title, type::text AS type, status::text AS status, queued FROM "Report" WHERE "discordMessageId" = $1 LIMIT 1',
+      req.params.messageId
+    );
+    if (!reports.length) return res.status(404).json({ error: 'Not found' });
+    const report = reports[0];
+    res.json({ reportId: report.id, report });
   } catch (err) {
     res.status(500).json({ error: 'Lookup failed' });
   }
