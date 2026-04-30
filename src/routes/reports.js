@@ -221,6 +221,8 @@ router.patch('/:id', auth, async (req, res) => {
     let   idx        = 1;
 
     if (status      !== undefined) { setClauses.push(`status = $${idx++}::"Status"`);        values.push(status); }
+    // Auto-dequeue when declining
+    if (status === 'declined' && queued === undefined) { setClauses.push(`queued = $${idx++}`); values.push(false); }
     if (priority    !== undefined) { setClauses.push(`priority = $${idx++}::"Priority"`);    values.push(priority); }
     if (bugLevel    !== undefined) { setClauses.push(`"bugLevel" = $${idx++}::"BugLevel"`);  values.push(bugLevel === '' ? null : bugLevel); }
     if (devNotes    !== undefined) { setClauses.push(`"devNotes" = $${idx++}`);               values.push(devNotes); }
