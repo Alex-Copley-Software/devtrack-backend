@@ -40,8 +40,8 @@ async function fetchReports(whereClauses = [], values = [], extra = '') {
         FILTER (WHERE a.id IS NOT NULL), '[]'
       ) AS attachments
     FROM "Report" r
-    LEFT JOIN "_AssignedReports" ar ON ar."B" = r.id
-    LEFT JOIN "User" u ON u.id = ar."A"
+    LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
+    LEFT JOIN "User" u ON u.id = ar."B"
     LEFT JOIN "Attachment" a ON a."reportId" = r.id
     ${where}
     GROUP BY r.id
@@ -71,7 +71,7 @@ router.get('/', auth, async (req, res) => {
     if (status)     { whereClauses.push(`r.status = $${idx++}::"Status"`);   vals.push(status); }
     if (priority)   { whereClauses.push(`r.priority = $${idx++}::"Priority"`); vals.push(priority); }
     if (queued !== undefined) { whereClauses.push(`r.queued = $${idx++}`);   vals.push(queued === 'true'); }
-    if (assigneeId) { whereClauses.push(`EXISTS (SELECT 1 FROM "_AssignedReports" x WHERE x."B" = r.id AND x."A" = $${idx++})`); vals.push(assigneeId); }
+    if (assigneeId) { whereClauses.push(`EXISTS (SELECT 1 FROM "_AssignedReports" x WHERE x."A" = r.id AND x."B" = $${idx++})`); vals.push(assigneeId); }
     if (search) {
       whereClauses.push(`(r.title ILIKE $${idx} OR r.description ILIKE $${idx++})`);
       vals.push('%' + search + '%');
@@ -95,8 +95,8 @@ router.get('/similar', auth, async (req, res) => {
         COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
         COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
       FROM "Report" r
-      LEFT JOIN "_AssignedReports" ar ON ar."B" = r.id
-      LEFT JOIN "User" u ON u.id = ar."A"
+      LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
+      LEFT JOIN "User" u ON u.id = ar."B"
       LEFT JOIN "Attachment" a ON a."reportId" = r.id
       ${excludeId ? `WHERE r.id != '${excludeId.replace(/'/g,"''")}'` : ''}
       GROUP BY r.id
@@ -265,8 +265,8 @@ router.patch('/:id', auth, async (req, res) => {
           FILTER (WHERE a.id IS NOT NULL), '[]'
         ) AS attachments
       FROM "Report" r
-      LEFT JOIN "_AssignedReports" ar ON ar."B" = r.id
-      LEFT JOIN "User" u ON u.id = ar."A"
+      LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
+      LEFT JOIN "User" u ON u.id = ar."B"
       LEFT JOIN "Attachment" a ON a."reportId" = r.id
       WHERE r.id = $1
       GROUP BY r.id

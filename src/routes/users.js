@@ -25,8 +25,8 @@ router.get('/', auth, async (req, res) => {
         ) AS "assignedReports"
       FROM "User" u
       LEFT JOIN "Task" t ON t."userId" = u.id
-      LEFT JOIN "_AssignedReports" ar ON ar."A" = u.id
-      LEFT JOIN "Report" r ON r.id = ar."B"
+      LEFT JOIN "_AssignedReports" ar ON ar."B" = u.id
+      LEFT JOIN "Report" r ON r.id = ar."A"
       GROUP BY u.id
       ORDER BY u."createdAt" ASC
     `;
