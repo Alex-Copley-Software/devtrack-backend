@@ -52,11 +52,12 @@ async function fetchReports(whereClauses = [], values = [], extra = '') {
 
 // GET /api/reports
 router.get('/', auth, async (req, res) => {
-  const { type, status, priority, search, assigneeId, queued } = req.query;
+  const { type, status, priority, bugLevel, search, assigneeId, queued } = req.query;
   const where = {};
   if (type) where.type = type;
   if (status) where.status = status;
   if (priority) where.priority = priority;
+  if (bugLevel) where.bugLevel = bugLevel;
   if (queued !== undefined) where.queued = queued === 'true';
   if (search) where.OR = [
     { title: { contains: search, mode: 'insensitive' } },
@@ -70,6 +71,7 @@ router.get('/', auth, async (req, res) => {
     if (type)       { whereClauses.push(`r.type = $${idx++}::"ReportType"`); vals.push(type); }
     if (status)     { whereClauses.push(`r.status = $${idx++}::"Status"`);   vals.push(status); }
     if (priority)   { whereClauses.push(`r.priority = $${idx++}::"Priority"`); vals.push(priority); }
+    if (bugLevel)   { whereClauses.push(`r."bugLevel" = $${idx++}::"BugLevel"`); vals.push(bugLevel); }
     if (queued !== undefined) { whereClauses.push(`r.queued = $${idx++}`);   vals.push(queued === 'true'); }
     if (assigneeId) { whereClauses.push(`EXISTS (SELECT 1 FROM "_AssignedReports" x WHERE x."A" = r.id AND x."B" = $${idx++})`); vals.push(assigneeId); }
     if (search) {
