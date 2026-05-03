@@ -6,6 +6,7 @@ const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { notify } = require('../discord-notifier');
 const { log } = require('../history-logger');
+const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 
 const prisma = new PrismaClient();
 
@@ -204,6 +205,7 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
       },
       include
     });
+    maybeAlertQueueBacklog(prisma).catch(err => console.error('[POST reports] Queue alert failed:', err.message));
     res.status(201).json(report);
   } catch (err) {
     if (err.code === 'P2002') return res.status(409).json({ error: 'Already submitted' });
@@ -280,6 +282,9 @@ router.patch('/:id', auth, async (req, res) => {
     // Log history
     if (status) {
       await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
+      if (status === 'reviewing') {
+        alertQaReview(prisma).catch(err => console.error('[PATCH] QA alert failed:', err.message));
+      }
     }
     if (assigneeIds !== undefined && assigneeIds.length > 0) {
       const assigneeNames = Array.isArray(report.assignees) ? report.assignees.map(a => a.name).join(', ') : 'Unassigned';
@@ -389,6 +394,7 @@ router.post('/publish-all', auth, async (req, res) => {
         notifyOwner:   r.notifyOwner,
       });
     }
+    alertQaReview(prisma).catch(err => console.error('[PublishAll] QA alert failed:', err.message));
 
     res.json({ success: true, count: flagged.length });
   } catch (err) {

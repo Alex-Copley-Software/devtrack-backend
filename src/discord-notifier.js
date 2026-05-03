@@ -34,4 +34,16 @@ async function notify({ threadId, reportType, action, bugLevel, devNotes, discor
   }
 }
 
-module.exports = { notify };
+async function alert(payload) {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/alert`, payload, {
+      headers: { 'x-bot-secret': BOT_SECRET },
+      timeout: 5000,
+    });
+    console.log(`[Notifier] Discord alert sent: ${payload.kind}`);
+  } catch (err) {
+    console.error('[Notifier] Failed to send Discord alert:', err.message);
+  }
+}
+
+module.exports = { notify, alert };

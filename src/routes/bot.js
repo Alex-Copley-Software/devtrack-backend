@@ -5,6 +5,7 @@ const fs = require('fs');
 const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 const { uploadBuffer, uploadFile } = require('../r2');
+const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 
 const prisma = new PrismaClient();
 const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'resolved', 'declined'];
@@ -174,6 +175,7 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
     // Log initial queue entry to history
     const { log } = require('../history-logger');
     await log({ reportId: report.id, action: 'queued', detail: `Submitted by ${discordUser||'unknown'} via Discord`, actorName: discordUser||'Discord', actorId: req.body.discordUserId||'' });
+    maybeAlertQueueBacklog(prisma).catch(err => console.error('[Bot] Queue alert failed:', err.message));
 
     res.status(201).json({ success: true, reportId: report.id });
   } catch (err) {
@@ -214,6 +216,9 @@ router.patch('/report/:id', botAuth, async (req, res) => {
       const actorId = req.body.actorId || '';
       const detail = req.body.detail || `Moved from ${existing[0].status} to ${status} via Discord /reopen`;
       await log({ reportId: req.params.id, action: status, detail, actorName, actorId });
+      if (status === 'reviewing' && existing[0].status !== 'reviewing') {
+        alertQaReview(prisma).catch(err => console.error('[Bot PATCH] QA alert failed:', err.message));
+      }
 
       const updated = await prisma.$queryRawUnsafe(
         'SELECT id, status::text AS status, queued, "publishStatus" FROM "Report" WHERE id = $1 LIMIT 1',
