@@ -8,7 +8,7 @@ const { uploadBuffer, uploadFile } = require('../r2');
 
 const prisma = new PrismaClient();
 const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'resolved', 'declined'];
-const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYTES || 20 * 1024 * 1024);
+const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYTES || 125 * 1024 * 1024);
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
