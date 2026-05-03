@@ -8,6 +8,7 @@ const { uploadBuffer, uploadFile } = require('../r2');
 
 const prisma = new PrismaClient();
 const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'resolved', 'declined'];
+const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYTES || 20 * 1024 * 1024);
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -32,18 +33,45 @@ function botAuth(req, res, next) {
 // Download a Discord CDN attachment, upload to R2, return URLs
 async function processAttachment(att) {
   const { url: discordUrl, filename, contentType } = att;
+  const reportedSize = Number(att.size || 0);
   const ext = path.extname(filename) || '.bin';
   const key = `attachments/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
   const type = contentType?.startsWith('image/') ? 'image' : 'video';
 
   let primaryUrl = null;
 
+  if (reportedSize > MAX_REMOTE_ATTACHMENT_BYTES) {
+    console.warn(
+      `[Bot] Attachment too large to mirror safely; storing Discord URL only: ${filename} (${reportedSize} bytes)`
+    );
+    return {
+      type,
+      url: discordUrl,
+      discordUrl,
+      filename,
+    };
+  }
+
   try {
     // Download from Discord CDN
     const response = await axios.get(discordUrl, {
       responseType: 'arraybuffer',
       timeout: 30000,
+      maxContentLength: MAX_REMOTE_ATTACHMENT_BYTES,
+      maxBodyLength: MAX_REMOTE_ATTACHMENT_BYTES,
     });
+    const contentLength = Number(response.headers['content-length'] || 0);
+    if (contentLength > MAX_REMOTE_ATTACHMENT_BYTES) {
+      console.warn(
+        `[Bot] Attachment content-length exceeded safe mirror limit; storing Discord URL only: ${filename} (${contentLength} bytes)`
+      );
+      return {
+        type,
+        url: discordUrl,
+        discordUrl,
+        filename,
+      };
+    }
     const buffer = Buffer.from(response.data);
 
     // Try to upload to R2
@@ -132,6 +160,7 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
           create: allAttachments.map(a => ({
             type: a.type,
             url: a.url,
+            discordUrl: a.discordUrl || null,
             filename: a.filename,
           }))
         }
