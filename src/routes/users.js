@@ -1,15 +1,19 @@
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
+const { hasRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 
 // GET /api/users - list all engineers
 router.get('/', auth, async (req, res) => {
   try {
+    const includeRoleAccounts = req.query.includeRoleAccounts === 'true' && hasRole(req.user, ['admin']);
+    const roleFilter = includeRoleAccounts ? '' : `WHERE u.role NOT IN ('admin', 'owner')`;
+
     // Use raw SQL for assignedReports.status so Prisma's stale Status enum
     // client never tries to deserialize newer values like "declined".
-    const users = await prisma.$queryRaw`
+    const users = await prisma.$queryRawUnsafe(`
       WITH latest_review AS (
         SELECT DISTINCT ON (rh."reportId")
           rh."reportId",
@@ -70,10 +74,10 @@ router.get('/', auth, async (req, res) => {
       LEFT JOIN resolved_counts rc ON rc."actorId" = u.id
       LEFT JOIN accepted_counts ac ON ac."actorId" = u.id
       LEFT JOIN qa_approved_counts qac ON qac."actorId" = u.id
-      WHERE u.role NOT IN ('admin', 'owner')
+      ${roleFilter}
       GROUP BY u.id, rc.resolved, ac.accepted, qac.approved
       ORDER BY u."createdAt" ASC
-    `;
+    `);
     res.json(users);
   } catch (err) {
     console.error('[GET users]', err.message);
