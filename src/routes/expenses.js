@@ -2,6 +2,7 @@ const router = require('express').Router();
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
@@ -168,26 +169,62 @@ async function sendReceiptFile(res, receipt) {
   return res.download(receipt.path, receipt.filename);
 }
 
+async function fetchExpenses(whereClauses = [], values = [], includeReceiptPath = false) {
+  const where = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const receiptPathField = includeReceiptPath ? `'path', er.path,` : '';
+  return prisma.$queryRawUnsafe(`
+    SELECT e.*,
+      COALESCE(
+        json_agg(
+          jsonb_build_object(
+            'id', er.id,
+            'filename', er.filename,
+            'mimetype', er.mimetype,
+            'size', er.size,
+            ${receiptPathField}
+            'createdAt', er."createdAt"
+          )
+        ) FILTER (WHERE er.id IS NOT NULL),
+        '[]'
+      ) AS receipts
+    FROM "Expense" e
+    LEFT JOIN "ExpenseReceipt" er ON er."expenseId" = e.id
+    ${where}
+    GROUP BY e.id
+    ORDER BY e."expenseDate" DESC, e."createdAt" DESC
+  `, ...values);
+}
+
+async function fetchExpense(id, includeReceiptPath = false) {
+  const rows = await fetchExpenses(['e.id = $1'], [id], includeReceiptPath);
+  return rows[0] || null;
+}
+
+async function fetchReceipt(expenseId, receiptId) {
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT * FROM "ExpenseReceipt" WHERE id = $1 AND "expenseId" = $2 LIMIT 1`,
+    receiptId,
+    expenseId
+  );
+  return rows[0] || null;
+}
+
 router.get('/', async (req, res) => {
   const { year, category, status, search } = req.query;
-  const where = {};
-  if (year) where.taxYear = Number(year);
-  if (category && category !== 'all') where.category = category;
-  if (status && status !== 'all') where.paymentStatus = status;
+  const where = [];
+  const values = [];
+  let idx = 1;
+  if (year) { where.push(`e."taxYear" = $${idx++}`); values.push(Number(year)); }
+  if (category && category !== 'all') { where.push(`e.category = $${idx++}`); values.push(category); }
+  if (status && status !== 'all') { where.push(`e."paymentStatus" = $${idx++}`); values.push(status); }
   if (search) {
-    where.OR = [
-      { title: { contains: search, mode: 'insensitive' } },
-      { vendor: { contains: search, mode: 'insensitive' } },
-      { notes: { contains: search, mode: 'insensitive' } },
-    ];
+    where.push(`(e.title ILIKE $${idx} OR e.vendor ILIKE $${idx} OR e.notes ILIKE $${idx})`);
+    values.push(`%${search}%`);
+    idx++;
   }
 
   try {
-    const expenses = await prisma.expense.findMany({
-      where,
-      include: { receipts: true },
-      orderBy: [{ expenseDate: 'desc' }, { createdAt: 'desc' }],
-    });
+    const expenses = await fetchExpenses(where, values);
     res.json(expenses);
   } catch (err) {
     console.error('[Expenses GET]', err.message);
@@ -200,17 +237,25 @@ router.post('/', upload.array('receipts', 6), async (req, res) => {
   if (!data) return res.status(400).json({ error: 'title and valid amount are required' });
 
   try {
+    const expenseId = crypto.randomUUID();
     const receipts = await persistReceiptFiles(req.files);
-    const expense = await prisma.expense.create({
-      data: {
-        ...data,
-        createdById: req.user.id,
-        receipts: {
-          create: receipts
-        }
-      },
-      include: { receipts: true },
-    });
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "Expense" (
+        id, title, vendor, category, amount, currency, "expenseDate",
+        "paymentType", "paymentStatus", "writeOffType", notes, "taxYear", "createdById"
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    `,
+      expenseId, data.title, data.vendor, data.category, data.amount, data.currency,
+      data.expenseDate, data.paymentType, data.paymentStatus, data.writeOffType,
+      data.notes, data.taxYear, req.user.id
+    );
+    for (const receipt of receipts) {
+      await prisma.$executeRawUnsafe(`
+        INSERT INTO "ExpenseReceipt" (id, "expenseId", filename, mimetype, size, path)
+        VALUES ($1,$2,$3,$4,$5,$6)
+      `, crypto.randomUUID(), expenseId, receipt.filename, receipt.mimetype, receipt.size, receipt.path);
+    }
+    const expense = await fetchExpense(expenseId);
     res.status(201).json(expense);
   } catch (err) {
     console.error('[Expenses POST]', err.message);
@@ -238,14 +283,33 @@ router.patch('/:id', async (req, res) => {
   if (req.body.expenseDate !== undefined) patch.expenseDate = new Date(req.body.expenseDate);
 
   try {
-    const expense = await prisma.expense.update({
-      where: { id: req.params.id },
-      data: patch,
-      include: { receipts: true },
-    });
+    const fields = Object.entries(patch);
+    if (!fields.length) return res.json(await fetchExpense(req.params.id));
+
+    const setClauses = [];
+    const values = [];
+    let idx = 1;
+    const columnMap = {
+      expenseDate: '"expenseDate"',
+      paymentType: '"paymentType"',
+      paymentStatus: '"paymentStatus"',
+      writeOffType: '"writeOffType"',
+      taxYear: '"taxYear"',
+    };
+    for (const [key, value] of fields) {
+      setClauses.push(`${columnMap[key] || key} = $${idx++}`);
+      values.push(value);
+    }
+    setClauses.push(`"updatedAt" = NOW()`);
+    values.push(req.params.id);
+    const updated = await prisma.$executeRawUnsafe(
+      `UPDATE "Expense" SET ${setClauses.join(', ')} WHERE id = $${idx}`,
+      ...values
+    );
+    if (!updated) return res.status(404).json({ error: 'Expense not found' });
+    const expense = await fetchExpense(req.params.id, true);
     res.json(expense);
   } catch (err) {
-    if (err.code === 'P2025') return res.status(404).json({ error: 'Expense not found' });
     console.error('[Expenses PATCH]', err.message);
     res.status(500).json({ error: 'Could not update expense' });
   }
@@ -253,13 +317,10 @@ router.patch('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    const expense = await prisma.expense.findUnique({
-      where: { id: req.params.id },
-      include: { receipts: true },
-    });
+    const expense = await fetchExpense(req.params.id);
     if (!expense) return res.status(404).json({ error: 'Expense not found' });
 
-    await prisma.expense.delete({ where: { id: req.params.id } });
+    await prisma.$executeRawUnsafe(`DELETE FROM "Expense" WHERE id = $1`, req.params.id);
     for (const receipt of expense.receipts) {
       await removeReceiptFile(receipt);
     }
@@ -272,17 +333,17 @@ router.delete('/:id', async (req, res) => {
 
 router.post('/:id/receipts', upload.array('receipts', 6), async (req, res) => {
   try {
-    const expense = await prisma.expense.findUnique({ where: { id: req.params.id } });
+    const expense = await fetchExpense(req.params.id);
     if (!expense) return res.status(404).json({ error: 'Expense not found' });
 
     const receipts = await persistReceiptFiles(req.files);
-    await prisma.expenseReceipt.createMany({
-      data: receipts.map(receipt => ({ ...receipt, expenseId: req.params.id }))
-    });
-    const updated = await prisma.expense.findUnique({
-      where: { id: req.params.id },
-      include: { receipts: true },
-    });
+    for (const receipt of receipts) {
+      await prisma.$executeRawUnsafe(`
+        INSERT INTO "ExpenseReceipt" (id, "expenseId", filename, mimetype, size, path)
+        VALUES ($1,$2,$3,$4,$5,$6)
+      `, crypto.randomUUID(), req.params.id, receipt.filename, receipt.mimetype, receipt.size, receipt.path);
+    }
+    const updated = await fetchExpense(req.params.id);
     res.status(201).json(updated);
   } catch (err) {
     console.error('[Expense receipts POST]', err.message);
@@ -292,9 +353,7 @@ router.post('/:id/receipts', upload.array('receipts', 6), async (req, res) => {
 
 router.get('/:id/receipts/:receiptId', async (req, res) => {
   try {
-    const receipt = await prisma.expenseReceipt.findFirst({
-      where: { id: req.params.receiptId, expenseId: req.params.id },
-    });
+    const receipt = await fetchReceipt(req.params.id, req.params.receiptId);
     if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
     await sendReceiptFile(res, receipt);
   } catch (err) {
@@ -305,12 +364,10 @@ router.get('/:id/receipts/:receiptId', async (req, res) => {
 
 router.delete('/:id/receipts/:receiptId', async (req, res) => {
   try {
-    const receipt = await prisma.expenseReceipt.findFirst({
-      where: { id: req.params.receiptId, expenseId: req.params.id },
-    });
+    const receipt = await fetchReceipt(req.params.id, req.params.receiptId);
     if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
 
-    await prisma.expenseReceipt.delete({ where: { id: receipt.id } });
+    await prisma.$executeRawUnsafe(`DELETE FROM "ExpenseReceipt" WHERE id = $1`, receipt.id);
     await removeReceiptFile(receipt);
     res.json({ success: true });
   } catch (err) {
