@@ -3,8 +3,52 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
+const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
+const VALID_ROLES = new Set(['admin', 'engineer', 'qa', 'reviewer']);
+const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_RATE_WINDOW_MS || `${15 * 60 * 1000}`, 10);
+const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '8', 10);
+const loginAttempts = new Map();
+
+function loginKey(req, email) {
+  return `${req.ip || req.socket?.remoteAddress || 'unknown'}:${String(email || '').toLowerCase()}`;
+}
+
+function isRateLimited(key) {
+  const entry = loginAttempts.get(key);
+  if (!entry) return false;
+  if (Date.now() - entry.firstAt > LOGIN_WINDOW_MS) {
+    loginAttempts.delete(key);
+    return false;
+  }
+  return entry.count >= LOGIN_MAX_ATTEMPTS;
+}
+
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const entry = loginAttempts.get(key);
+  if (!entry || now - entry.firstAt > LOGIN_WINDOW_MS) {
+    loginAttempts.set(key, { count: 1, firstAt: now });
+    return;
+  }
+  entry.count += 1;
+}
+
+function clearLoginFailures(key) {
+  loginAttempts.delete(key);
+}
+
+function optionalUser(req) {
+  const header = req.headers.authorization;
+  const token = header?.split(' ')[1];
+  if (!token) return null;
+  try {
+    return jwt.verify(token, process.env.JWT_SECRET);
+  } catch (err) {
+    return null;
+  }
+}
 
 // POST /api/auth/change-password — any logged-in user changes their own password
 router.post('/change-password', auth, async (req, res) => {
@@ -26,14 +70,15 @@ router.post('/change-password', auth, async (req, res) => {
 });
 
 // PATCH /api/auth/users/:id — admin updates any user
-router.patch('/users/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin')
-    return res.status(403).json({ error: 'Admin access required' });
+router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
   const { name, email, role, password } = req.body;
   const data = {};
   if (name)  data.name  = name;
   if (email) data.email = email;
-  if (role)  data.role  = role;
+  if (role) {
+    if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' });
+    data.role = role;
+  }
   if (password) {
     if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
     data.password = await bcrypt.hash(password, 10);
@@ -51,9 +96,7 @@ router.patch('/users/:id', auth, async (req, res) => {
 });
 
 // DELETE /api/auth/users/:id — admin removes a user
-router.delete('/users/:id', auth, async (req, res) => {
-  if (req.user.role !== 'admin')
-    return res.status(403).json({ error: 'Admin access required' });
+router.delete('/users/:id', auth, requireRole('admin'), async (req, res) => {
   if (req.params.id === req.user.id)
     return res.status(400).json({ error: 'Cannot delete your own account' });
   try {
@@ -71,12 +114,24 @@ router.post('/login', async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ error: 'Email and password required' });
 
+  const key = loginKey(req, email);
+  if (isRateLimited(key)) {
+    return res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  }
+
   try {
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!user) {
+      recordLoginFailure(key);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
 
     const valid = await bcrypt.compare(password, user.password);
-    if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
+    if (!valid) {
+      recordLoginFailure(key);
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    clearLoginFailures(key);
 
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name, role: user.role },
@@ -93,19 +148,33 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// POST /api/auth/register (admin only in production - open for setup)
+// POST /api/auth/register (first-user setup only; admin-only after that)
 router.post('/register', async (req, res) => {
-  const { email, password, name, role } = req.body;
+  const { email, password, name } = req.body;
   if (!email || !password || !name)
     return res.status(400).json({ error: 'Email, password, and name required' });
+  if (password.length < 8)
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
   try {
+    const userCount = await prisma.user.count();
+    if (userCount > 0) {
+      const currentUser = optionalUser(req);
+      const adminUser = currentUser
+        ? await prisma.user.findUnique({ where: { id: currentUser.id }, select: { role: true } })
+        : null;
+      if (adminUser?.role !== 'admin') {
+        return res.status(403).json({ error: 'Admin access required' });
+      }
+    }
+
     const exists = await prisma.user.findUnique({ where: { email } });
     if (exists) return res.status(409).json({ error: 'Email already registered' });
 
     const hashed = await bcrypt.hash(password, 10);
+    const role = userCount === 0 ? 'admin' : 'engineer';
     const user = await prisma.user.create({
-      data: { email, password: hashed, name, role: role || 'engineer' }
+      data: { email, password: hashed, name, role }
     });
 
     const token = jwt.sign(

@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
+const { hasRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 
@@ -36,6 +37,9 @@ router.post('/', auth, async (req, res) => {
   if (!text) return res.status(400).json({ error: 'text is required' });
 
   const assignTo = userId || req.user.id;
+  if (assignTo !== req.user.id && !hasRole(req.user, ['admin'])) {
+    return res.status(403).json({ error: 'Cannot create tasks for another user' });
+  }
 
   try {
     const task = await prisma.task.create({
@@ -58,6 +62,12 @@ router.patch('/:id', auth, async (req, res) => {
   if (tag !== undefined) data.tag = tag;
 
   try {
+    const existing = await prisma.task.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    if (existing.userId !== req.user.id && !hasRole(req.user, ['admin'])) {
+      return res.status(403).json({ error: 'Cannot update another user task' });
+    }
+
     const task = await prisma.task.update({
       where: { id: req.params.id },
       data
@@ -71,6 +81,12 @@ router.patch('/:id', auth, async (req, res) => {
 // DELETE /api/tasks/:id
 router.delete('/:id', auth, async (req, res) => {
   try {
+    const existing = await prisma.task.findUnique({ where: { id: req.params.id } });
+    if (!existing) return res.status(404).json({ error: 'Task not found' });
+    if (existing.userId !== req.user.id && !hasRole(req.user, ['admin'])) {
+      return res.status(403).json({ error: 'Cannot delete another user task' });
+    }
+
     await prisma.task.delete({ where: { id: req.params.id } });
     res.json({ success: true });
   } catch (err) {

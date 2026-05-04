@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
+const { hasRole, requireRole } = require('../middleware/roles');
 const { notify } = require('../discord-notifier');
 const { log } = require('../history-logger');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
@@ -26,6 +27,48 @@ const include = {
   assignees: { select: { id: true, name: true, email: true } },
   attachments: true
 };
+
+function authorizeReportPatch(req, res) {
+  if (hasRole(req.user, ['admin'])) return true;
+
+  const body = req.body;
+  const role = req.user?.role;
+
+  if (body.status !== undefined) {
+    const allowedStatusByRole = {
+      engineer: ['in_progress', 'reviewing'],
+      qa: ['open', 'in_progress', 'resolved', 'declined'],
+      reviewer: ['in_progress', 'resolved'],
+    };
+    if (!allowedStatusByRole[role]?.includes(body.status)) {
+      res.status(403).json({ error: 'Insufficient role for status update' });
+      return false;
+    }
+  }
+
+  const queueFields = ['priority', 'bugLevel', 'assigneeIds', 'queued', 'tags'];
+  if (queueFields.some(field => body[field] !== undefined) && !hasRole(req.user, ['qa'])) {
+    res.status(403).json({ error: 'Insufficient role for queue fields' });
+    return false;
+  }
+
+  if (body.publishStatus !== undefined && !hasRole(req.user, ['engineer'])) {
+    res.status(403).json({ error: 'Insufficient role for publish status' });
+    return false;
+  }
+
+  if (body.notifyOwner !== undefined && !hasRole(req.user, ['qa', 'reviewer'])) {
+    res.status(403).json({ error: 'Insufficient role for notification settings' });
+    return false;
+  }
+
+  if (body.devNotes !== undefined && !hasRole(req.user, ['engineer', 'qa', 'reviewer'])) {
+    res.status(403).json({ error: 'Insufficient role for dev notes' });
+    return false;
+  }
+
+  return true;
+}
 
 // Raw SQL helper — bypasses Prisma enum deserialization for 'declined' etc.
 async function fetchReports(whereClauses = [], values = [], extra = '') {
@@ -215,6 +258,8 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
 
 // PATCH /api/reports/:id
 router.patch('/:id', auth, async (req, res) => {
+  if (!authorizeReportPatch(req, res)) return;
+
   const { status, priority, bugLevel, assigneeIds, tags, devNotes, queued } = req.body;
   const id = req.params.id;
 
@@ -316,7 +361,7 @@ router.patch('/:id', auth, async (req, res) => {
   }
 });
 // POST /api/reports/:id/accept
-router.post('/:id/accept', auth, async (req, res) => {
+router.post('/:id/accept', auth, requireRole('admin', 'qa'), async (req, res) => {
   const { bugLevel, assigneeIds, devNotes, priority } = req.body;
   try {
     const report = await prisma.report.update({
@@ -354,7 +399,7 @@ router.post('/:id/accept', auth, async (req, res) => {
 });
 
 // DELETE /api/reports/:id
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, requireRole('admin', 'qa'), async (req, res) => {
   try {
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     await prisma.report.delete({ where: { id: req.params.id } });
@@ -375,7 +420,7 @@ router.delete('/:id', auth, async (req, res) => {
 });
 
 // POST /api/reports/publish-all — move in_progress+flagged to reviewing
-router.post('/publish-all', auth, async (req, res) => {
+router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, res) => {
   try {
     const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", "bugLevel", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
     if (!flagged.length) return res.json({ success: true, count: 0 });
@@ -404,7 +449,7 @@ router.post('/publish-all', auth, async (req, res) => {
 });
 
 // POST /api/reports/:id/publish-resolved — QA approved
-router.post('/:id/publish-resolved', auth, async (req, res) => {
+router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer'), async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
@@ -427,7 +472,7 @@ router.post('/:id/publish-resolved', auth, async (req, res) => {
 
 
 // POST /api/reports/:id/approve-suggestion
-router.post('/:id/approve-suggestion', auth, async (req, res) => {
+router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa'), async (req, res) => {
   try {
     const report = await prisma.report.update({
       where: { id: req.params.id },
@@ -450,7 +495,7 @@ router.post('/:id/approve-suggestion', auth, async (req, res) => {
 });
 
 // POST /api/reports/:id/decline-suggestion
-router.post('/:id/decline-suggestion', auth, async (req, res) => {
+router.post('/:id/decline-suggestion', auth, requireRole('admin', 'qa'), async (req, res) => {
   const { devNotes } = req.body;
   try {
     const report = await prisma.report.update({
@@ -474,7 +519,7 @@ router.post('/:id/decline-suggestion', auth, async (req, res) => {
 });
 
 // POST /api/reports/:id/implement-suggestion
-router.post('/:id/implement-suggestion', auth, async (req, res) => {
+router.post('/:id/implement-suggestion', auth, requireRole('admin', 'qa'), async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);

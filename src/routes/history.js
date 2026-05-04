@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
+const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 
@@ -19,7 +20,7 @@ router.get('/:reportId', auth, async (req, res) => {
 });
 
 // POST /api/history — log a history entry (internal use)
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, requireRole('admin'), async (req, res) => {
   const { reportId, action, detail, actorName, actorId } = req.body;
   if (!reportId || !action) return res.status(400).json({ error: 'reportId and action required' });
   try {

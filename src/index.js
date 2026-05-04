@@ -10,13 +10,30 @@ const userRoutes = require('./routes/users');
 const botRoutes = require('./routes/bot');
 const messageRoutes = require('./routes/messages');
 const historyRoutes = require('./routes/history');
+const authMiddleware = require('./middleware/auth');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const allowedOrigins = (process.env.CORS_ORIGIN || 'https://lambent-lily-7bf643.netlify.app')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
+app.set('trust proxy', 1);
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    const error = new Error('Not allowed by CORS');
+    error.status = 403;
+    return callback(error);
+  }
+}));
 app.use(express.json());
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+if (process.env.PROTECT_UPLOADS === 'true') {
+  app.use('/uploads', authMiddleware, express.static(path.join(__dirname, '../uploads')));
+} else {
+  app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+}
 
 app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);
@@ -38,7 +55,7 @@ app.get('/api/config', (req, res) => {
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ error: 'Internal server error' });
+  res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error' });
 });
 
 app.listen(PORT, () => {
