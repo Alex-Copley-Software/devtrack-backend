@@ -35,7 +35,7 @@ const upload = multer({
   }
 });
 
-router.use(auth, requireRole('owner'));
+router.use(auth, requireRole('admin'));
 router.use(async (req, res, next) => {
   try {
     if (!schemaReady) schemaReady = ensureExpenseTables();
