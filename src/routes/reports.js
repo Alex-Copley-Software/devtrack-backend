@@ -30,6 +30,7 @@ const include = {
 
 function authorizeReportPatch(req, res) {
   if (hasRole(req.user, ['admin'])) return true;
+  if (hasRole(req.user, ['engineer'])) return true;
 
   const body = req.body;
   const role = req.user?.role;
@@ -47,7 +48,7 @@ function authorizeReportPatch(req, res) {
   }
 
   const queueFields = ['priority', 'bugLevel', 'assigneeIds', 'queued', 'tags'];
-  if (queueFields.some(field => body[field] !== undefined) && !hasRole(req.user, ['qa'])) {
+  if (queueFields.some(field => body[field] !== undefined) && !hasRole(req.user, ['qa', 'engineer'])) {
     res.status(403).json({ error: 'Insufficient role for queue fields' });
     return false;
   }
@@ -57,7 +58,7 @@ function authorizeReportPatch(req, res) {
     return false;
   }
 
-  if (body.notifyOwner !== undefined && !hasRole(req.user, ['qa', 'reviewer'])) {
+  if (body.notifyOwner !== undefined && !hasRole(req.user, ['qa', 'reviewer', 'engineer'])) {
     res.status(403).json({ error: 'Insufficient role for notification settings' });
     return false;
   }
@@ -361,7 +362,7 @@ router.patch('/:id', auth, async (req, res) => {
   }
 });
 // POST /api/reports/:id/accept
-router.post('/:id/accept', auth, requireRole('admin', 'qa'), async (req, res) => {
+router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
   const { bugLevel, assigneeIds, devNotes, priority } = req.body;
   try {
     const report = await prisma.report.update({
@@ -399,7 +400,7 @@ router.post('/:id/accept', auth, requireRole('admin', 'qa'), async (req, res) =>
 });
 
 // DELETE /api/reports/:id
-router.delete('/:id', auth, requireRole('admin', 'qa'), async (req, res) => {
+router.delete('/:id', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
   try {
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     await prisma.report.delete({ where: { id: req.params.id } });
@@ -449,7 +450,7 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
 });
 
 // POST /api/reports/:id/publish-resolved — QA approved
-router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer'), async (req, res) => {
+router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer', 'engineer'), async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
@@ -472,7 +473,7 @@ router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer'
 
 
 // POST /api/reports/:id/approve-suggestion
-router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa'), async (req, res) => {
+router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
   try {
     const report = await prisma.report.update({
       where: { id: req.params.id },
@@ -495,7 +496,7 @@ router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa'), async (
 });
 
 // POST /api/reports/:id/decline-suggestion
-router.post('/:id/decline-suggestion', auth, requireRole('admin', 'qa'), async (req, res) => {
+router.post('/:id/decline-suggestion', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
   const { devNotes } = req.body;
   try {
     const report = await prisma.report.update({
@@ -519,7 +520,7 @@ router.post('/:id/decline-suggestion', auth, requireRole('admin', 'qa'), async (
 });
 
 // POST /api/reports/:id/implement-suggestion
-router.post('/:id/implement-suggestion', auth, requireRole('admin', 'qa'), async (req, res) => {
+router.post('/:id/implement-suggestion', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
   try {
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
