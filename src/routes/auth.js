@@ -6,7 +6,7 @@ const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
-const VALID_ROLES = new Set(['admin', 'engineer', 'qa', 'reviewer']);
+const VALID_ROLES = new Set(['owner', 'admin', 'engineer', 'qa', 'reviewer']);
 const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_RATE_WINDOW_MS || `${15 * 60 * 1000}`, 10);
 const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '8', 10);
 const loginAttempts = new Map();
@@ -77,6 +77,9 @@ router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
   if (email) data.email = email;
   if (role) {
     if (!VALID_ROLES.has(role)) return res.status(400).json({ error: 'Invalid role' });
+    if (role === 'owner' && req.user.role !== 'owner') {
+      return res.status(403).json({ error: 'Owner role required' });
+    }
     data.role = role;
   }
   if (password) {
@@ -84,6 +87,15 @@ router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
     data.password = await bcrypt.hash(password, 10);
   }
   try {
+    const target = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { role: true }
+    });
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role === 'owner' && req.user.role !== 'owner') {
+      return res.status(403).json({ error: 'Owner accounts cannot be edited by admins' });
+    }
+
     const user = await prisma.user.update({
       where: { id: req.params.id }, data,
       select: { id: true, email: true, name: true, role: true, createdAt: true }
@@ -100,6 +112,15 @@ router.delete('/users/:id', auth, requireRole('admin'), async (req, res) => {
   if (req.params.id === req.user.id)
     return res.status(400).json({ error: 'Cannot delete your own account' });
   try {
+    const target = await prisma.user.findUnique({
+      where: { id: req.params.id },
+      select: { role: true }
+    });
+    if (!target) return res.status(404).json({ error: 'User not found' });
+    if (target.role === 'owner') {
+      return res.status(403).json({ error: 'Owner accounts cannot be deleted' });
+    }
+
     await prisma.user.delete({ where: { id: req.params.id } });
     res.json({ success: true });
   } catch (err) {
@@ -163,7 +184,7 @@ router.post('/register', async (req, res) => {
       const adminUser = currentUser
         ? await prisma.user.findUnique({ where: { id: currentUser.id }, select: { role: true } })
         : null;
-      if (adminUser?.role !== 'admin') {
+      if (!['admin', 'owner'].includes(adminUser?.role)) {
         return res.status(403).json({ error: 'Admin access required' });
       }
     }
@@ -172,7 +193,7 @@ router.post('/register', async (req, res) => {
     if (exists) return res.status(409).json({ error: 'Email already registered' });
 
     const hashed = await bcrypt.hash(password, 10);
-    const role = userCount === 0 ? 'admin' : 'engineer';
+    const role = userCount === 0 ? 'owner' : 'engineer';
     const user = await prisma.user.create({
       data: { email, password: hashed, name, role }
     });

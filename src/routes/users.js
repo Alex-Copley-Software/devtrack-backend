@@ -70,6 +70,7 @@ router.get('/', auth, async (req, res) => {
       LEFT JOIN resolved_counts rc ON rc."actorId" = u.id
       LEFT JOIN accepted_counts ac ON ac."actorId" = u.id
       LEFT JOIN qa_approved_counts qac ON qac."actorId" = u.id
+      WHERE u.role NOT IN ('admin', 'owner')
       GROUP BY u.id, rc.resolved, ac.accepted, qac.approved
       ORDER BY u."createdAt" ASC
     `;

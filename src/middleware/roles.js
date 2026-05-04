@@ -1,4 +1,5 @@
 function hasRole(user, roles) {
+  if (user?.role === 'owner') return true;
   return Boolean(user && roles.includes(user.role));
 }
 
