@@ -1,5 +1,5 @@
 // r2.js — Cloudflare R2 storage service
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const fs = require('fs');
 const path = require('path');
 
@@ -27,6 +27,10 @@ function getClient() {
 
 function isConfigured() {
   return !!(ACCOUNT_ID && ACCESS_KEY && SECRET_KEY && PUBLIC_URL);
+}
+
+function isPrivateConfigured(bucket) {
+  return !!(ACCOUNT_ID && ACCESS_KEY && SECRET_KEY && bucket);
 }
 
 /**
@@ -77,4 +81,46 @@ async function uploadBuffer(buffer, key, mimeType) {
   }
 }
 
-module.exports = { uploadFile, uploadBuffer, isConfigured };
+async function uploadPrivateFile(localPath, key, mimeType, bucket) {
+  if (!isPrivateConfigured(bucket)) return null;
+  try {
+    const body = fs.readFileSync(localPath);
+    await getClient().send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: body,
+      ContentType: mimeType || 'application/octet-stream',
+    }));
+    console.log(`[R2] Uploaded private file: ${bucket}/${key}`);
+    return key;
+  } catch (err) {
+    console.error('[R2] Private upload failed:', err.message);
+    return null;
+  }
+}
+
+async function getPrivateObject(key, bucket) {
+  if (!isPrivateConfigured(bucket)) return null;
+  return getClient().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+}
+
+async function deletePrivateObject(key, bucket) {
+  if (!isPrivateConfigured(bucket)) return false;
+  try {
+    await getClient().send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    return true;
+  } catch (err) {
+    console.error('[R2] Private delete failed:', err.message);
+    return false;
+  }
+}
+
+module.exports = {
+  uploadFile,
+  uploadBuffer,
+  uploadPrivateFile,
+  getPrivateObject,
+  deletePrivateObject,
+  isConfigured,
+  isPrivateConfigured,
+};

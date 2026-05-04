@@ -5,11 +5,13 @@ const fs = require('fs');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
+const { uploadPrivateFile, getPrivateObject, deletePrivateObject, isPrivateConfigured } = require('../r2');
 
 const prisma = new PrismaClient();
 const receiptsDir = path.join(__dirname, '../../uploads/expense-receipts');
 if (!fs.existsSync(receiptsDir)) fs.mkdirSync(receiptsDir, { recursive: true });
 let schemaReady;
+const EXPENSE_R2_BUCKET = process.env.EXPENSE_R2_BUCKET_NAME || process.env.R2_EXPENSE_BUCKET_NAME;
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, receiptsDir),
@@ -109,6 +111,63 @@ function toExpensePayload(body) {
   };
 }
 
+function receiptKey(file) {
+  return `expense-receipts/${new Date().getFullYear()}/${Date.now()}-${Math.round(Math.random() * 1e9)}-${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+}
+
+function isR2Path(value) {
+  return typeof value === 'string' && value.startsWith('r2://');
+}
+
+function r2KeyFromPath(value) {
+  return value.replace(/^r2:\/\/[^/]+\//, '');
+}
+
+async function persistReceiptFiles(files) {
+  const useR2 = isPrivateConfigured(EXPENSE_R2_BUCKET);
+  const receipts = [];
+
+  for (const file of files || []) {
+    let storedPath = file.path;
+    if (useR2) {
+      const key = receiptKey(file);
+      const uploadedKey = await uploadPrivateFile(file.path, key, file.mimetype, EXPENSE_R2_BUCKET);
+      if (uploadedKey) {
+        storedPath = `r2://${EXPENSE_R2_BUCKET}/${uploadedKey}`;
+        fs.promises.unlink(file.path).catch(() => {});
+      }
+    }
+
+    receipts.push({
+      filename: file.originalname,
+      mimetype: file.mimetype,
+      size: file.size,
+      path: storedPath,
+    });
+  }
+
+  return receipts;
+}
+
+async function removeReceiptFile(receipt) {
+  if (isR2Path(receipt.path)) {
+    await deletePrivateObject(r2KeyFromPath(receipt.path), EXPENSE_R2_BUCKET);
+    return;
+  }
+  await fs.promises.unlink(receipt.path).catch(() => {});
+}
+
+async function sendReceiptFile(res, receipt) {
+  if (isR2Path(receipt.path)) {
+    const object = await getPrivateObject(r2KeyFromPath(receipt.path), EXPENSE_R2_BUCKET);
+    if (!object?.Body) return res.status(404).json({ error: 'Receipt file not found' });
+    res.setHeader('Content-Type', receipt.mimetype || object.ContentType || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${receipt.filename.replace(/"/g, '')}"`);
+    return object.Body.pipe(res);
+  }
+  return res.download(receipt.path, receipt.filename);
+}
+
 router.get('/', async (req, res) => {
   const { year, category, status, search } = req.query;
   const where = {};
@@ -141,17 +200,13 @@ router.post('/', upload.array('receipts', 6), async (req, res) => {
   if (!data) return res.status(400).json({ error: 'title and valid amount are required' });
 
   try {
+    const receipts = await persistReceiptFiles(req.files);
     const expense = await prisma.expense.create({
       data: {
         ...data,
         createdById: req.user.id,
         receipts: {
-          create: (req.files || []).map(file => ({
-            filename: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size,
-            path: file.path,
-          }))
+          create: receipts
         }
       },
       include: { receipts: true },
@@ -206,7 +261,7 @@ router.delete('/:id', async (req, res) => {
 
     await prisma.expense.delete({ where: { id: req.params.id } });
     for (const receipt of expense.receipts) {
-      fs.promises.unlink(receipt.path).catch(() => {});
+      await removeReceiptFile(receipt);
     }
     res.json({ success: true });
   } catch (err) {
@@ -220,14 +275,9 @@ router.post('/:id/receipts', upload.array('receipts', 6), async (req, res) => {
     const expense = await prisma.expense.findUnique({ where: { id: req.params.id } });
     if (!expense) return res.status(404).json({ error: 'Expense not found' });
 
+    const receipts = await persistReceiptFiles(req.files);
     await prisma.expenseReceipt.createMany({
-      data: (req.files || []).map(file => ({
-        expenseId: req.params.id,
-        filename: file.originalname,
-        mimetype: file.mimetype,
-        size: file.size,
-        path: file.path,
-      }))
+      data: receipts.map(receipt => ({ ...receipt, expenseId: req.params.id }))
     });
     const updated = await prisma.expense.findUnique({
       where: { id: req.params.id },
@@ -246,7 +296,7 @@ router.get('/:id/receipts/:receiptId', async (req, res) => {
       where: { id: req.params.receiptId, expenseId: req.params.id },
     });
     if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
-    res.download(receipt.path, receipt.filename);
+    await sendReceiptFile(res, receipt);
   } catch (err) {
     console.error('[Expense receipt GET]', err.message);
     res.status(500).json({ error: 'Could not download receipt' });
@@ -261,7 +311,7 @@ router.delete('/:id/receipts/:receiptId', async (req, res) => {
     if (!receipt) return res.status(404).json({ error: 'Receipt not found' });
 
     await prisma.expenseReceipt.delete({ where: { id: receipt.id } });
-    fs.promises.unlink(receipt.path).catch(() => {});
+    await removeReceiptFile(receipt);
     res.json({ success: true });
   } catch (err) {
     console.error('[Expense receipt DELETE]', err.message);
