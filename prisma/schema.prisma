@@ -32,6 +32,7 @@ model Expense {
   paymentType String?
   paymentStatus String @default("paid")
   writeOffType String  @default("business")
+  referenceUrl String?
   notes       String?
   taxYear     Int
   createdById String

@@ -63,6 +63,7 @@ async function ensureExpenseTables() {
       "paymentType" TEXT,
       "paymentStatus" TEXT NOT NULL DEFAULT 'paid',
       "writeOffType" TEXT NOT NULL DEFAULT 'business',
+      "referenceUrl" TEXT,
       "notes" TEXT,
       "taxYear" INTEGER NOT NULL,
       "createdById" TEXT NOT NULL,
@@ -73,6 +74,7 @@ async function ensureExpenseTables() {
         ON DELETE RESTRICT ON UPDATE CASCADE
     )
   `);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Expense" ADD COLUMN IF NOT EXISTS "referenceUrl" TEXT`);
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "ExpenseReceipt" (
       "id" TEXT NOT NULL PRIMARY KEY,
@@ -107,6 +109,7 @@ function toExpensePayload(body) {
     paymentType: body.paymentType || null,
     paymentStatus: body.paymentStatus || 'paid',
     writeOffType: body.writeOffType || 'business',
+    referenceUrl: body.referenceUrl ? String(body.referenceUrl).trim() : null,
     notes: body.notes || null,
     taxYear: Number(body.taxYear) || expenseDate.getFullYear(),
   };
@@ -218,7 +221,7 @@ router.get('/', async (req, res) => {
   if (category && category !== 'all') { where.push(`e.category = $${idx++}`); values.push(category); }
   if (status && status !== 'all') { where.push(`e."paymentStatus" = $${idx++}`); values.push(status); }
   if (search) {
-    where.push(`(e.title ILIKE $${idx} OR e.vendor ILIKE $${idx} OR e.notes ILIKE $${idx})`);
+    where.push(`(e.title ILIKE $${idx} OR e.vendor ILIKE $${idx} OR e.notes ILIKE $${idx} OR e."referenceUrl" ILIKE $${idx})`);
     values.push(`%${search}%`);
     idx++;
   }
@@ -242,12 +245,12 @@ router.post('/', upload.array('receipts', 6), async (req, res) => {
     await prisma.$executeRawUnsafe(`
       INSERT INTO "Expense" (
         id, title, vendor, category, amount, currency, "expenseDate",
-        "paymentType", "paymentStatus", "writeOffType", notes, "taxYear", "createdById"
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+        "paymentType", "paymentStatus", "writeOffType", "referenceUrl", notes, "taxYear", "createdById"
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
     `,
       expenseId, data.title, data.vendor, data.category, data.amount, data.currency,
       data.expenseDate, data.paymentType, data.paymentStatus, data.writeOffType,
-      data.notes, data.taxYear, req.user.id
+      data.referenceUrl, data.notes, data.taxYear, req.user.id
     );
     for (const receipt of receipts) {
       await prisma.$executeRawUnsafe(`
@@ -267,7 +270,7 @@ router.patch('/:id', async (req, res) => {
   const patch = {};
   if (req.body.title !== undefined) patch.title = String(req.body.title).trim();
   if (req.body.vendor !== undefined) patch.vendor = req.body.vendor ? String(req.body.vendor).trim() : null;
-  for (const key of ['category', 'currency', 'paymentType', 'paymentStatus', 'writeOffType', 'notes']) {
+  for (const key of ['category', 'currency', 'paymentType', 'paymentStatus', 'writeOffType', 'referenceUrl', 'notes']) {
     if (req.body[key] !== undefined) patch[key] = req.body[key] || null;
   }
   if (req.body.taxYear !== undefined) {
@@ -294,6 +297,7 @@ router.patch('/:id', async (req, res) => {
       paymentType: '"paymentType"',
       paymentStatus: '"paymentStatus"',
       writeOffType: '"writeOffType"',
+      referenceUrl: '"referenceUrl"',
       taxYear: '"taxYear"',
     };
     for (const [key, value] of fields) {
