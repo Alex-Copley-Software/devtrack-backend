@@ -10,6 +10,7 @@ const userRoutes = require('./routes/users');
 const botRoutes = require('./routes/bot');
 const messageRoutes = require('./routes/messages');
 const historyRoutes = require('./routes/history');
+const expenseRoutes = require('./routes/expenses');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
@@ -42,6 +43,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/bot', botRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/history', historyRoutes);
+app.use('/api/expenses', expenseRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

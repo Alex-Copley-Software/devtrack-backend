@@ -18,6 +18,40 @@ model User {
 
   assignedReports Report[]  @relation("AssignedReports")
   tasks           Task[]
+  expenses        Expense[]
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  title       String
+  vendor      String?
+  category    String   @default("software")
+  amount      Decimal  @db.Decimal(12, 2)
+  currency    String   @default("USD")
+  expenseDate DateTime
+  paymentType String?
+  paymentStatus String @default("paid")
+  writeOffType String  @default("business")
+  notes       String?
+  taxYear     Int
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdBy User @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  receipts  ExpenseReceipt[]
+}
+
+model ExpenseReceipt {
+  id        String   @id @default(uuid())
+  expenseId String
+  filename  String
+  mimetype  String
+  size      Int
+  path      String
+  createdAt DateTime @default(now())
+
+  expense Expense @relation(fields: [expenseId], references: [id], onDelete: Cascade)
 }
 
 model Report {
