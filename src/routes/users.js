@@ -26,6 +26,26 @@ router.get('/', auth, async (req, res) => {
         JOIN "Report" r ON r.id = lr."reportId"
         WHERE r.status = 'resolved'
         GROUP BY lr."actorId"
+      ),
+      accepted_counts AS (
+        SELECT
+          rh."actorId",
+          COUNT(DISTINCT rh."reportId")::int AS accepted
+        FROM "ReportHistory" rh
+        JOIN "Report" r ON r.id = rh."reportId"
+        WHERE rh.action LIKE '%Report accepted%'
+          AND r.type IN ('bug', 'crash')
+        GROUP BY rh."actorId"
+      ),
+      qa_approved_counts AS (
+        SELECT
+          rh."actorId",
+          COUNT(DISTINCT rh."reportId")::int AS approved
+        FROM "ReportHistory" rh
+        JOIN "Report" r ON r.id = rh."reportId"
+        WHERE rh.action LIKE '%Marked as Resolved%'
+          AND r.type IN ('bug', 'crash')
+        GROUP BY rh."actorId"
       )
       SELECT
         u.id,
@@ -33,6 +53,8 @@ router.get('/', auth, async (req, res) => {
         u.email,
         u.role,
         CASE WHEN u.role = 'engineer' THEN COALESCE(rc.resolved, 0) ELSE 0 END AS "resolvedReports",
+        CASE WHEN u.role = 'qa' THEN COALESCE(ac.accepted, 0) ELSE 0 END AS "acceptedReports",
+        CASE WHEN u.role IN ('qa', 'reviewer') THEN COALESCE(qac.approved, 0) ELSE 0 END AS "qaApprovedReports",
         COALESCE(
           json_agg(DISTINCT jsonb_build_object('id', t.id, 'done', t.done))
           FILTER (WHERE t.id IS NOT NULL), '[]'
@@ -46,7 +68,9 @@ router.get('/', auth, async (req, res) => {
       LEFT JOIN "_AssignedReports" ar ON ar."B" = u.id
       LEFT JOIN "Report" r ON r.id = ar."A"
       LEFT JOIN resolved_counts rc ON rc."actorId" = u.id
-      GROUP BY u.id, rc.resolved
+      LEFT JOIN accepted_counts ac ON ac."actorId" = u.id
+      LEFT JOIN qa_approved_counts qac ON qac."actorId" = u.id
+      GROUP BY u.id, rc.resolved, ac.accepted, qac.approved
       ORDER BY u."createdAt" ASC
     `;
     res.json(users);
