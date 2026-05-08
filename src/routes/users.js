@@ -4,10 +4,16 @@ const auth = require('../middleware/auth');
 const { hasRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
-const PAGE_KEYS = ['bugs', 'suggestions', 'expenses', 'admin'];
+const PAGE_KEYS = ['bugs', 'suggestions', 'imports', 'expenses', 'admin'];
 
 async function ensureUserAccessColumn() {
   await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "pageAccess" TEXT[]`);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "User"
+    SET "pageAccess" = array_append(COALESCE("pageAccess", ARRAY[]::text[]), 'imports')
+    WHERE role IN ('owner', 'admin', 'engineer')
+      AND NOT ('imports' = ANY(COALESCE("pageAccess", ARRAY[]::text[])))
+  `);
 }
 
 // GET /api/users - list all engineers
@@ -63,8 +69,8 @@ router.get('/', auth, async (req, res) => {
         u.email,
         u.role,
         COALESCE(u."pageAccess", CASE
-          WHEN u.role IN ('owner', 'admin') THEN ARRAY['bugs','suggestions','expenses','admin']::text[]
-          WHEN u.role = 'engineer' THEN ARRAY['bugs','suggestions']::text[]
+          WHEN u.role IN ('owner', 'admin') THEN ARRAY['bugs','suggestions','imports','expenses','admin']::text[]
+          WHEN u.role = 'engineer' THEN ARRAY['bugs','suggestions','imports']::text[]
           WHEN u.role IN ('qa', 'reviewer') THEN ARRAY['bugs']::text[]
           ELSE ARRAY['bugs']::text[]
         END) AS "pageAccess",

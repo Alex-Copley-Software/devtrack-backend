@@ -7,7 +7,7 @@ const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 const VALID_ROLES = new Set(['owner', 'admin', 'engineer', 'qa', 'reviewer']);
-const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'expenses', 'admin']);
+const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'imports', 'expenses', 'admin']);
 const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_RATE_WINDOW_MS || `${15 * 60 * 1000}`, 10);
 const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '8', 10);
 const loginAttempts = new Map();
@@ -53,11 +53,17 @@ function optionalUser(req) {
 
 async function ensureUserAccessColumn() {
   await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "pageAccess" TEXT[]`);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "User"
+    SET "pageAccess" = array_append(COALESCE("pageAccess", ARRAY[]::text[]), 'imports')
+    WHERE role IN ('owner', 'admin', 'engineer')
+      AND NOT ('imports' = ANY(COALESCE("pageAccess", ARRAY[]::text[])))
+  `);
 }
 
 function defaultPageAccess(role) {
-  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'expenses', 'admin'];
-  if (role === 'engineer') return ['bugs', 'suggestions'];
+  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'imports', 'expenses', 'admin'];
+  if (role === 'engineer') return ['bugs', 'suggestions', 'imports'];
   return ['bugs'];
 }
 

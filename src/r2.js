@@ -99,6 +99,23 @@ async function uploadPrivateFile(localPath, key, mimeType, bucket) {
   }
 }
 
+async function uploadPrivateBuffer(buffer, key, mimeType, bucket) {
+  if (!isPrivateConfigured(bucket)) return null;
+  try {
+    await getClient().send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: mimeType || 'application/octet-stream',
+    }));
+    console.log(`[R2] Uploaded private buffer: ${bucket}/${key}`);
+    return key;
+  } catch (err) {
+    console.error('[R2] Private buffer upload failed:', err.message);
+    return null;
+  }
+}
+
 async function getPrivateObject(key, bucket) {
   if (!isPrivateConfigured(bucket)) return null;
   return getClient().send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -119,6 +136,7 @@ module.exports = {
   uploadFile,
   uploadBuffer,
   uploadPrivateFile,
+  uploadPrivateBuffer,
   getPrivateObject,
   deletePrivateObject,
   isConfigured,
