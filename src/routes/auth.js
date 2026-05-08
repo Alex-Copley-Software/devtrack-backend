@@ -68,6 +68,7 @@ function defaultPageAccess(role) {
 }
 
 async function getPageAccess(userId, role) {
+  if (role === 'owner') return defaultPageAccess(role);
   await ensureUserAccessColumn();
   const rows = await prisma.$queryRawUnsafe(`SELECT "pageAccess" FROM "User" WHERE id = $1`, userId);
   return rows[0]?.pageAccess || defaultPageAccess(role);
