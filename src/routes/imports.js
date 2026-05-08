@@ -1,21 +1,11 @@
 const router = require('express').Router();
-const axios = require('axios');
 const crypto = require('crypto');
-const path = require('path');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const { importStatus } = require('../discord-notifier');
-const {
-  uploadPrivateBuffer,
-  getPrivateObject,
-  deletePrivateObject,
-  isPrivateConfigured,
-} = require('../r2');
 
 const prisma = new PrismaClient();
-const IMPORT_R2_BUCKET = process.env.IMPORT_R2_BUCKET_NAME || process.env.R2_IMPORT_BUCKET_NAME;
-const MAX_IMPORT_BYTES = Number(process.env.MAX_IMPORT_ATTACHMENT_BYTES || 250 * 1024 * 1024);
 const ASSET_TYPES = new Set([
   'Unit SFX',
   'Unit animations',
@@ -92,14 +82,6 @@ router.use(async (req, res, next) => {
   }
 });
 
-function r2Path(key) {
-  return key ? `r2://${IMPORT_R2_BUCKET}/${key}` : null;
-}
-
-function r2KeyFromPath(value) {
-  return String(value || '').replace(/^r2:\/\/[^/]+\//, '');
-}
-
 function cleanFilename(filename) {
   return String(filename || 'import-file.bin').replace(/[^a-zA-Z0-9._-]/g, '_');
 }
@@ -141,26 +123,6 @@ async function fetchImport(id) {
   return rows[0] || null;
 }
 
-async function fetchFile(importId, fileId) {
-  const rows = await prisma.$queryRawUnsafe(
-    `SELECT * FROM "ImportFile" WHERE id = $1 AND "importRequestId" = $2 LIMIT 1`,
-    fileId,
-    importId
-  );
-  return rows[0] || null;
-}
-
-async function deleteStoredFiles(importId) {
-  const files = await prisma.$queryRawUnsafe(
-    `SELECT id, path FROM "ImportFile" WHERE "importRequestId" = $1 AND path IS NOT NULL`,
-    importId
-  );
-  for (const file of files) {
-    await deletePrivateObject(r2KeyFromPath(file.path), IMPORT_R2_BUCKET);
-  }
-  await prisma.$executeRawUnsafe(`UPDATE "ImportFile" SET path = NULL WHERE "importRequestId" = $1`, importId);
-}
-
 router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
   const { status, assigneeId, search } = req.query;
   const clauses = [];
@@ -179,23 +141,6 @@ router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
   } catch (err) {
     console.error('[Imports GET]', err.message);
     res.status(500).json({ error: 'Could not fetch imports' });
-  }
-});
-
-router.get('/:id/file/:fileId', auth, requireRole('engineer', 'admin'), async (req, res) => {
-  try {
-    const file = await fetchFile(req.params.id, req.params.fileId);
-    if (!file) return res.status(404).json({ error: 'File not found' });
-    if (!file.path) return res.redirect(file.discordUrl);
-
-    const object = await getPrivateObject(r2KeyFromPath(file.path), IMPORT_R2_BUCKET);
-    if (!object?.Body) return res.status(404).json({ error: 'Stored file not found' });
-    res.setHeader('Content-Type', file.mimetype || object.ContentType || 'application/octet-stream');
-    res.setHeader('Content-Disposition', `attachment; filename="${file.filename.replace(/"/g, '')}"`);
-    return object.Body.pipe(res);
-  } catch (err) {
-    console.error('[Imports file]', err.message);
-    res.status(500).json({ error: 'Could not fetch import file' });
   }
 });
 
@@ -258,7 +203,6 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
 
     const updated = await fetchImport(req.params.id);
     if (status === 'imported') {
-      await deleteStoredFiles(req.params.id);
       importStatus({
         channelId: current.discordChannelId,
         messageId: current.discordMessageId,
@@ -277,7 +221,6 @@ router.delete('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =
   try {
     const existing = await fetchImport(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Import not found' });
-    await deleteStoredFiles(req.params.id);
     await prisma.$executeRawUnsafe(`DELETE FROM "ImportRequest" WHERE id = $1`, req.params.id);
     res.json({ success: true });
   } catch (err) {
@@ -290,9 +233,6 @@ router.post('/bot', botAuth, async (req, res) => {
   const { title, description, discordUser, discordUserId, discordChannelId, discordMessageId, attachments } = req.body;
   if (!discordChannelId || !discordMessageId || !Array.isArray(attachments) || !attachments.length) {
     return res.status(400).json({ error: 'channel, message, and attachments are required' });
-  }
-  if (!isPrivateConfigured(IMPORT_R2_BUCKET)) {
-    return res.status(500).json({ error: 'Import R2 bucket is not configured' });
   }
 
   try {
@@ -314,22 +254,11 @@ router.post('/bot', botAuth, async (req, res) => {
 
     for (const att of attachments) {
       const filename = cleanFilename(att.filename);
-      const ext = path.extname(filename) || '.bin';
-      const key = `imports/${new Date().getFullYear()}/${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-      const response = await axios.get(att.url, {
-        responseType: 'arraybuffer',
-        timeout: 60000,
-        maxContentLength: MAX_IMPORT_BYTES,
-        maxBodyLength: MAX_IMPORT_BYTES,
-      });
-      const buffer = Buffer.from(response.data);
-      const uploadedKey = await uploadPrivateBuffer(buffer, key, att.contentType, IMPORT_R2_BUCKET);
-      if (!uploadedKey) throw new Error('R2 upload failed');
       await prisma.$executeRawUnsafe(`
         INSERT INTO "ImportFile" (id, "importRequestId", filename, mimetype, size, path, "discordUrl")
         VALUES ($1,$2,$3,$4,$5,$6,$7)
       `, crypto.randomUUID(), importId, filename, att.contentType || 'application/octet-stream',
-        Number(att.size || buffer.length || 0), r2Path(uploadedKey), att.url);
+        Number(att.size || 0), null, att.url);
     }
 
     res.status(201).json({ importId, import: await fetchImport(importId) });
