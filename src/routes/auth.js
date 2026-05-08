@@ -7,6 +7,7 @@ const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 const VALID_ROLES = new Set(['owner', 'admin', 'engineer', 'qa', 'reviewer']);
+const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'expenses', 'admin']);
 const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_RATE_WINDOW_MS || `${15 * 60 * 1000}`, 10);
 const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '8', 10);
 const loginAttempts = new Map();
@@ -50,6 +51,22 @@ function optionalUser(req) {
   }
 }
 
+async function ensureUserAccessColumn() {
+  await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "pageAccess" TEXT[]`);
+}
+
+function defaultPageAccess(role) {
+  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'expenses', 'admin'];
+  if (role === 'engineer') return ['bugs', 'suggestions'];
+  return ['bugs'];
+}
+
+async function getPageAccess(userId, role) {
+  await ensureUserAccessColumn();
+  const rows = await prisma.$queryRawUnsafe(`SELECT "pageAccess" FROM "User" WHERE id = $1`, userId);
+  return rows[0]?.pageAccess || defaultPageAccess(role);
+}
+
 // POST /api/auth/change-password — any logged-in user changes their own password
 router.post('/change-password', auth, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
@@ -71,7 +88,7 @@ router.post('/change-password', auth, async (req, res) => {
 
 // PATCH /api/auth/users/:id — admin updates any user
 router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
-  const { name, email, role, password } = req.body;
+  const { name, email, role, password, pageAccess } = req.body;
   const data = {};
   if (name)  data.name  = name;
   if (email) data.email = email;
@@ -87,6 +104,7 @@ router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
     data.password = await bcrypt.hash(password, 10);
   }
   try {
+    await ensureUserAccessColumn();
     const target = await prisma.user.findUnique({
       where: { id: req.params.id },
       select: { role: true }
@@ -100,6 +118,15 @@ router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
       where: { id: req.params.id }, data,
       select: { id: true, email: true, name: true, role: true, createdAt: true }
     });
+    if (pageAccess !== undefined) {
+      if (!Array.isArray(pageAccess) || pageAccess.some(page => !VALID_PAGE_ACCESS.has(page))) {
+        return res.status(400).json({ error: 'Invalid page access' });
+      }
+      await prisma.$executeRawUnsafe(`UPDATE "User" SET "pageAccess" = $1 WHERE id = $2`, pageAccess, req.params.id);
+      user.pageAccess = pageAccess;
+    } else {
+      user.pageAccess = await getPageAccess(user.id, user.role);
+    }
     res.json({ user });
   } catch (err) {
     if (err.code === 'P2025') return res.status(404).json({ error: 'User not found' });
@@ -141,6 +168,7 @@ router.post('/login', async (req, res) => {
   }
 
   try {
+    await ensureUserAccessColumn();
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
       recordLoginFailure(key);
@@ -159,10 +187,11 @@ router.post('/login', async (req, res) => {
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
+    const pageAccess = await getPageAccess(user.id, user.role);
 
     res.json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role }
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, pageAccess }
     });
   } catch (err) {
     res.status(500).json({ error: 'Login failed' });
@@ -178,6 +207,7 @@ router.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
   try {
+    await ensureUserAccessColumn();
     const userCount = await prisma.user.count();
     if (userCount > 0) {
       const currentUser = optionalUser(req);
@@ -197,6 +227,8 @@ router.post('/register', async (req, res) => {
     const user = await prisma.user.create({
       data: { email, password: hashed, name, role }
     });
+    const pageAccess = defaultPageAccess(role);
+    await prisma.$executeRawUnsafe(`UPDATE "User" SET "pageAccess" = $1 WHERE id = $2`, pageAccess, user.id);
 
     const token = jwt.sign(
       { id: user.id, email: user.email, name: user.name, role: user.role },
@@ -206,7 +238,7 @@ router.post('/register', async (req, res) => {
 
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role }
+      user: { id: user.id, email: user.email, name: user.name, role: user.role, pageAccess }
     });
   } catch (err) {
     res.status(500).json({ error: 'Registration failed' });
@@ -216,10 +248,12 @@ router.post('/register', async (req, res) => {
 // GET /api/auth/me
 router.get('/me', auth, async (req, res) => {
   try {
+    await ensureUserAccessColumn();
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: { id: true, email: true, name: true, role: true }
     });
+    if (user) user.pageAccess = await getPageAccess(user.id, user.role);
     res.json(user);
   } catch (err) {
     res.status(500).json({ error: 'Could not fetch user' });

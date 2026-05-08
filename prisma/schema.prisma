@@ -13,6 +13,7 @@ model User {
   password  String
   name      String
   role      String   @default("engineer")
+  pageAccess String[] @default([])
   avatarUrl String?
   createdAt DateTime @default(now())
 

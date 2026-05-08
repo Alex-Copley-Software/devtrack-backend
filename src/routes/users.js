@@ -4,10 +4,16 @@ const auth = require('../middleware/auth');
 const { hasRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
+const PAGE_KEYS = ['bugs', 'suggestions', 'expenses', 'admin'];
+
+async function ensureUserAccessColumn() {
+  await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "pageAccess" TEXT[]`);
+}
 
 // GET /api/users - list all engineers
 router.get('/', auth, async (req, res) => {
   try {
+    await ensureUserAccessColumn();
     const includeRoleAccounts = req.query.includeRoleAccounts === 'true' && hasRole(req.user, ['admin']);
     const roleFilter = includeRoleAccounts ? '' : `WHERE u.role NOT IN ('admin', 'owner')`;
 
@@ -56,6 +62,12 @@ router.get('/', auth, async (req, res) => {
         u.name,
         u.email,
         u.role,
+        COALESCE(u."pageAccess", CASE
+          WHEN u.role IN ('owner', 'admin') THEN ARRAY['bugs','suggestions','expenses','admin']::text[]
+          WHEN u.role = 'engineer' THEN ARRAY['bugs','suggestions']::text[]
+          WHEN u.role IN ('qa', 'reviewer') THEN ARRAY['bugs']::text[]
+          ELSE ARRAY['bugs']::text[]
+        END) AS "pageAccess",
         CASE WHEN u.role = 'engineer' THEN COALESCE(rc.resolved, 0) ELSE 0 END AS "resolvedReports",
         CASE WHEN u.role = 'qa' THEN COALESCE(ac.accepted, 0) ELSE 0 END AS "acceptedReports",
         CASE WHEN u.role IN ('qa', 'reviewer') THEN COALESCE(qac.approved, 0) ELSE 0 END AS "qaApprovedReports",
