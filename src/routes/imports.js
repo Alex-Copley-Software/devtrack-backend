@@ -131,7 +131,7 @@ async function fetchImports(where = '', values = []) {
     LEFT JOIN "ImportFile" f ON f."importRequestId" = ir.id
     ${where}
     GROUP BY ir.id, u.id
-    ORDER BY CASE WHEN ir.status = 'queued' THEN 0 ELSE 1 END, ir."createdAt" DESC
+    ORDER BY CASE WHEN ir.status = 'queued' THEN 0 WHEN ir.status = 'ready' THEN 1 ELSE 2 END, ir."createdAt" DESC
   `, ...values);
 }
 
@@ -199,7 +199,7 @@ router.get('/:id/file/:fileId', auth, requireRole('engineer', 'admin'), async (r
 });
 
 router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) => {
-  const allowedStatuses = new Set(['queued', 'imported']);
+  const allowedStatuses = new Set(['queued', 'ready', 'imported']);
   const assetType = req.body.assetType ? String(req.body.assetType).trim() : null;
   const updateVersion = req.body.updateVersion !== undefined ? String(req.body.updateVersion).trim() : null;
   const assignedToId = req.body.assignedToId === '' ? null : req.body.assignedToId;
@@ -210,9 +210,31 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
   if (status && !allowedStatuses.has(status)) return res.status(400).json({ error: 'Invalid import status' });
 
   try {
+    const current = await fetchImport(req.params.id);
+    if (!current) return res.status(404).json({ error: 'Import not found' });
+
     if (assignedToId) {
       const users = await prisma.$queryRawUnsafe(`SELECT id FROM "User" WHERE id = $1 AND role = 'engineer' LIMIT 1`, assignedToId);
       if (!users.length) return res.status(400).json({ error: 'Assigned user must be an engineer' });
+    }
+
+    const next = {
+      assetType: assetType !== null ? assetType : current.assetType,
+      updateVersion: updateVersion !== null ? updateVersion : current.updateVersion,
+      assignedToId: assignedToId !== undefined ? assignedToId : current.assignedToId,
+      description: description !== undefined ? description : current.description,
+    };
+    const complete = Boolean(
+      next.assetType &&
+      next.updateVersion &&
+      next.assignedToId &&
+      String(next.description || '').trim()
+    );
+    if ((status === 'ready' || status === 'imported') && !complete) {
+      return res.status(400).json({ error: 'Asset type, update, assigned dev, and description are required first' });
+    }
+    if (status === 'imported' && current.status !== 'ready') {
+      return res.status(400).json({ error: 'Import must be accepted as ready before it can be marked imported' });
     }
 
     const updates = [];
