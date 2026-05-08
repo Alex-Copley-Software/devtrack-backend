@@ -5,6 +5,7 @@ const path = require('path');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
+const { importStatus } = require('../discord-notifier');
 const {
   uploadPrivateBuffer,
   getPrivateObject,
@@ -255,11 +256,33 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     );
     if (!result) return res.status(404).json({ error: 'Import not found' });
 
-    if (status === 'imported') await deleteStoredFiles(req.params.id);
-    res.json(await fetchImport(req.params.id));
+    const updated = await fetchImport(req.params.id);
+    if (status === 'imported') {
+      await deleteStoredFiles(req.params.id);
+      importStatus({
+        channelId: current.discordChannelId,
+        messageId: current.discordMessageId,
+        status: 'imported',
+      }).catch(err => console.error('[Imports notify]', err.message));
+      return res.json(await fetchImport(req.params.id));
+    }
+    res.json(updated);
   } catch (err) {
     console.error('[Imports PATCH]', err.message);
     res.status(500).json({ error: 'Could not update import' });
+  }
+});
+
+router.delete('/:id', auth, requireRole('engineer', 'admin'), async (req, res) => {
+  try {
+    const existing = await fetchImport(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Import not found' });
+    await deleteStoredFiles(req.params.id);
+    await prisma.$executeRawUnsafe(`DELETE FROM "ImportRequest" WHERE id = $1`, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Imports DELETE]', err.message);
+    res.status(500).json({ error: 'Could not delete import' });
   }
 });
 

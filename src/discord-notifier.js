@@ -46,4 +46,16 @@ async function alert(payload) {
   }
 }
 
-module.exports = { notify, alert };
+async function importStatus(payload) {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/import-status`, payload, {
+      headers: { 'x-bot-secret': BOT_SECRET },
+      timeout: 5000,
+    });
+    console.log(`[Notifier] Import status sent: ${payload.status}`);
+  } catch (err) {
+    console.error('[Notifier] Failed to send import status:', err.message);
+  }
+}
+
+module.exports = { notify, alert, importStatus };
