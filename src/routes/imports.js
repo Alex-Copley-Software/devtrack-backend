@@ -9,6 +9,9 @@ const prisma = new PrismaClient();
 const ASSET_TYPES = new Set([
   'Unit SFX',
   'Unit animations',
+  'Enemy Animation',
+  'Misc Animations',
+  'Unit Models',
   'Unit VFX',
   'Maps',
   'Icons',
