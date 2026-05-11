@@ -5,7 +5,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
-const { requireRole } = require('../middleware/roles');
 const { uploadPrivateFile, getPrivateObject, deletePrivateObject, isPrivateConfigured } = require('../r2');
 
 const prisma = new PrismaClient();
@@ -38,7 +37,23 @@ const upload = multer({
   }
 });
 
-router.use(auth, requireRole('admin'));
+async function requireExpenseAccess(req, res, next) {
+  try {
+    if (req.user?.role === 'owner' || req.user?.role === 'admin') return next();
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT "pageAccess" FROM "User" WHERE id = $1`,
+      req.user.id
+    );
+    const pageAccess = rows[0]?.pageAccess || [];
+    if (Array.isArray(pageAccess) && pageAccess.includes('expenses')) return next();
+    return res.status(403).json({ error: 'Expense access required' });
+  } catch (err) {
+    console.error('[Expenses access]', err.message);
+    return res.status(500).json({ error: 'Could not verify expense access' });
+  }
+}
+
+router.use(auth, requireExpenseAccess);
 router.use(async (req, res, next) => {
   try {
     if (!schemaReady) schemaReady = ensureExpenseTables();
