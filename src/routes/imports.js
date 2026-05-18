@@ -6,6 +6,8 @@ const { requireRole } = require('../middleware/roles');
 const { importStatus } = require('../discord-notifier');
 
 const prisma = new PrismaClient();
+const IMPORT_GUILD_ID = '1360381365450969098';
+const IMPORT_CHANNEL_ID = '1502322551098179634';
 const ASSET_TYPES = new Set([
   'Unit SFX',
   'Unit animations',
@@ -95,7 +97,7 @@ function discordMessageUrl(guildId, channelId, messageId) {
 }
 
 async function fetchImports(where = '', values = []) {
-  return prisma.$queryRawUnsafe(`
+  const rows = await prisma.$queryRawUnsafe(`
     SELECT ir.*,
       COALESCE(jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email), NULL) AS assignee,
       COALESCE(
@@ -119,6 +121,11 @@ async function fetchImports(where = '', values = []) {
     GROUP BY ir.id, u.id
     ORDER BY CASE WHEN ir.status = 'queued' THEN 0 WHEN ir.status = 'ready' THEN 1 ELSE 2 END, ir."createdAt" DESC
   `, ...values);
+  return rows.map(row => ({
+    ...row,
+    discordChannelId: IMPORT_CHANNEL_ID,
+    discordUrl: discordMessageUrl(IMPORT_GUILD_ID, IMPORT_CHANNEL_ID, row.discordMessageId),
+  }));
 }
 
 async function fetchImport(id) {
@@ -207,7 +214,7 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     const updated = await fetchImport(req.params.id);
     if (status === 'imported') {
       importStatus({
-        channelId: current.discordChannelId,
+        channelId: IMPORT_CHANNEL_ID,
         messageId: current.discordMessageId,
         status: 'imported',
       }).catch(err => console.error('[Imports notify]', err.message));
@@ -233,9 +240,9 @@ router.delete('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =
 });
 
 router.post('/bot', botAuth, async (req, res) => {
-  const { title, description, discordUser, discordUserId, discordChannelId, discordMessageId, attachments } = req.body;
-  if (!discordChannelId || !discordMessageId || !Array.isArray(attachments) || !attachments.length) {
-    return res.status(400).json({ error: 'channel, message, and attachments are required' });
+  const { title, description, discordUser, discordUserId, discordMessageId, attachments } = req.body;
+  if (!discordMessageId || !Array.isArray(attachments) || !attachments.length) {
+    return res.status(400).json({ error: 'message and attachments are required' });
   }
 
   try {
@@ -246,14 +253,14 @@ router.post('/bot', botAuth, async (req, res) => {
     if (existing.length) return res.status(409).json({ error: 'Import already exists', importId: existing[0].id });
 
     const importId = crypto.randomUUID();
-    const discordUrl = discordMessageUrl(process.env.DISCORD_SERVER_ID, discordChannelId, discordMessageId);
+    const discordUrl = discordMessageUrl(IMPORT_GUILD_ID, IMPORT_CHANNEL_ID, discordMessageId);
     await prisma.$executeRawUnsafe(`
       INSERT INTO "ImportRequest" (
         id, title, description, status, "discordUser", "discordUserId",
         "discordChannelId", "discordMessageId", "discordUrl"
       ) VALUES ($1,$2,$3,'queued',$4,$5,$6,$7,$8)
     `, importId, title || attachments[0]?.filename || 'Import request', description || '', discordUser || null,
-      discordUserId || null, discordChannelId, discordMessageId, discordUrl);
+      discordUserId || null, IMPORT_CHANNEL_ID, discordMessageId, discordUrl);
 
     for (const att of attachments) {
       const filename = cleanFilename(att.filename);
