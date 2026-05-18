@@ -156,6 +156,7 @@ router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
 
 router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) => {
   const allowedStatuses = new Set(['queued', 'ready', 'imported']);
+  const title = req.body.title !== undefined ? String(req.body.title || '').trim() : undefined;
   const assetType = req.body.assetType ? String(req.body.assetType).trim() : null;
   const updateVersion = req.body.updateVersion !== undefined ? String(req.body.updateVersion).trim() : null;
   const assignedToId = req.body.assignedToId === '' ? null : req.body.assignedToId;
@@ -175,19 +176,21 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     }
 
     const next = {
+      title: title !== undefined ? title : current.title,
       assetType: assetType !== null ? assetType : current.assetType,
       updateVersion: updateVersion !== null ? updateVersion : current.updateVersion,
       assignedToId: assignedToId !== undefined ? assignedToId : current.assignedToId,
       description: description !== undefined ? description : current.description,
     };
     const complete = Boolean(
+      String(next.title || '').trim() &&
       next.assetType &&
       next.updateVersion &&
       next.assignedToId &&
       String(next.description || '').trim()
     );
     if ((status === 'ready' || status === 'imported') && !complete) {
-      return res.status(400).json({ error: 'Asset type, update, assigned dev, and description are required first' });
+      return res.status(400).json({ error: 'Title, asset type, update, assigned dev, and description are required first' });
     }
     if (status === 'imported' && current.status !== 'ready') {
       return res.status(400).json({ error: 'Import must be accepted as ready before it can be marked imported' });
@@ -196,6 +199,7 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     const updates = [];
     const values = [];
     let idx = 1;
+    if (title !== undefined) { updates.push(`title = $${idx++}`); values.push(title); }
     if (assetType !== null) { updates.push(`"assetType" = $${idx++}`); values.push(assetType); }
     if (updateVersion !== null) { updates.push(`"updateVersion" = $${idx++}`); values.push(updateVersion); }
     if (assignedToId !== undefined) { updates.push(`"assignedToId" = $${idx++}`); values.push(assignedToId); }
