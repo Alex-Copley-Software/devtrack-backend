@@ -5,6 +5,35 @@ const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 
+// GET /api/history/activity/feed - recent activity across bug reports
+router.get('/activity/feed', auth, async (req, res) => {
+  try {
+    const activity = await prisma.$queryRawUnsafe(`
+      SELECT
+        rh.id,
+        rh."reportId",
+        rh.action,
+        rh.detail,
+        rh."actorName",
+        rh."actorId",
+        rh."createdAt",
+        r.title,
+        r.type::text AS "reportType",
+        r.status::text AS "reportStatus",
+        r."bugLevel"::text AS "bugLevel"
+      FROM "ReportHistory" rh
+      JOIN "Report" r ON r.id = rh."reportId"
+      WHERE r.type IN ('bug', 'crash')
+      ORDER BY rh."createdAt" DESC
+      LIMIT 250
+    `);
+    res.json(activity);
+  } catch (err) {
+    console.error('[Activity GET]', err.message);
+    res.status(500).json({ error: 'Could not fetch activity' });
+  }
+});
+
 // GET /api/history/:reportId
 router.get('/:reportId', auth, async (req, res) => {
   try {
