@@ -23,6 +23,7 @@ router.get('/activity/feed', auth, async (req, res) => {
         r."bugLevel"::text AS "bugLevel"
       FROM "ReportHistory" rh
       JOIN "Report" r ON r.id = rh."reportId"
+      JOIN "User" u ON u.id = rh."actorId"
       WHERE r.type IN ('bug', 'crash')
       ORDER BY rh."createdAt" DESC
       LIMIT 250
