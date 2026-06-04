@@ -10,6 +10,13 @@ const { log } = require('../history-logger');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 
 const prisma = new PrismaClient();
+let statusEnumReady = false;
+
+async function ensureStatusEnumValues() {
+  if (statusEnumReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TYPE "Status" ADD VALUE IF NOT EXISTS 'on_hold'`);
+  statusEnumReady = true;
+}
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
@@ -37,9 +44,9 @@ function authorizeReportPatch(req, res) {
 
   if (body.status !== undefined) {
     const allowedStatusByRole = {
-      engineer: ['in_progress', 'reviewing'],
-      qa: ['open', 'in_progress', 'resolved', 'declined'],
-      reviewer: ['in_progress', 'resolved'],
+      engineer: ['in_progress', 'reviewing', 'on_hold'],
+      qa: ['open', 'in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'],
+      reviewer: ['in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'],
     };
     if (!allowedStatusByRole[role]?.includes(body.status)) {
       res.status(403).json({ error: 'Insufficient role for status update' });
@@ -110,6 +117,7 @@ router.get('/', auth, async (req, res) => {
   ];
   if (assigneeId) where.assignees = { some: { id: assigneeId } };
   try {
+    if (status !== undefined) await ensureStatusEnumValues();
     const whereClauses = [];
     const vals = [];
     let idx = 1;
@@ -266,6 +274,8 @@ router.patch('/:id', auth, async (req, res) => {
 
   try {
     // Build raw SQL SET clauses — fully bypasses Prisma enum validation
+    if (status !== undefined) await ensureStatusEnumValues();
+
     const setClauses = [];
     const values     = [];
     let   idx        = 1;
@@ -341,7 +351,7 @@ router.patch('/:id', auth, async (req, res) => {
     }
 
     // Notify Discord on status changes
-    if (status && ['in_progress', 'reviewing', 'resolved', 'declined'].includes(status)) {
+    if (status && ['in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'].includes(status)) {
       const assigneeName = Array.isArray(report.assignees) ? report.assignees[0]?.name || null : null;
       notify({
         threadId:      report.discordThreadId,

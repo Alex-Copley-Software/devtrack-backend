@@ -5,19 +5,19 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 const ACTION_LABELS = {
-  queued:      '📥 Report received from Discord',
-  accepted:    '✅ Report accepted',
-  declined:    '✕ Report declined',
-  declined:    '❌ Report declined and removed',
-  in_progress: '🔧 Status changed to In Progress',
-  reviewing:   '🔬 Sent to QA Review',
-  resolved:    '🎉 Marked as Resolved',
-  published:   '🚀 Marked as Published',
-  assigned:    '👤 Assigned to engineer',
-  buglevel:    '🏷 Bug level set',
-  devnotes:    '📝 Dev notes updated',
-  flagged:     '⚑ Flagged as ready to publish',
-  unflagged:   '⚑ Unflagged',
+  queued: 'Report received from Discord',
+  accepted: 'Report accepted',
+  declined: 'Report declined and removed',
+  in_progress: 'Status changed to In Progress',
+  reviewing: 'Sent to QA Review',
+  on_hold: 'On Hold for QA',
+  resolved: 'Marked as Resolved',
+  published: 'Marked as Published',
+  assigned: 'Assigned to engineer',
+  buglevel: 'Bug level set',
+  devnotes: 'Dev notes updated',
+  flagged: 'Flagged as ready to publish',
+  unflagged: 'Unflagged',
 };
 
 async function log({ reportId, action, detail, actorName, actorId }) {
@@ -33,7 +33,7 @@ async function log({ reportId, action, detail, actorName, actorId }) {
       }
     });
   } catch (err) {
-    // Non-fatal — don't break the request if history logging fails
+    // Non-fatal, do not break the request if history logging fails.
     console.error('[History] Failed to log:', err.message);
   }
 }

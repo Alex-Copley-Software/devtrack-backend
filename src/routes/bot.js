@@ -8,7 +8,14 @@ const { uploadBuffer, uploadFile } = require('../r2');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 
 const prisma = new PrismaClient();
-const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'resolved', 'declined'];
+const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'];
+let statusEnumReady = false;
+
+async function ensureStatusEnumValues() {
+  if (statusEnumReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TYPE "Status" ADD VALUE IF NOT EXISTS 'on_hold'`);
+  statusEnumReady = true;
+}
 const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYTES || 125 * 1024 * 1024);
 
 const uploadsDir = path.join(__dirname, '../../uploads');
@@ -193,6 +200,7 @@ router.patch('/report/:id', botAuth, async (req, res) => {
       if (!VALID_STATUSES.includes(status)) {
         return res.status(400).json({ error: 'Invalid status' });
       }
+      await ensureStatusEnumValues();
 
       const existing = await prisma.$queryRawUnsafe(
         'SELECT id, status::text AS status FROM "Report" WHERE id = $1 LIMIT 1',

@@ -158,6 +158,7 @@ enum Status {
   open
   in_progress
   reviewing
+  on_hold
   resolved
   declined
 }
