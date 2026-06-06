@@ -8,6 +8,7 @@ const { hasRole, requireRole } = require('../middleware/roles');
 const { notify } = require('../discord-notifier');
 const { log } = require('../history-logger');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
+const { broadcast } = require('../events');
 
 const prisma = new PrismaClient();
 let statusEnumReady = false;
@@ -100,6 +101,42 @@ async function fetchReports(whereClauses = [], values = [], extra = '') {
     ${extra}
   `;
   return prisma.$queryRawUnsafe(sql, ...values);
+}
+
+function broadcastReport(event, report, actor) {
+  if (!report) return;
+  broadcast(event, {
+    report,
+    actor: actor ? { id: actor.id, name: actor.name, role: actor.role } : null,
+    timestamp: new Date().toISOString(),
+  });
+  broadcast('activity.changed', { reportId: report.id, timestamp: new Date().toISOString() });
+}
+
+function broadcastReportDeleted(id, actor) {
+  broadcast('report.deleted', {
+    id,
+    actor: actor ? { id: actor.id, name: actor.name, role: actor.role } : null,
+    timestamp: new Date().toISOString(),
+  });
+  broadcast('activity.changed', { reportId: id, timestamp: new Date().toISOString() });
+}
+
+function assertFreshReport(existing, expectedUpdatedAt) {
+  if (!expectedUpdatedAt || !existing) return null;
+  const current = new Date(existing.updatedAt).getTime();
+  const expected = new Date(expectedUpdatedAt).getTime();
+  if (Number.isNaN(expected) || current !== expected) {
+    return {
+      status: 409,
+      body: {
+        error: 'Report was updated by someone else',
+        code: 'STALE_REPORT',
+        currentUpdatedAt: existing.updatedAt,
+      },
+    };
+  }
+  return null;
 }
 
 // GET /api/reports
@@ -269,12 +306,17 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   if (!authorizeReportPatch(req, res)) return;
 
-  const { status, priority, bugLevel, assigneeIds, tags, devNotes, queued } = req.body;
+  const { status, priority, bugLevel, assigneeIds, tags, devNotes, queued, expectedUpdatedAt } = req.body;
   const id = req.params.id;
 
   try {
     // Build raw SQL SET clauses — fully bypasses Prisma enum validation
     if (status !== undefined) await ensureStatusEnumValues();
+
+    const [existingReport] = await fetchReports(['r.id = $1'], [id]);
+    if (!existingReport) return res.status(404).json({ error: 'Report not found' });
+    const stale = assertFreshReport(existingReport, expectedUpdatedAt);
+    if (stale) return res.status(stale.status).json({ ...stale.body, report: existingReport });
 
     const setClauses = [];
     const values     = [];
@@ -365,6 +407,7 @@ router.patch('/:id', auth, async (req, res) => {
       });
     }
 
+    broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     console.error('[PATCH]', err.message);
@@ -403,6 +446,7 @@ router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (
     if (report.assignees?.[0]?.name) await log({ reportId: req.params.id, action: 'assigned', detail: report.assignees[0].name, actorName: req.user.name, actorId: req.user.id });
     if (report.bugLevel) await log({ reportId: req.params.id, action: 'buglevel', detail: report.bugLevel, actorName: req.user.name, actorId: req.user.id });
 
+    broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not accept report' });
@@ -424,6 +468,7 @@ router.delete('/:id', auth, requireRole('admin', 'qa', 'engineer'), async (req, 
         notifyOwner:   report.notifyOwner,
       });
     }
+    broadcastReportDeleted(req.params.id, req.user);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Could not delete report' });
@@ -450,6 +495,10 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
         notifyOwner:   r.notifyOwner,
       });
     }
+    const updatedReports = flagged.length
+      ? await fetchReports([`r.id = ANY($1::text[])`], [flagged.map(r => r.id)])
+      : [];
+    for (const report of updatedReports) broadcastReport('report.updated', report, req.user);
     alertQaReview(prisma).catch(err => console.error('[PublishAll] QA alert failed:', err.message));
 
     res.json({ success: true, count: flagged.length });
@@ -475,6 +524,7 @@ router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer'
     });
     await log({ reportId: req.params.id, action: 'resolved', actorName: req.user.name, actorId: req.user.id });
     await log({ reportId: req.params.id, action: 'published', actorName: req.user.name, actorId: req.user.id });
+    broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not resolve report' });
@@ -499,6 +549,7 @@ router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa', 'enginee
       notifyOwner:   report.notifyOwner,
     });
     await log({ reportId: req.params.id, action: 'accepted', actorName: req.user.name, actorId: req.user.id });
+    broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not approve suggestion' });
@@ -523,6 +574,7 @@ router.post('/:id/decline-suggestion', auth, requireRole('admin', 'qa', 'enginee
       notifyOwner:   report.notifyOwner,
     });
     await log({ reportId: req.params.id, action: 'declined', detail: devNotes || null, actorName: req.user.name, actorId: req.user.id });
+    broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not decline suggestion' });
@@ -543,6 +595,7 @@ router.post('/:id/implement-suggestion', auth, requireRole('admin', 'qa', 'engin
       notifyOwner:   report.notifyOwner,
     });
     await log({ reportId: req.params.id, action: 'resolved', detail: 'Implemented', actorName: req.user.name, actorId: req.user.id });
+    broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not implement suggestion' });
@@ -563,6 +616,9 @@ router.post('/sync-stars', async (req, res) => {
         data: { upvotes: parseInt(u.upvotes) || 0 }
       });
     }
+    const ids = updates.map(u => u.reportId).filter(Boolean);
+    const updatedReports = ids.length ? await fetchReports([`r.id = ANY($1::text[])`], [ids]) : [];
+    for (const report of updatedReports) broadcastReport('report.updated', report, null);
     res.json({ success: true, count: updates.length });
   } catch (err) {
     res.status(500).json({ error: 'Could not sync stars' });
@@ -579,6 +635,8 @@ router.patch('/:id/upvotes', async (req, res) => {
       where: { id: req.params.id },
       data: { upvotes: parseInt(upvotes) || 0 }
     });
+    const [fresh] = await fetchReports(['r.id = $1'], [req.params.id]);
+    broadcastReport('report.updated', fresh || report, null);
     res.json({ upvotes: report.upvotes });
   } catch (err) {
     res.status(500).json({ error: 'Could not update upvotes' });
@@ -589,6 +647,8 @@ router.patch('/:id/upvotes', async (req, res) => {
 router.post('/:id/upvote', auth, async (req, res) => {
   try {
     const report = await prisma.report.update({ where: { id: req.params.id }, data: { upvotes: { increment: 1 } } });
+    const [fresh] = await fetchReports(['r.id = $1'], [req.params.id]);
+    broadcastReport('report.updated', fresh || report, req.user);
     res.json({ upvotes: report.upvotes });
   } catch (err) {
     res.status(500).json({ error: 'Could not upvote' });

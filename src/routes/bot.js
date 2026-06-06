@@ -6,6 +6,7 @@ const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 const { uploadBuffer, uploadFile } = require('../r2');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
+const { broadcast } = require('../events');
 
 const prisma = new PrismaClient();
 const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'];
@@ -20,6 +21,20 @@ const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYT
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+
+function broadcastReport(event, report) {
+  if (!report) return;
+  broadcast(event, {
+    report: {
+      assignees: [],
+      ...report,
+      attachments: report.attachments || [],
+    },
+    actor: null,
+    timestamp: new Date().toISOString(),
+  });
+  broadcast('activity.changed', { reportId: report.id, timestamp: new Date().toISOString() });
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadsDir),
@@ -183,6 +198,7 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
     const { log } = require('../history-logger');
     await log({ reportId: report.id, action: 'queued', detail: `Submitted by ${discordUser||'unknown'} via Discord`, actorName: discordUser||'Discord', actorId: req.body.discordUserId||'' });
     maybeAlertQueueBacklog(prisma).catch(err => console.error('[Bot] Queue alert failed:', err.message));
+    broadcastReport('report.created', report);
 
     res.status(201).json({ success: true, reportId: report.id });
   } catch (err) {
@@ -232,6 +248,18 @@ router.patch('/report/:id', botAuth, async (req, res) => {
         'SELECT id, status::text AS status, queued, "publishStatus" FROM "Report" WHERE id = $1 LIMIT 1',
         req.params.id
       );
+      const fresh = await prisma.$queryRawUnsafe(`
+        SELECT r.*,
+          COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
+          COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
+        FROM "Report" r
+        LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
+        LEFT JOIN "User" u ON u.id = ar."B"
+        LEFT JOIN "Attachment" a ON a."reportId" = r.id
+        WHERE r.id = $1
+        GROUP BY r.id
+      `, req.params.id);
+      broadcastReport('report.updated', fresh[0] || updated[0]);
       return res.json({ success: true, report: updated[0] });
     }
 
