@@ -139,6 +139,13 @@ function assertFreshReport(existing, expectedUpdatedAt) {
   return null;
 }
 
+function devNotesHistoryDetail(previous, next) {
+  const oldText = String(previous || '').trim();
+  const newText = String(next || '').trim();
+  if (oldText === newText) return null;
+  return `Previous:\n${oldText || '(none)'}\n\nNew:\n${newText || '(none)'}`;
+}
+
 // GET /api/reports
 router.get('/', auth, async (req, res) => {
   const { type, status, priority, bugLevel, search, assigneeId, queued } = req.query;
@@ -389,7 +396,10 @@ router.patch('/:id', auth, async (req, res) => {
       await log({ reportId: id, action: 'assigned', detail: assigneeNames, actorName: req.user.name, actorId: req.user.id });
     }
     if (devNotes !== undefined) {
-      await log({ reportId: id, action: 'devnotes', actorName: req.user.name, actorId: req.user.id });
+      const detail = devNotesHistoryDetail(existingReport.devNotes, devNotes);
+      if (detail) {
+        await log({ reportId: id, action: 'devnotes', detail, actorName: req.user.name, actorId: req.user.id });
+      }
     }
 
     // Notify Discord on status changes
