@@ -534,10 +534,16 @@ router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer'
 
 // POST /api/reports/:id/approve-suggestion
 router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
+  const { assigneeIds, devNotes } = req.body || {};
   try {
     const report = await prisma.report.update({
       where: { id: req.params.id },
-      data: { status: 'open', queued: false },
+      data: {
+        status: 'open',
+        queued: false,
+        devNotes: devNotes || null,
+        assignees: Array.isArray(assigneeIds) ? { set: assigneeIds.map(id => ({ id })) } : undefined,
+      },
       include
     });
     notify({
@@ -549,6 +555,9 @@ router.post('/:id/approve-suggestion', auth, requireRole('admin', 'qa', 'enginee
       notifyOwner:   report.notifyOwner,
     });
     await log({ reportId: req.params.id, action: 'accepted', actorName: req.user.name, actorId: req.user.id });
+    if (Array.isArray(report.assignees) && report.assignees.length) {
+      await log({ reportId: req.params.id, action: 'assigned', detail: report.assignees.map(a => a.name).join(', '), actorName: req.user.name, actorId: req.user.id });
+    }
     broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
