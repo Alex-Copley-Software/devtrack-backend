@@ -71,7 +71,7 @@ router.get('/', auth, async (req, res) => {
         END)
         END AS "pageAccess",
         CASE WHEN u.role = 'engineer' THEN COALESCE(rc.resolved, 0) ELSE 0 END AS "resolvedReports",
-        CASE WHEN u.role = 'qa' THEN COALESCE(ac.accepted, 0) ELSE 0 END AS "acceptedReports",
+        CASE WHEN u.role IN ('engineer', 'qa') THEN COALESCE(ac.accepted, 0) ELSE 0 END AS "acceptedReports",
         CASE WHEN u.role IN ('qa', 'reviewer') THEN COALESCE(qac.approved, 0) ELSE 0 END AS "qaApprovedReports",
         COALESCE(
           json_agg(DISTINCT jsonb_build_object('id', t.id, 'done', t.done))
