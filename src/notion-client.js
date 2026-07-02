@@ -2,19 +2,26 @@
 // Notion API wrapper: page fetch/update, database schema caching, and
 // per-database property-name mapping (title/status/assignee/priority/dueDate).
 
+const https = require('https');
 const { Client } = require('@notionhq/client');
-// Node's built-in fetch (undici) intermittently throws "Premature close" on
-// Railway's outbound network to api.notion.com. node-fetch (already pulled
-// in transitively by @notionhq/client) uses Node's classic http/https client
-// instead of undici and sidesteps it — a known workaround for this class of
-// containerized-network issue.
 const nodeFetch = require('node-fetch');
+
+// Requests to api.notion.com consistently fail with "Premature close" on
+// Railway's network — both undici (Node's built-in fetch) and node-fetch hit
+// it identically, which points to a reused keep-alive socket going stale
+// rather than a fetch-library bug. Forcing a fresh connection per request
+// (keepAlive: false) is the standard fix for this class of issue on
+// containerized/proxied platforms.
+const freshConnectionAgent = new https.Agent({ keepAlive: false });
+function fetchWithFreshConnection(url, opts = {}) {
+  return nodeFetch(url, { ...opts, agent: freshConnectionAgent });
+}
 
 let client = null;
 function getClient() {
   if (!client) {
     if (!process.env.NOTION_API_KEY) throw new Error('NOTION_API_KEY is not set');
-    client = new Client({ auth: process.env.NOTION_API_KEY, fetch: nodeFetch });
+    client = new Client({ auth: process.env.NOTION_API_KEY, fetch: fetchWithFreshConnection });
   }
   return client;
 }
