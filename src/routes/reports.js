@@ -400,6 +400,12 @@ router.patch('/:id', auth, async (req, res) => {
         await log({ reportId: id, action: 'devnotes', detail, actorName: req.user.name, actorId: req.user.id });
       }
     }
+    if (priority !== undefined && priority !== existingReport.priority) {
+      await log({ reportId: id, action: 'priority', detail: priority, actorName: req.user.name, actorId: req.user.id });
+    }
+    if (bugLevel !== undefined && bugLevel !== existingReport.bugLevel) {
+      await log({ reportId: id, action: 'buglevel', detail: bugLevel || 'cleared', actorName: req.user.name, actorId: req.user.id });
+    }
 
     // Notify Discord on status changes
     if (status && ['in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'].includes(status)) {

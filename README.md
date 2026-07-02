@@ -99,7 +99,7 @@ Comments require the integration to have "Read comments" enabled under the integ
 | GET | /api/team-reports | List past generated reports (most recent 20) | Bearer token, admin |
 | POST | /api/team-reports/generate | Gather engineer activity for the period and generate a new AI report | Bearer token, admin |
 
-`period` in the POST body is `"daily"` (last 24h) or `"weekly"` (last 7 days, default). Bug/suggestion activity comes from the real `ReportHistory` audit trail; imports and Notion tasks have no change-history table yet, so those sections reflect current state of items touched in the window rather than a true before/after diff. Requires `ANTHROPIC_API_KEY`.
+`period` in the POST body is `"daily"` (last 24h) or `"weekly"` (last 7 days, default). All three sources now have real audit trails: `ReportHistory` (bugs/suggestions — status, priority, bug level, assignment, dev notes), `ImportHistory` (queued/ready/imported, assignment, other edits), and `NotionTaskHistory` (status/priority/assignee transitions, logged with `source: 'app'` or `'notion'` depending on where the change originated — Notion-originated changes are attributed to the task's current assignee since the webhook payload doesn't reliably identify which Notion user made the edit). Notion's free-text page content/comments are read live via `/content` rather than logged here. Requires `ANTHROPIC_API_KEY`.
 
 ---
 

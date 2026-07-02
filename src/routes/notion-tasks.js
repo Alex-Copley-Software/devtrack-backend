@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const notion = require('../notion-client');
 const db = require('../notion-tasks-db');
+const taskHistory = require('../notion-task-history-logger');
 const { broadcast } = require('../events');
 
 const prisma = new PrismaClient();
@@ -12,6 +13,7 @@ router.use(async (req, res, next) => {
   try {
     await db.ensureNotionTaskTable(prisma);
     await db.ensureNotionNicknameColumn(prisma);
+    await taskHistory.ensureNotionTaskHistoryTable(prisma);
     next();
   } catch (err) {
     console.error('[NotionTasks schema]', err.message);
@@ -59,7 +61,8 @@ router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) =>
         if (!notion.matchesEngineerFilter(fields.assigneeNicknames)) continue;
         keepPageIds.push(pageId);
         try {
-          await db.upsertFromNotion(prisma, {
+          const existing = await db.fetchByPageId(prisma, pageId);
+          const task = await db.upsertFromNotion(prisma, {
             notionPageId: pageId,
             notionDatabaseId: fields.databaseId,
             title: fields.title,
@@ -70,6 +73,9 @@ router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) =>
             notionLastEditedTime: fields.notionLastEditedTime,
             notionUrl: fields.notionUrl,
           });
+          if (existing && task.status !== existing.status) {
+            await taskHistory.log(prisma, { notionTaskId: task.id, action: 'status', detail: `${existing.status} → ${task.status}`, source: 'notion', actorName: 'Notion sync' });
+          }
           synced++;
         } catch (err) {
           console.error('[NotionTasks sync] Failed to upsert page', pageId, err.message);
@@ -175,6 +181,16 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     const unmappedAssigneeIds = assigneeIds !== undefined
       ? assigneeIds.filter((_, i) => !nicknames[i])
       : [];
+
+    if (status !== undefined && status !== existing.status) {
+      await taskHistory.log(prisma, { notionTaskId: req.params.id, action: 'status', detail: `${existing.status} → ${status}`, source: 'app', actorName: req.user.name, actorId: req.user.id });
+    }
+    if (priority !== undefined && priority !== existing.priority) {
+      await taskHistory.log(prisma, { notionTaskId: req.params.id, action: 'priority', detail: priority || 'cleared', source: 'app', actorName: req.user.name, actorId: req.user.id });
+    }
+    if (nicknames !== undefined) {
+      await taskHistory.log(prisma, { notionTaskId: req.params.id, action: 'assigned', detail: nicknames.filter(Boolean).join(', ') || 'Unassigned', source: 'app', actorName: req.user.name, actorId: req.user.id });
+    }
 
     let notionSync = { ok: true };
     try {

@@ -8,6 +8,7 @@ const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const notion = require('../notion-client');
 const db = require('../notion-tasks-db');
+const taskHistory = require('../notion-task-history-logger');
 const { broadcast } = require('../events');
 
 const prisma = new PrismaClient();
@@ -57,6 +58,7 @@ router.post('/webhook', async (req, res) => {
 
     await db.ensureNotionTaskTable(prisma);
     await db.ensureNotionNicknameColumn(prisma);
+    await taskHistory.ensureNotionTaskHistoryTable(prisma);
 
     const existing = await db.fetchByPageId(prisma, pageId);
 
@@ -89,6 +91,23 @@ router.post('/webhook', async (req, res) => {
       notionLastEditedTime: fields.notionLastEditedTime,
       notionUrl: fields.notionUrl,
     });
+
+    if (!existing) {
+      await taskHistory.log(prisma, { notionTaskId: task.id, action: 'created', detail: `Synced from Notion, status: ${task.status}`, source: 'notion', actorName: 'Notion sync' });
+    } else {
+      if (task.status !== existing.status) {
+        await taskHistory.log(prisma, { notionTaskId: task.id, action: 'status', detail: `${existing.status} → ${task.status}`, source: 'notion', actorName: 'Notion sync' });
+      }
+      if (task.priority !== existing.priority) {
+        await taskHistory.log(prisma, { notionTaskId: task.id, action: 'priority', detail: task.priority || 'cleared', source: 'notion', actorName: 'Notion sync' });
+      }
+      const prevNicknames = (existing.assigneeNicknames || []).slice().sort().join(',');
+      const nextNicknames = (task.assigneeNicknames || []).slice().sort().join(',');
+      if (prevNicknames !== nextNicknames) {
+        await taskHistory.log(prisma, { notionTaskId: task.id, action: 'assigned', detail: task.assigneeNicknames?.join(', ') || 'Unassigned', source: 'notion', actorName: 'Notion sync' });
+      }
+    }
+
     broadcast(existing ? 'notionTask.updated' : 'notionTask.created', { task, timestamp: new Date().toISOString() });
     console.log(`[Notion Webhook] Synced task "${task.title}" (${task.id}) from Notion`);
   } catch (err) {

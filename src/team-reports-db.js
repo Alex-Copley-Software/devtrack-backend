@@ -50,17 +50,18 @@ async function getReport(prisma, id) {
 
 const ACTIVITY_CAP_PER_ENGINEER = 50;
 
-// Gathers each engineer's activity within [start, end] across bug/suggestion
-// history (real audit trail), imports, and Notion tasks (current state of
-// items touched in the window — there's no change-history table for those
-// yet, so it's "what's in this state as of now that was touched then", not
-// a true before/after diff).
+// Gathers each engineer's activity within [start, end] from the real audit
+// trails: ReportHistory (bugs/suggestions), ImportHistory (imports), and
+// NotionTaskHistory (tasks — status/priority/assignee transitions, logged
+// regardless of whether the change came from the dashboard or a Notion
+// edit synced in via webhook). This is genuine "did X then Y" history, not
+// just a snapshot of current state for items touched in the window.
 async function buildActivitySummary(prisma, start, end) {
   const users = await prisma.$queryRawUnsafe(`SELECT id, name FROM "User" WHERE role = 'engineer' ORDER BY name`);
   const engineerByName = new Map(users.map(u => [u.name, u]));
   const engineerById = new Map(users.map(u => [u.id, u]));
 
-  const history = await prisma.$queryRawUnsafe(`
+  const bugHistory = await prisma.$queryRawUnsafe(`
     SELECT rh."actorName", rh.action, rh.detail, rh."createdAt",
            r.title AS "reportTitle", r.type::text AS "reportType"
     FROM "ReportHistory" rh
@@ -69,21 +70,22 @@ async function buildActivitySummary(prisma, start, end) {
     ORDER BY rh."createdAt" ASC
   `, start, end);
 
-  const imports = await prisma.$queryRawUnsafe(`
-    SELECT ir.title, ir.status, ir."assetType", ir."updateVersion", ir."updatedAt", u.name AS "assigneeName"
-    FROM "ImportRequest" ir
-    LEFT JOIN "User" u ON u.id = ir."assignedToId"
-    WHERE ir."updatedAt" >= $1 AND ir."updatedAt" <= $2
-    ORDER BY ir."updatedAt" ASC
+  const importHistoryRows = await prisma.$queryRawUnsafe(`
+    SELECT ih."actorName", ih.action, ih.detail, ih."createdAt", ir.title AS "importTitle"
+    FROM "ImportHistory" ih
+    JOIN "ImportRequest" ir ON ir.id = ih."importRequestId"
+    WHERE ih."createdAt" >= $1 AND ih."createdAt" <= $2
+    ORDER BY ih."createdAt" ASC
   `, start, end).catch(() => []); // table may not exist yet if no imports have ever been created
 
-  const tasksRaw = await prisma.$queryRawUnsafe(`
-    SELECT nt.title, nt.status, nt.priority, nt."updatedAt",
-      COALESCE((SELECT array_agg(u.id) FROM "User" u WHERE u.role = 'engineer' AND u."notionNickname" = ANY(nt."assigneeNicknames")), ARRAY[]::TEXT[]) AS "assigneeIds"
-    FROM "NotionTask" nt
-    WHERE nt."updatedAt" >= $1 AND nt."updatedAt" <= $2
-    ORDER BY nt."updatedAt" ASC
-  `, start, end).catch(() => []);
+  const taskHistoryRows = await prisma.$queryRawUnsafe(`
+    SELECT th."actorName", th.action, th.detail, th.source, th."createdAt", nt.title AS "taskTitle",
+      COALESCE((SELECT array_agg(u.id) FROM "User" u WHERE u.role = 'engineer' AND u."notionNickname" = ANY(nt."assigneeNicknames")), ARRAY[]::TEXT[]) AS "currentAssigneeIds"
+    FROM "NotionTaskHistory" th
+    JOIN "NotionTask" nt ON nt.id = th."notionTaskId"
+    WHERE th."createdAt" >= $1 AND th."createdAt" <= $2
+    ORDER BY th."createdAt" ASC
+  `, start, end).catch(() => []); // table may not exist yet if no tasks have ever changed status
 
   const byEngineer = new Map();
   function bucket(name) {
@@ -92,27 +94,32 @@ async function buildActivitySummary(prisma, start, end) {
   }
   for (const u of users) bucket(u.name); // include engineers with zero activity too
 
-  for (const h of history) {
+  for (const h of bugHistory) {
     if (!engineerByName.has(h.actorName)) continue; // skip non-engineer actors (reporters, Discord bot)
     const b = bucket(h.actorName);
     if (b.bugActivity.length < ACTIVITY_CAP_PER_ENGINEER) {
       b.bugActivity.push({ action: h.action, detail: h.detail, reportTitle: h.reportTitle, reportType: h.reportType, at: h.createdAt });
     }
   }
-  for (const i of imports) {
-    if (!i.assigneeName) continue;
-    const b = bucket(i.assigneeName);
+  for (const i of importHistoryRows) {
+    if (!engineerByName.has(i.actorName)) continue;
+    const b = bucket(i.actorName);
     if (b.importActivity.length < ACTIVITY_CAP_PER_ENGINEER) {
-      b.importActivity.push({ title: i.title, status: i.status, assetType: i.assetType, updateVersion: i.updateVersion, at: i.updatedAt });
+      b.importActivity.push({ action: i.action, detail: i.detail, importTitle: i.importTitle, at: i.createdAt });
     }
   }
-  for (const t of tasksRaw) {
-    for (const id of (t.assigneeIds || [])) {
-      const u = engineerById.get(id);
-      if (!u) continue;
-      const b = bucket(u.name);
+  for (const t of taskHistoryRows) {
+    // App-originated changes are attributed to the actor directly. Notion-
+    // originated changes (source: 'notion') don't reliably identify which
+    // Notion user made the edit, so they're attributed to whoever the task
+    // is currently assigned to instead.
+    const targetNames = t.source === 'app' && engineerByName.has(t.actorName)
+      ? [t.actorName]
+      : (t.currentAssigneeIds || []).map(id => engineerById.get(id)?.name).filter(Boolean);
+    for (const name of targetNames) {
+      const b = bucket(name);
       if (b.taskActivity.length < ACTIVITY_CAP_PER_ENGINEER) {
-        b.taskActivity.push({ title: t.title, status: t.status, priority: t.priority, at: t.updatedAt });
+        b.taskActivity.push({ action: t.action, detail: t.detail, taskTitle: t.taskTitle, source: t.source, at: t.createdAt });
       }
     }
   }
@@ -120,9 +127,9 @@ async function buildActivitySummary(prisma, start, end) {
   return {
     engineers: [...byEngineer.values()],
     totals: {
-      bugActions: history.length,
-      importsTouched: imports.length,
-      tasksTouched: tasksRaw.length,
+      bugActions: bugHistory.length,
+      importActions: importHistoryRows.length,
+      taskActions: taskHistoryRows.length,
     },
   };
 }

@@ -4,6 +4,7 @@ const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
 const { importStatus } = require('../discord-notifier');
+const importHistory = require('../import-history-logger');
 
 const prisma = new PrismaClient();
 const IMPORT_GUILD_ID = '1360381365450969098';
@@ -80,6 +81,7 @@ router.use(async (req, res, next) => {
   try {
     if (!schemaReady) schemaReady = ensureImportTables();
     await schemaReady;
+    await importHistory.ensureImportHistoryTable(prisma);
     next();
   } catch (err) {
     console.error('[Imports schema]', err.message);
@@ -215,6 +217,23 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     );
     if (!result) return res.status(404).json({ error: 'Import not found' });
 
+    if (status && status !== current.status) {
+      await importHistory.log(prisma, { importRequestId: req.params.id, action: status, actorName: req.user.name, actorId: req.user.id });
+    }
+    if (assignedToId !== undefined && assignedToId !== current.assignedToId) {
+      const assigneeName = assignedToId ? (await prisma.$queryRawUnsafe(`SELECT name FROM "User" WHERE id = $1`, assignedToId))[0]?.name : 'Unassigned';
+      await importHistory.log(prisma, { importRequestId: req.params.id, action: 'assigned', detail: assigneeName, actorName: req.user.name, actorId: req.user.id });
+    }
+    const otherFieldsChanged = [
+      title !== undefined && title !== current.title,
+      assetType !== null && assetType !== current.assetType,
+      updateVersion !== null && updateVersion !== current.updateVersion,
+      description !== undefined && description !== current.description,
+    ].some(Boolean);
+    if (otherFieldsChanged && !status) {
+      await importHistory.log(prisma, { importRequestId: req.params.id, action: 'updated', actorName: req.user.name, actorId: req.user.id });
+    }
+
     const updated = await fetchImport(req.params.id);
     if (status === 'imported') {
       importStatus({
@@ -274,6 +293,8 @@ router.post('/bot', botAuth, async (req, res) => {
       `, crypto.randomUUID(), importId, filename, att.contentType || 'application/octet-stream',
         Number(att.size || 0), null, att.url);
     }
+
+    await importHistory.log(prisma, { importRequestId: importId, action: 'queued', actorName: discordUser || 'Discord', actorId: discordUserId || null });
 
     res.status(201).json({ importId, import: await fetchImport(importId) });
   } catch (err) {
