@@ -56,7 +56,7 @@ async function ensureNotionNicknameColumn(prisma) {
 async function resolveAssigneeIds(prisma, nicknames) {
   if (!nicknames || !nicknames.length) return [];
   const rows = await prisma.$queryRawUnsafe(
-    `SELECT id FROM "User" WHERE "notionNickname" = ANY($1)`,
+    `SELECT id FROM "User" WHERE role = 'engineer' AND "notionNickname" = ANY($1)`,
     nicknames
   );
   return rows.map(r => r.id);
@@ -65,7 +65,7 @@ async function resolveAssigneeIds(prisma, nicknames) {
 async function resolveNicknamesForUsers(prisma, userIds) {
   if (!userIds || !userIds.length) return [];
   const rows = await prisma.$queryRawUnsafe(
-    `SELECT "notionNickname" FROM "User" WHERE id = ANY($1) AND "notionNickname" IS NOT NULL`,
+    `SELECT "notionNickname" FROM "User" WHERE role = 'engineer' AND id = ANY($1) AND "notionNickname" IS NOT NULL`,
     userIds
   );
   return rows.map(r => r.notionNickname);
@@ -98,13 +98,29 @@ async function upsertFromNotion(prisma, task) {
   return fetchByPageId(prisma, notionPageId);
 }
 
+// assigneeIds is resolved live from current User.notionNickname mappings
+// (engineers only) rather than trusting the stored snapshot, so a nickname
+// mapped in Admin after a task synced still shows up immediately.
+const LIVE_ASSIGNEE_IDS_SQL = `
+  COALESCE(
+    (SELECT array_agg(u.id) FROM "User" u WHERE u.role = 'engineer' AND u."notionNickname" = ANY(nt."assigneeNicknames")),
+    ARRAY[]::TEXT[]
+  ) AS "assigneeIds"
+`;
+
 async function fetchByPageId(prisma, notionPageId) {
-  const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "NotionTask" WHERE "notionPageId" = $1`, notionPageId);
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT nt.*, ${LIVE_ASSIGNEE_IDS_SQL} FROM "NotionTask" nt WHERE nt."notionPageId" = $1`,
+    notionPageId
+  );
   return rows[0] || null;
 }
 
 async function fetchById(prisma, id) {
-  const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "NotionTask" WHERE "id" = $1`, id);
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT nt.*, ${LIVE_ASSIGNEE_IDS_SQL} FROM "NotionTask" nt WHERE nt."id" = $1`,
+    id
+  );
   return rows[0] || null;
 }
 
@@ -112,12 +128,16 @@ async function fetchAll(prisma, { status, notionDatabaseId, assigneeId, search }
   const clauses = [];
   const values = [];
   let idx = 1;
-  if (status && status !== 'all') { clauses.push(`status = $${idx++}`); values.push(status); }
-  if (notionDatabaseId && notionDatabaseId !== 'all') { clauses.push(`"notionDatabaseId" = $${idx++}`); values.push(notionDatabaseId); }
-  if (assigneeId && assigneeId !== 'all') { clauses.push(`$${idx++} = ANY("assigneeIds")`); values.push(assigneeId); }
-  if (search) { clauses.push(`title ILIKE $${idx++}`); values.push(`%${search}%`); }
+  if (status && status !== 'all') { clauses.push(`nt.status = $${idx++}`); values.push(status); }
+  if (notionDatabaseId && notionDatabaseId !== 'all') { clauses.push(`nt."notionDatabaseId" = $${idx++}`); values.push(notionDatabaseId); }
+  if (search) { clauses.push(`nt.title ILIKE $${idx++}`); values.push(`%${search}%`); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
-  return prisma.$queryRawUnsafe(`SELECT * FROM "NotionTask" ${where} ORDER BY "updatedAt" DESC`, ...values);
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT nt.*, ${LIVE_ASSIGNEE_IDS_SQL} FROM "NotionTask" nt ${where} ORDER BY nt."updatedAt" DESC`,
+    ...values
+  );
+  if (assigneeId && assigneeId !== 'all') return rows.filter(r => (r.assigneeIds || []).includes(assigneeId));
+  return rows;
 }
 
 module.exports = {
