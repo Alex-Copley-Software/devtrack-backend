@@ -218,6 +218,83 @@ async function updateNotionPage(pageId, databaseId, changes) {
   return { notionLastEditedTime: updated.last_edited_time };
 }
 
+function normalizeRichText(arr) {
+  return (arr || []).map(rt => ({
+    text: rt.plain_text || '',
+    bold: !!rt.annotations?.bold,
+    italic: !!rt.annotations?.italic,
+    strikethrough: !!rt.annotations?.strikethrough,
+    underline: !!rt.annotations?.underline,
+    code: !!rt.annotations?.code,
+    color: rt.annotations?.color || 'default',
+    href: rt.href || null,
+  }));
+}
+
+function normalizeBlock(block) {
+  const type = block.type;
+  const data = block[type] || {};
+  switch (type) {
+    case 'paragraph':
+    case 'heading_1':
+    case 'heading_2':
+    case 'heading_3':
+    case 'bulleted_list_item':
+    case 'numbered_list_item':
+    case 'quote':
+      return { type, text: normalizeRichText(data.rich_text) };
+    case 'to_do':
+      return { type, text: normalizeRichText(data.rich_text), checked: !!data.checked };
+    case 'callout':
+      return { type, text: normalizeRichText(data.rich_text), icon: data.icon?.emoji || null };
+    case 'divider':
+      return { type };
+    case 'image': {
+      const url = data.type === 'external' ? data.external?.url : data.file?.url;
+      return { type, url, caption: normalizeRichText(data.caption) };
+    }
+    default:
+      return { type: 'unsupported', blockType: type };
+  }
+}
+
+// Fetches the live body content of a Notion page (paragraphs, headings,
+// lists, images, etc.) — not cached, since image URLs are time-limited and
+// content can change independently of the tracked properties.
+async function fetchPageContent(pageId) {
+  const blocks = [];
+  let cursor;
+  do {
+    const res = await withRetry(() => getClient().blocks.children.list({ block_id: pageId, start_cursor: cursor, page_size: 100 }));
+    blocks.push(...res.results.map(normalizeBlock));
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return blocks;
+}
+
+// Comments require the integration to have comment-read capability enabled;
+// fails gracefully (empty list) rather than breaking the whole content fetch.
+async function fetchPageComments(pageId) {
+  try {
+    const comments = [];
+    let cursor;
+    do {
+      const res = await withRetry(() => getClient().comments.list({ block_id: pageId, start_cursor: cursor, page_size: 100 }));
+      comments.push(...res.results.map(c => ({
+        id: c.id,
+        text: normalizeRichText(c.rich_text),
+        authorName: c.created_by?.name || null,
+        createdTime: c.created_time,
+      })));
+      cursor = res.has_more ? res.next_cursor : undefined;
+    } while (cursor);
+    return comments;
+  } catch (err) {
+    console.error('[Notion] Failed to fetch comments:', err.message);
+    return [];
+  }
+}
+
 module.exports = {
   normalizeId,
   getKnownDatabaseIds,
@@ -226,4 +303,6 @@ module.exports = {
   getAssigneeOptions,
   fetchTaskFields,
   updateNotionPage,
+  fetchPageContent,
+  fetchPageComments,
 };

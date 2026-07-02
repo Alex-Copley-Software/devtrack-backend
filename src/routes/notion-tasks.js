@@ -51,6 +51,23 @@ router.get('/nicknames', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
+// GET /api/notion-tasks/:id/content — live page body + comments from Notion,
+// fetched fresh on demand (not stored) since image URLs are time-limited.
+router.get('/:id/content', auth, requireRole('engineer', 'admin'), async (req, res) => {
+  try {
+    const task = await db.fetchById(prisma, req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    const [blocks, comments] = await Promise.all([
+      notion.fetchPageContent(task.notionPageId).catch(err => { console.error('[NotionTasks content]', err.message); return []; }),
+      notion.fetchPageComments(task.notionPageId),
+    ]);
+    res.json({ blocks, comments });
+  } catch (err) {
+    console.error('[NotionTasks content]', err.message);
+    res.status(500).json({ error: 'Could not fetch Notion page content' });
+  }
+});
+
 // PATCH /api/notion-tasks/:id — update locally, then write back to Notion.
 // The Notion write-back failure is reported separately (notionSync) so a
 // dev's change is never silently lost even if Notion is unreachable.
