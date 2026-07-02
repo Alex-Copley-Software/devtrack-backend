@@ -93,6 +93,14 @@ Server runs at http://localhost:3001
 
 Comments require the integration to have "Read comments" enabled under the integration's Capabilities settings in Notion — without it, `/content` still returns page body content and just omits comments (fails gracefully, logged server-side).
 
+### Team Reports
+| Method | Route | Description | Auth |
+|--------|-------|-------------|------|
+| GET | /api/team-reports | List past generated reports (most recent 20) | Bearer token, admin |
+| POST | /api/team-reports/generate | Gather engineer activity for the period and generate a new AI report | Bearer token, admin |
+
+`period` in the POST body is `"daily"` (last 24h) or `"weekly"` (last 7 days, default). Bug/suggestion activity comes from the real `ReportHistory` audit trail; imports and Notion tasks have no change-history table yet, so those sections reflect current state of items touched in the window rather than a true before/after diff. Requires `ANTHROPIC_API_KEY`.
+
 ---
 
 ## Authentication
@@ -162,4 +170,13 @@ will resolve assignees both ways from then on.
 NOTION_API_KEY        — the integration's internal secret
 NOTION_DATABASE_ID     — target database ID(s), comma-separated
 NOTION_WEBHOOK_SECRET  — signing secret shown after webhook verification
+NOTION_ENGINEER_NICKNAMES — comma-separated nicknames to sync (mirrors the Notion "Engineers" view filter); unset syncs everything
+```
+
+## AI Team Reports Setup
+
+Get an API key from https://console.anthropic.com and set it on Railway:
+```text
+ANTHROPIC_API_KEY — your Anthropic API key
+ANTHROPIC_MODEL    — optional, defaults to claude-sonnet-5
 ```

@@ -13,6 +13,7 @@
     "db:seed": "node prisma/seed.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.0",
     "@notionhq/client": "^2.2.0",
     "@prisma/client": "^5.0.0",
     "axios": "^1.6.0",
