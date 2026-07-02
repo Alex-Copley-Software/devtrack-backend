@@ -31,9 +31,10 @@ async function generateReport(period, start, end, summary) {
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
   const message = await getClient().messages.create({
     model,
-    max_tokens: 2000,
+    max_tokens: 4096,
     messages: [{ role: 'user', content: buildPrompt(period, start, end, summary) }],
   });
+  console.log('[AI Report] stop_reason:', message.stop_reason, 'usage:', JSON.stringify(message.usage), 'blocks:', message.content.map(b => b.type));
   return message.content.map(block => block.text || '').join('\n').trim();
 }
 
