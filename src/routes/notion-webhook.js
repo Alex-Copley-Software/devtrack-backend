@@ -68,7 +68,17 @@ router.post('/webhook', async (req, res) => {
       }
     }
 
-    const task = await db.upsertFromNotion(prisma, { notionPageId: pageId, ...fields });
+    const task = await db.upsertFromNotion(prisma, {
+      notionPageId: pageId,
+      notionDatabaseId: fields.databaseId,
+      title: fields.title,
+      status: fields.status,
+      assigneeNicknames: fields.assigneeNicknames,
+      priority: fields.priority,
+      dueDate: fields.dueDate,
+      notionLastEditedTime: fields.notionLastEditedTime,
+      notionUrl: fields.notionUrl,
+    });
     broadcast(existing ? 'notionTask.updated' : 'notionTask.created', { task, timestamp: new Date().toISOString() });
     console.log(`[Notion Webhook] Synced task "${task.title}" (${task.id}) from Notion`);
   } catch (err) {
