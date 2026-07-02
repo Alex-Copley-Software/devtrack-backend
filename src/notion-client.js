@@ -61,6 +61,24 @@ function isKnownDatabase(databaseId) {
   return getKnownDatabaseIds().some(id => normalizeId(id) === norm);
 }
 
+// Mirrors the Notion "Engineers" view's filter ("Assigned to" contains one
+// of these) — only cards assigned to a known engineer sync into DevTrack.
+// Configurable via env since team roster changes shouldn't need a deploy.
+// If unset, no filter is applied (syncs everything) rather than silently
+// syncing nothing.
+function getEngineerNicknames() {
+  return String(process.env.NOTION_ENGINEER_NICKNAMES || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function matchesEngineerFilter(assigneeNicknames) {
+  const engineers = getEngineerNicknames();
+  if (!engineers.length) return true;
+  return (assigneeNicknames || []).some(n => engineers.includes(n));
+}
+
 // Explicit property-name map for databases we know about. Falls back to
 // type-based auto-detection (see resolvePropertyNames) for anything else.
 const DB_PROPERTY_MAP = {
@@ -321,6 +339,8 @@ module.exports = {
   normalizeId,
   getKnownDatabaseIds,
   isKnownDatabase,
+  getEngineerNicknames,
+  matchesEngineerFilter,
   resolvePropertyNames,
   getAssigneeOptions,
   fetchTaskFields,

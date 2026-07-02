@@ -35,13 +35,16 @@ router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
   }
 });
 
-// POST /api/notion-tasks/sync — backfill every existing page in each known
-// Notion database, not just ones that have triggered a webhook event since
-// setup. Safe to re-run any time (upsert, same as the webhook path).
+// POST /api/notion-tasks/sync — reconciles DevTrack with every page
+// currently in each known Notion database that matches the engineer filter
+// (mirrors the Notion "Engineers" view). Upserts matches, and deletes any
+// previously-synced task that no longer matches (reassigned away from an
+// engineer, or deleted in Notion). Safe to re-run any time.
 router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) => {
   try {
     const databaseIds = notion.getKnownDatabaseIds();
     let synced = 0;
+    const keepPageIds = [];
     const errors = [];
     for (const databaseId of databaseIds) {
       let pages;
@@ -53,6 +56,8 @@ router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) =>
         continue;
       }
       for (const { pageId, fields } of pages) {
+        if (!notion.matchesEngineerFilter(fields.assigneeNicknames)) continue;
+        keepPageIds.push(pageId);
         try {
           await db.upsertFromNotion(prisma, {
             notionPageId: pageId,
@@ -72,10 +77,11 @@ router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) =>
         }
       }
     }
+    const removedPageIds = await db.deleteNotInPageIds(prisma, keepPageIds);
     const tasks = await db.fetchAll(prisma, {});
-    broadcast('notionTask.synced', { count: synced, timestamp: new Date().toISOString() });
-    console.log(`[NotionTasks sync] Synced ${synced} task(s) from Notion${errors.length ? `, ${errors.length} error(s)` : ''}`);
-    res.json({ success: true, synced, errors, tasks });
+    broadcast('notionTask.synced', { count: synced, removed: removedPageIds.length, timestamp: new Date().toISOString() });
+    console.log(`[NotionTasks sync] Synced ${synced} task(s), removed ${removedPageIds.length} non-matching task(s)${errors.length ? `, ${errors.length} error(s)` : ''}`);
+    res.json({ success: true, synced, removed: removedPageIds.length, errors, tasks });
   } catch (err) {
     console.error('[NotionTasks sync]', err.message);
     res.status(500).json({ error: 'Could not sync from Notion' });

@@ -59,6 +59,16 @@ router.post('/webhook', async (req, res) => {
     await db.ensureNotionNicknameColumn(prisma);
 
     const existing = await db.fetchByPageId(prisma, pageId);
+
+    if (!notion.matchesEngineerFilter(fields.assigneeNicknames)) {
+      if (existing) {
+        await db.deleteByPageId(prisma, pageId);
+        broadcast('notionTask.deleted', { id: existing.id, timestamp: new Date().toISOString() });
+        console.log(`[Notion Webhook] Removed task "${existing.title}" (${existing.id}) — no longer assigned to an engineer`);
+      }
+      return;
+    }
+
     if (existing?.notionLastEditedTime && fields.notionLastEditedTime) {
       const existingTs = new Date(existing.notionLastEditedTime).getTime();
       const incomingTs = new Date(fields.notionLastEditedTime).getTime();

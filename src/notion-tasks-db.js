@@ -140,6 +140,25 @@ async function fetchAll(prisma, { status, notionDatabaseId, assigneeId, search }
   return rows;
 }
 
+async function deleteByPageId(prisma, notionPageId) {
+  await prisma.$executeRawUnsafe(`DELETE FROM "NotionTask" WHERE "notionPageId" = $1`, notionPageId);
+}
+
+// Deletes every synced task whose Notion page isn't in keepPageIds — used by
+// the reconciliation sync to purge cards that no longer match the engineer
+// filter (or were deleted in Notion entirely).
+async function deleteNotInPageIds(prisma, keepPageIds) {
+  if (!keepPageIds || !keepPageIds.length) {
+    const rows = await prisma.$queryRawUnsafe(`DELETE FROM "NotionTask" RETURNING "notionPageId"`);
+    return rows.map(r => r.notionPageId);
+  }
+  const rows = await prisma.$queryRawUnsafe(
+    `DELETE FROM "NotionTask" WHERE NOT ("notionPageId" = ANY($1)) RETURNING "notionPageId"`,
+    keepPageIds
+  );
+  return rows.map(r => r.notionPageId);
+}
+
 module.exports = {
   ensureNotionTaskTable,
   ensureNotionNicknameColumn,
@@ -149,4 +168,6 @@ module.exports = {
   fetchByPageId,
   fetchById,
   fetchAll,
+  deleteByPageId,
+  deleteNotInPageIds,
 };
