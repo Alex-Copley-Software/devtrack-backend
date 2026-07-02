@@ -35,6 +35,53 @@ router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
   }
 });
 
+// POST /api/notion-tasks/sync — backfill every existing page in each known
+// Notion database, not just ones that have triggered a webhook event since
+// setup. Safe to re-run any time (upsert, same as the webhook path).
+router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) => {
+  try {
+    const databaseIds = notion.getKnownDatabaseIds();
+    let synced = 0;
+    const errors = [];
+    for (const databaseId of databaseIds) {
+      let pages;
+      try {
+        pages = await notion.fetchAllTaskFieldsInDatabase(databaseId);
+      } catch (err) {
+        console.error('[NotionTasks sync] Failed to query database', databaseId, err.message);
+        errors.push({ databaseId, error: err.message });
+        continue;
+      }
+      for (const { pageId, fields } of pages) {
+        try {
+          await db.upsertFromNotion(prisma, {
+            notionPageId: pageId,
+            notionDatabaseId: fields.databaseId,
+            title: fields.title,
+            status: fields.status,
+            assigneeNicknames: fields.assigneeNicknames,
+            priority: fields.priority,
+            dueDate: fields.dueDate,
+            notionLastEditedTime: fields.notionLastEditedTime,
+            notionUrl: fields.notionUrl,
+          });
+          synced++;
+        } catch (err) {
+          console.error('[NotionTasks sync] Failed to upsert page', pageId, err.message);
+          errors.push({ pageId, error: err.message });
+        }
+      }
+    }
+    const tasks = await db.fetchAll(prisma, {});
+    broadcast('notionTask.synced', { count: synced, timestamp: new Date().toISOString() });
+    console.log(`[NotionTasks sync] Synced ${synced} task(s) from Notion${errors.length ? `, ${errors.length} error(s)` : ''}`);
+    res.json({ success: true, synced, errors, tasks });
+  } catch (err) {
+    console.error('[NotionTasks sync]', err.message);
+    res.status(500).json({ error: 'Could not sync from Notion' });
+  }
+});
+
 // GET /api/notion-tasks/nicknames — assignee option list for the admin mapping UI
 router.get('/nicknames', auth, requireRole('admin'), async (req, res) => {
   try {

@@ -85,6 +85,7 @@ Server runs at http://localhost:3001
 |--------|-------|-------------|------|
 | POST | /api/notion/webhook | Notion sends page.created / page.properties_updated events here | X-Notion-Signature header |
 | GET | /api/notion-tasks | List synced tasks (filter by ?status=&notionDatabaseId=&assigneeId=&search=) | Bearer token, engineer+ |
+| POST | /api/notion-tasks/sync | Backfill every existing page in each known database (not just webhook-triggered ones); safe to re-run | Bearer token, engineer+ |
 | PATCH | /api/notion-tasks/:id | Update a task; writes back to the source Notion page | Bearer token, engineer+ |
 | POST | /api/notion-tasks/:id/resync | Retry pushing the current row to Notion after a failed write-back | Bearer token, engineer+ |
 | GET | /api/notion-tasks/nicknames | List the Notion "Assigned to" option values, for the admin nickname-mapping dropdown | Bearer token, admin |

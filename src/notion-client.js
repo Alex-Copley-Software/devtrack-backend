@@ -145,15 +145,10 @@ function extractPropertyValue(prop) {
   }
 }
 
-// Fetches the full page (webhook payloads are sparse) and normalizes it into
-// the fields we care about for the NotionTask table. Returns the resolved
-// databaseId too, since webhook payloads don't reliably include it.
-async function fetchTaskFields(pageId) {
-  const page = await withRetry(() => getClient().pages.retrieve({ page_id: pageId }));
-  if (page.parent?.type !== 'database_id') {
-    return { databaseId: null, page };
-  }
-  const databaseId = page.parent.database_id;
+// Normalizes a full Notion page object (from either pages.retrieve or
+// databases.query results — both include full `properties`) into the fields
+// we care about for the NotionTask table.
+async function extractFieldsFromPage(page, databaseId) {
   const names = await resolvePropertyNames(databaseId);
   const props = page.properties || {};
 
@@ -175,6 +170,33 @@ async function fetchTaskFields(pageId) {
     notionLastEditedTime: page.last_edited_time,
     notionUrl: page.url,
   };
+}
+
+// Fetches a single full page (webhook payloads are sparse) and normalizes
+// it. Returns the resolved databaseId too, since webhook payloads don't
+// reliably include it.
+async function fetchTaskFields(pageId) {
+  const page = await withRetry(() => getClient().pages.retrieve({ page_id: pageId }));
+  if (page.parent?.type !== 'database_id') {
+    return { databaseId: null, page };
+  }
+  return extractFieldsFromPage(page, page.parent.database_id);
+}
+
+// Queries every page currently in a database (paginated) and normalizes
+// each — used for the initial/manual backfill so existing Notion cards
+// don't require an individual edit to trigger a webhook before they sync.
+async function fetchAllTaskFieldsInDatabase(databaseId) {
+  const results = [];
+  let cursor;
+  do {
+    const res = await withRetry(() => getClient().databases.query({ database_id: databaseId, start_cursor: cursor, page_size: 100 }));
+    for (const page of res.results) {
+      results.push({ pageId: page.id, fields: await extractFieldsFromPage(page, databaseId) });
+    }
+    cursor = res.has_more ? res.next_cursor : undefined;
+  } while (cursor);
+  return results;
 }
 
 // Writes changes back to a Notion page. `changes` may include title, status,
@@ -302,6 +324,7 @@ module.exports = {
   resolvePropertyNames,
   getAssigneeOptions,
   fetchTaskFields,
+  fetchAllTaskFieldsInDatabase,
   updateNotionPage,
   fetchPageContent,
   fetchPageComments,
