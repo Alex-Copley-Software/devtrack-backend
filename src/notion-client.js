@@ -17,6 +17,25 @@ function normalizeId(id) {
   return String(id || '').replace(/-/g, '');
 }
 
+// Notion API calls occasionally fail with transient network errors (e.g.
+// "Premature close" on some hosting networks). Retries a few times with a
+// short backoff before giving up; non-transient errors (bad request, auth,
+// not found) are rethrown immediately.
+const TRANSIENT_ERROR_PATTERN = /premature close|econnreset|socket hang up|fetch failed|etimedout|network/i;
+async function withRetry(fn, { attempts = 3, delayMs = 400 } = {}) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (!TRANSIENT_ERROR_PATTERN.test(err.message || '') || i === attempts - 1) throw err;
+      await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 function getKnownDatabaseIds() {
   return String(process.env.NOTION_DATABASE_ID || process.env.NOTION_DATABASE_IDS || '')
     .split(',')
@@ -49,7 +68,7 @@ async function getDatabaseSchema(databaseId) {
   const norm = normalizeId(databaseId);
   const cached = schemaCache.get(norm);
   if (cached && Date.now() - cached.fetchedAt < SCHEMA_CACHE_MS) return cached.schema;
-  const schema = await getClient().databases.retrieve({ database_id: databaseId });
+  const schema = await withRetry(() => getClient().databases.retrieve({ database_id: databaseId }));
   schemaCache.set(norm, { schema, fetchedAt: Date.now() });
   return schema;
 }
@@ -117,7 +136,7 @@ function extractPropertyValue(prop) {
 // the fields we care about for the NotionTask table. Returns the resolved
 // databaseId too, since webhook payloads don't reliably include it.
 async function fetchTaskFields(pageId) {
-  const page = await getClient().pages.retrieve({ page_id: pageId });
+  const page = await withRetry(() => getClient().pages.retrieve({ page_id: pageId }));
   if (page.parent?.type !== 'database_id') {
     return { databaseId: null, page };
   }
@@ -173,7 +192,7 @@ async function updateNotionPage(pageId, databaseId, changes) {
 
   if (!Object.keys(properties).length) return null;
 
-  const updated = await getClient().pages.update({ page_id: pageId, properties });
+  const updated = await withRetry(() => getClient().pages.update({ page_id: pageId, properties }));
   return { notionLastEditedTime: updated.last_edited_time };
 }
 
