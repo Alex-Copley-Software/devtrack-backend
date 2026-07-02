@@ -3,12 +3,18 @@
 // per-database property-name mapping (title/status/assignee/priority/dueDate).
 
 const { Client } = require('@notionhq/client');
+// Node's built-in fetch (undici) intermittently throws "Premature close" on
+// Railway's outbound network to api.notion.com. node-fetch (already pulled
+// in transitively by @notionhq/client) uses Node's classic http/https client
+// instead of undici and sidesteps it — a known workaround for this class of
+// containerized-network issue.
+const nodeFetch = require('node-fetch');
 
 let client = null;
 function getClient() {
   if (!client) {
     if (!process.env.NOTION_API_KEY) throw new Error('NOTION_API_KEY is not set');
-    client = new Client({ auth: process.env.NOTION_API_KEY });
+    client = new Client({ auth: process.env.NOTION_API_KEY, fetch: nodeFetch });
   }
   return client;
 }
