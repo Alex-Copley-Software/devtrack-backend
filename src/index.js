@@ -13,6 +13,8 @@ const historyRoutes = require('./routes/history');
 const expenseRoutes = require('./routes/expenses');
 const importRoutes = require('./routes/imports');
 const eventRoutes = require('./routes/events');
+const notionWebhookRoutes = require('./routes/notion-webhook');
+const notionTaskRoutes = require('./routes/notion-tasks');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
@@ -31,6 +33,10 @@ app.use(cors({
     return callback(error);
   }
 }));
+// Notion webhook signature verification needs the exact raw request bytes,
+// so it's mounted with a raw body parser before the global JSON parser below.
+app.use('/api/notion', express.raw({ type: '*/*' }), notionWebhookRoutes);
+
 app.use(express.json());
 if (process.env.PROTECT_UPLOADS === 'true') {
   app.use('/uploads', authMiddleware, express.static(path.join(__dirname, '../uploads')));
@@ -48,6 +54,7 @@ app.use('/api/history', historyRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/imports', importRoutes);
 app.use('/api/events', eventRoutes);
+app.use('/api/notion-tasks', notionTaskRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

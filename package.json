@@ -13,6 +13,7 @@
     "db:seed": "node prisma/seed.js"
   },
   "dependencies": {
+    "@notionhq/client": "^2.2.0",
     "@prisma/client": "^5.0.0",
     "axios": "^1.6.0",
     "bcryptjs": "^2.4.3",

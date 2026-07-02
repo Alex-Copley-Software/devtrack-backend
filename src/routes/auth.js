@@ -4,10 +4,12 @@ const jwt = require('jsonwebtoken');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/roles');
+const notion = require('../notion-client');
+const { ensureNotionNicknameColumn } = require('../notion-tasks-db');
 
 const prisma = new PrismaClient();
 const VALID_ROLES = new Set(['owner', 'admin', 'engineer', 'qa', 'reviewer']);
-const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'imports', 'expenses', 'admin']);
+const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks']);
 const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_RATE_WINDOW_MS || `${15 * 60 * 1000}`, 10);
 const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '8', 10);
 const loginAttempts = new Map();
@@ -62,8 +64,8 @@ async function ensureUserAccessColumn() {
 }
 
 function defaultPageAccess(role) {
-  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'imports', 'expenses', 'admin'];
-  if (role === 'engineer') return ['bugs', 'suggestions', 'imports'];
+  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks'];
+  if (role === 'engineer') return ['bugs', 'suggestions', 'imports', 'tasks'];
   return ['bugs'];
 }
 
@@ -95,7 +97,7 @@ router.post('/change-password', auth, async (req, res) => {
 
 // PATCH /api/auth/users/:id — admin updates any user
 router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
-  const { name, email, role, password, pageAccess } = req.body;
+  const { name, email, role, password, pageAccess, notionNickname } = req.body;
   const data = {};
   if (name)  data.name  = name;
   if (email) data.email = email;
@@ -133,6 +135,29 @@ router.patch('/users/:id', auth, requireRole('admin'), async (req, res) => {
       user.pageAccess = pageAccess;
     } else {
       user.pageAccess = await getPageAccess(user.id, user.role);
+    }
+
+    if (notionNickname !== undefined) {
+      const nickname = notionNickname === null || notionNickname === '' ? null : String(notionNickname);
+      if (nickname) {
+        const known = new Set();
+        for (const dbId of notion.getKnownDatabaseIds()) {
+          (await notion.getAssigneeOptions(dbId)).forEach(n => known.add(n));
+        }
+        if (!known.has(nickname)) {
+          return res.status(400).json({ error: 'Not a known Notion assignee option' });
+        }
+      }
+      await ensureNotionNicknameColumn(prisma);
+      try {
+        await prisma.$executeRawUnsafe(`UPDATE "User" SET "notionNickname" = $1 WHERE id = $2`, nickname, req.params.id);
+      } catch (err) {
+        if (err.code === 'P2010' || /unique/i.test(err.message)) {
+          return res.status(409).json({ error: 'That Notion nickname is already linked to another account' });
+        }
+        throw err;
+      }
+      user.notionNickname = nickname;
     }
     res.json({ user });
   } catch (err) {
