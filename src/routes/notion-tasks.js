@@ -61,10 +61,17 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
 
     const title = req.body.title !== undefined ? String(req.body.title) : undefined;
     const status = req.body.status !== undefined ? String(req.body.status) : undefined;
+    const priority = req.body.priority !== undefined ? String(req.body.priority) : undefined;
     const assigneeIds = req.body.assigneeIds !== undefined ? req.body.assigneeIds : undefined;
+    // Direct nickname override, for use before a user has a notionNickname
+    // mapped (normal UI flow should prefer assigneeIds once mapping exists).
+    const assigneeNicknamesOverride = req.body.assigneeNicknames !== undefined ? req.body.assigneeNicknames : undefined;
 
     if (assigneeIds !== undefined && !Array.isArray(assigneeIds)) {
       return res.status(400).json({ error: 'assigneeIds must be an array' });
+    }
+    if (assigneeNicknamesOverride !== undefined && !Array.isArray(assigneeNicknamesOverride)) {
+      return res.status(400).json({ error: 'assigneeNicknames must be an array' });
     }
 
     const updates = [];
@@ -72,8 +79,16 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     let idx = 1;
     if (title !== undefined) { updates.push(`"title" = $${idx++}`); values.push(title); }
     if (status !== undefined) { updates.push(`"status" = $${idx++}`); values.push(status); }
+    if (priority !== undefined) { updates.push(`"priority" = $${idx++}`); values.push(priority); }
     let nicknames;
-    if (assigneeIds !== undefined) {
+    if (assigneeNicknamesOverride !== undefined) {
+      nicknames = assigneeNicknamesOverride;
+      const resolvedIds = await db.resolveAssigneeIds(prisma, nicknames);
+      updates.push(`"assigneeIds" = $${idx++}`);
+      values.push(resolvedIds);
+      updates.push(`"assigneeNicknames" = $${idx++}`);
+      values.push(nicknames);
+    } else if (assigneeIds !== undefined) {
       nicknames = await db.resolveNicknamesForUsers(prisma, assigneeIds);
       updates.push(`"assigneeIds" = $${idx++}`);
       values.push(assigneeIds);
@@ -96,7 +111,8 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
       const changes = {};
       if (title !== undefined) changes.title = title;
       if (status !== undefined) changes.status = status;
-      if (assigneeIds !== undefined) changes.assigneeNicknames = nicknames.filter(Boolean);
+      if (priority !== undefined) changes.priority = priority;
+      if (assigneeIds !== undefined || assigneeNicknamesOverride !== undefined) changes.assigneeNicknames = nicknames.filter(Boolean);
       const result = await notion.updateNotionPage(task.notionPageId, task.notionDatabaseId, changes);
       if (result?.notionLastEditedTime) {
         await prisma.$executeRawUnsafe(
@@ -129,6 +145,7 @@ router.post('/:id/resync', auth, requireRole('engineer', 'admin'), async (req, r
     const result = await notion.updateNotionPage(task.notionPageId, task.notionDatabaseId, {
       title: task.title,
       status: task.status,
+      priority: task.priority,
       assigneeNicknames: task.assigneeNicknames || [],
     });
     if (result?.notionLastEditedTime) {

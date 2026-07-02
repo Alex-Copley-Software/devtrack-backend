@@ -202,6 +202,15 @@ async function updateNotionPage(pageId, databaseId, changes) {
       properties[names.assignee] = { select: changes.assigneeNicknames[0] ? { name: changes.assigneeNicknames[0] } : null };
     }
   }
+  if (changes.priority !== undefined && names.priority) {
+    const schema = await getDatabaseSchema(databaseId);
+    const propType = schema.properties?.[names.priority]?.type;
+    if (propType === 'multi_select') {
+      properties[names.priority] = { multi_select: changes.priority ? [{ name: changes.priority }] : [] };
+    } else if (propType === 'select') {
+      properties[names.priority] = { select: changes.priority ? { name: changes.priority } : null };
+    }
+  }
 
   if (!Object.keys(properties).length) return null;
 
