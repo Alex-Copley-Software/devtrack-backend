@@ -77,6 +77,7 @@ const DB_PROPERTY_MAP = {
     assignee: 'Assigned to',
     priority: 'Priority',
     dueDate: 'Due Date',
+    update: 'Update',
   },
 };
 
@@ -109,6 +110,8 @@ function autoDetectPropertyNames(schema) {
   if (priorityEntry) names.priority = priorityEntry[0];
   const dueDateEntry = entries.find(([n, p]) => p.type === 'date' && /due/i.test(n));
   if (dueDateEntry) names.dueDate = dueDateEntry[0];
+  const updateEntry = entries.find(([n, p]) => ['select', 'multi_select'].includes(p.type) && /^update$/i.test(n));
+  if (updateEntry) names.update = updateEntry[0];
   return names;
 }
 
@@ -119,18 +122,29 @@ async function resolvePropertyNames(databaseId) {
   return autoDetectPropertyNames(schema);
 }
 
-// Returns the raw option names for the assignee property (multi_select/select/status),
-// used to populate the admin nickname-mapping dropdown.
-async function getAssigneeOptions(databaseId) {
-  const names = await resolvePropertyNames(databaseId);
-  if (!names.assignee) return [];
+async function getPropertyOptions(databaseId, propertyName) {
+  if (!propertyName) return [];
   const schema = await getDatabaseSchema(databaseId);
-  const prop = schema.properties?.[names.assignee];
+  const prop = schema.properties?.[propertyName];
   if (!prop) return [];
   if (prop.type === 'multi_select') return (prop.multi_select?.options || []).map(o => o.name);
   if (prop.type === 'select') return (prop.select?.options || []).map(o => o.name);
   if (prop.type === 'status') return (prop.status?.options || []).map(o => o.name);
   return [];
+}
+
+// Returns the raw option names for the assignee property (multi_select/select/status),
+// used to populate the admin nickname-mapping dropdown.
+async function getAssigneeOptions(databaseId) {
+  const names = await resolvePropertyNames(databaseId);
+  return getPropertyOptions(databaseId, names.assignee);
+}
+
+// Returns the raw option names for the "Update" property (version tag),
+// used to populate the update dropdown/filter on the dashboard.
+async function getUpdateOptions(databaseId) {
+  const names = await resolvePropertyNames(databaseId);
+  return getPropertyOptions(databaseId, names.update);
 }
 
 function plainTextOf(richTextArray) {
@@ -165,6 +179,8 @@ async function extractFieldsFromPage(page, databaseId) {
   const priorityRaw = names.priority ? extractPropertyValue(props[names.priority]) : null;
   const priority = Array.isArray(priorityRaw) ? (priorityRaw[0] || null) : priorityRaw;
   const dueDate = names.dueDate ? extractPropertyValue(props[names.dueDate]) : null;
+  const updateRaw = names.update ? extractPropertyValue(props[names.update]) : null;
+  const update = Array.isArray(updateRaw) ? (updateRaw[0] || null) : updateRaw;
 
   return {
     databaseId,
@@ -173,6 +189,7 @@ async function extractFieldsFromPage(page, databaseId) {
     assigneeNicknames: assigneeNicknames || [],
     priority,
     dueDate,
+    update,
     notionLastEditedTime: page.last_edited_time,
     notionUrl: page.url,
   };
@@ -237,6 +254,15 @@ async function updateNotionPage(pageId, databaseId, changes) {
       properties[names.priority] = { multi_select: changes.priority ? [{ name: changes.priority }] : [] };
     } else if (propType === 'select') {
       properties[names.priority] = { select: changes.priority ? { name: changes.priority } : null };
+    }
+  }
+  if (changes.update !== undefined && names.update) {
+    const schema = await getDatabaseSchema(databaseId);
+    const propType = schema.properties?.[names.update]?.type;
+    if (propType === 'multi_select') {
+      properties[names.update] = { multi_select: changes.update ? [{ name: changes.update }] : [] };
+    } else if (propType === 'select') {
+      properties[names.update] = { select: changes.update ? { name: changes.update } : null };
     }
   }
 
@@ -331,6 +357,7 @@ module.exports = {
   matchesEngineerFilter,
   resolvePropertyNames,
   getAssigneeOptions,
+  getUpdateOptions,
   fetchTaskFields,
   fetchAllTaskFieldsInDatabase,
   updateNotionPage,

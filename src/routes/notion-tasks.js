@@ -29,6 +29,7 @@ router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
       notionDatabaseId: req.query.notionDatabaseId,
       assigneeId: req.query.assigneeId,
       search: req.query.search,
+      update: req.query.update,
     });
     res.json(tasks);
   } catch (err) {
@@ -70,6 +71,7 @@ router.post('/sync', auth, requireRole('engineer', 'admin'), async (req, res) =>
             assigneeNicknames: fields.assigneeNicknames,
             priority: fields.priority,
             dueDate: fields.dueDate,
+            update: fields.update,
             notionLastEditedTime: fields.notionLastEditedTime,
             notionUrl: fields.notionUrl,
           });
@@ -110,6 +112,24 @@ router.get('/nicknames', auth, requireRole('admin'), async (req, res) => {
   }
 });
 
+// GET /api/notion-tasks/update-options — "Update" (version) select option list,
+// for the card-front dropdown and page filter. Engineer+ (not admin-only,
+// unlike /nicknames, since every engineer needs this to use the filter).
+router.get('/update-options', auth, requireRole('engineer', 'admin'), async (req, res) => {
+  try {
+    const databaseIds = notion.getKnownDatabaseIds();
+    const results = [];
+    for (const databaseId of databaseIds) {
+      const options = await notion.getUpdateOptions(databaseId);
+      results.push({ databaseId, options });
+    }
+    res.json(results);
+  } catch (err) {
+    console.error('[NotionTasks update-options]', err.message);
+    res.status(500).json({ error: 'Could not fetch Notion update options' });
+  }
+});
+
 // GET /api/notion-tasks/:id/content — live page body + comments from Notion,
 // fetched fresh on demand (not stored) since image URLs are time-limited.
 router.get('/:id/content', auth, requireRole('engineer', 'admin'), async (req, res) => {
@@ -138,6 +158,7 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     const title = req.body.title !== undefined ? String(req.body.title) : undefined;
     const status = req.body.status !== undefined ? String(req.body.status) : undefined;
     const priority = req.body.priority !== undefined ? String(req.body.priority) : undefined;
+    const update = req.body.update !== undefined ? String(req.body.update) : undefined;
     const assigneeIds = req.body.assigneeIds !== undefined ? req.body.assigneeIds : undefined;
     // Direct nickname override, for use before a user has a notionNickname
     // mapped (normal UI flow should prefer assigneeIds once mapping exists).
@@ -156,6 +177,7 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     if (title !== undefined) { updates.push(`"title" = $${idx++}`); values.push(title); }
     if (status !== undefined) { updates.push(`"status" = $${idx++}`); values.push(status); }
     if (priority !== undefined) { updates.push(`"priority" = $${idx++}`); values.push(priority); }
+    if (update !== undefined) { updates.push(`"update" = $${idx++}`); values.push(update); }
     let nicknames;
     if (assigneeNicknamesOverride !== undefined) {
       nicknames = assigneeNicknamesOverride;
@@ -188,6 +210,9 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     if (priority !== undefined && priority !== existing.priority) {
       await taskHistory.log(prisma, { notionTaskId: req.params.id, action: 'priority', detail: priority || 'cleared', source: 'app', actorName: req.user.name, actorId: req.user.id });
     }
+    if (update !== undefined && update !== existing.update) {
+      await taskHistory.log(prisma, { notionTaskId: req.params.id, action: 'update', detail: update || 'cleared', source: 'app', actorName: req.user.name, actorId: req.user.id });
+    }
     if (nicknames !== undefined) {
       await taskHistory.log(prisma, { notionTaskId: req.params.id, action: 'assigned', detail: nicknames.filter(Boolean).join(', ') || 'Unassigned', source: 'app', actorName: req.user.name, actorId: req.user.id });
     }
@@ -198,6 +223,7 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
       if (title !== undefined) changes.title = title;
       if (status !== undefined) changes.status = status;
       if (priority !== undefined) changes.priority = priority;
+      if (update !== undefined) changes.update = update;
       if (assigneeIds !== undefined || assigneeNicknamesOverride !== undefined) changes.assigneeNicknames = nicknames.filter(Boolean);
       const result = await notion.updateNotionPage(task.notionPageId, task.notionDatabaseId, changes);
       if (result?.notionLastEditedTime) {
@@ -232,6 +258,7 @@ router.post('/:id/resync', auth, requireRole('engineer', 'admin'), async (req, r
       title: task.title,
       status: task.status,
       priority: task.priority,
+      update: task.update,
       assigneeNicknames: task.assigneeNicknames || [],
     });
     if (result?.notionLastEditedTime) {

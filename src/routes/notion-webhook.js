@@ -88,6 +88,7 @@ router.post('/webhook', async (req, res) => {
       assigneeNicknames: fields.assigneeNicknames,
       priority: fields.priority,
       dueDate: fields.dueDate,
+      update: fields.update,
       notionLastEditedTime: fields.notionLastEditedTime,
       notionUrl: fields.notionUrl,
     });
@@ -100,6 +101,9 @@ router.post('/webhook', async (req, res) => {
       }
       if (task.priority !== existing.priority) {
         await taskHistory.log(prisma, { notionTaskId: task.id, action: 'priority', detail: task.priority || 'cleared', source: 'notion', actorName: 'Notion sync' });
+      }
+      if (task.update !== existing.update) {
+        await taskHistory.log(prisma, { notionTaskId: task.id, action: 'update', detail: task.update || 'cleared', source: 'notion', actorName: 'Notion sync' });
       }
       const prevNicknames = (existing.assigneeNicknames || []).slice().sort().join(',');
       const nextNicknames = (task.assigneeNicknames || []).slice().sort().join(',');

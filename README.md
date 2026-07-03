@@ -89,6 +89,7 @@ Server runs at http://localhost:3001
 | PATCH | /api/notion-tasks/:id | Update a task; writes back to the source Notion page | Bearer token, engineer+ |
 | POST | /api/notion-tasks/:id/resync | Retry pushing the current row to Notion after a failed write-back | Bearer token, engineer+ |
 | GET | /api/notion-tasks/nicknames | List the Notion "Assigned to" option values, for the admin nickname-mapping dropdown | Bearer token, admin |
+| GET | /api/notion-tasks/update-options | List the Notion "Update" (version) select option values, for the card-front dropdown and page filter | Bearer token, engineer+ |
 | GET | /api/notion-tasks/:id/content | Live page body (text/images) + comments for a task, fetched fresh each time | Bearer token, engineer+ |
 
 Comments require the integration to have "Read comments" enabled under the integration's Capabilities settings in Notion — without it, `/content` still returns page body content and just omits comments (fails gracefully, logged server-side).

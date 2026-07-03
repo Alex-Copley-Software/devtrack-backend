@@ -22,6 +22,7 @@ async function ensureNotionTaskTable(prisma) {
           "assigneeNicknames" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
           "priority" TEXT,
           "dueDate" TIMESTAMP(3),
+          "update" TEXT,
           "notionUrl" TEXT,
           "lastSyncedBy" TEXT,
           "notionLastEditedTime" TIMESTAMP(3),
@@ -29,9 +30,11 @@ async function ensureNotionTaskTable(prisma) {
           "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "NotionTask" ADD COLUMN IF NOT EXISTS "update" TEXT`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "NotionTask_notionDatabaseId_idx" ON "NotionTask"("notionDatabaseId")`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "NotionTask_status_idx" ON "NotionTask"("status")`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "NotionTask_assigneeIds_idx" ON "NotionTask" USING GIN ("assigneeIds")`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "NotionTask_update_idx" ON "NotionTask"("update")`);
     })();
   }
   await tableReady;
@@ -72,15 +75,15 @@ async function resolveNicknamesForUsers(prisma, userIds) {
 }
 
 async function upsertFromNotion(prisma, task) {
-  const { notionPageId, notionDatabaseId, title, status, assigneeNicknames, priority, dueDate, notionLastEditedTime, notionUrl } = task;
+  const { notionPageId, notionDatabaseId, title, status, assigneeNicknames, priority, dueDate, update, notionLastEditedTime, notionUrl } = task;
   const assigneeIds = await resolveAssigneeIds(prisma, assigneeNicknames);
   const id = require('crypto').randomUUID();
   await prisma.$executeRawUnsafe(`
     INSERT INTO "NotionTask" (
       "id", "notionPageId", "notionDatabaseId", "title", "status",
-      "assigneeIds", "assigneeNicknames", "priority", "dueDate", "notionUrl",
+      "assigneeIds", "assigneeNicknames", "priority", "dueDate", "update", "notionUrl",
       "lastSyncedBy", "notionLastEditedTime", "updatedAt"
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'notion',$11,CURRENT_TIMESTAMP)
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'notion',$12,CURRENT_TIMESTAMP)
     ON CONFLICT ("notionPageId") DO UPDATE SET
       "title" = EXCLUDED."title",
       "status" = EXCLUDED."status",
@@ -88,12 +91,13 @@ async function upsertFromNotion(prisma, task) {
       "assigneeNicknames" = EXCLUDED."assigneeNicknames",
       "priority" = EXCLUDED."priority",
       "dueDate" = EXCLUDED."dueDate",
+      "update" = EXCLUDED."update",
       "notionUrl" = EXCLUDED."notionUrl",
       "lastSyncedBy" = 'notion',
       "notionLastEditedTime" = EXCLUDED."notionLastEditedTime",
       "updatedAt" = CURRENT_TIMESTAMP
   `, id, notionPageId, notionDatabaseId, title, status, assigneeIds, assigneeNicknames || [],
-     priority || null, dueDate ? new Date(dueDate) : null, notionUrl || null, notionLastEditedTime ? new Date(notionLastEditedTime) : null);
+     priority || null, dueDate ? new Date(dueDate) : null, update || null, notionUrl || null, notionLastEditedTime ? new Date(notionLastEditedTime) : null);
 
   return fetchByPageId(prisma, notionPageId);
 }
@@ -124,12 +128,13 @@ async function fetchById(prisma, id) {
   return rows[0] || null;
 }
 
-async function fetchAll(prisma, { status, notionDatabaseId, assigneeId, search } = {}) {
+async function fetchAll(prisma, { status, notionDatabaseId, assigneeId, search, update } = {}) {
   const clauses = [];
   const values = [];
   let idx = 1;
   if (status && status !== 'all') { clauses.push(`nt.status = $${idx++}`); values.push(status); }
   if (notionDatabaseId && notionDatabaseId !== 'all') { clauses.push(`nt."notionDatabaseId" = $${idx++}`); values.push(notionDatabaseId); }
+  if (update && update !== 'all') { clauses.push(`nt."update" = $${idx++}`); values.push(update); }
   if (search) { clauses.push(`nt.title ILIKE $${idx++}`); values.push(`%${search}%`); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   const rows = await prisma.$queryRawUnsafe(
