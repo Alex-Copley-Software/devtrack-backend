@@ -18,6 +18,8 @@ const ACTION_LABELS = {
   devnotes: 'Dev notes updated',
   flagged: 'Flagged as ready to publish',
   unflagged: 'Unflagged',
+  archived: 'Archived',
+  unarchived: 'Unarchived',
 };
 
 async function log({ reportId, action, detail, actorName, actorId }) {

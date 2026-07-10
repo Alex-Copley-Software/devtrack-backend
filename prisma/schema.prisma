@@ -66,6 +66,8 @@ model Report {
   description      String
   status           Status      @default(queued)
   queued           Boolean     @default(true)
+  archived         Boolean     @default(false)
+  archivedAt       DateTime?
   upvotes          Int         @default(0)
   tags             String[]
   devNotes         String?

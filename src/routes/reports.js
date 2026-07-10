@@ -19,6 +19,16 @@ async function ensureStatusEnumValues() {
   statusEnumReady = true;
 }
 
+let archiveColumnsReady = false;
+
+async function ensureArchiveColumns() {
+  if (archiveColumnsReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "archived" BOOLEAN NOT NULL DEFAULT false`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "archivedAt" TIMESTAMP(3)`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "Report_archived_idx" ON "Report"("archived")`);
+  archiveColumnsReady = true;
+}
+
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -465,6 +475,46 @@ router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not accept report' });
+  }
+});
+
+// POST /api/reports/:id/archive — takes a report off the active board.
+// Archived reports are excluded from Overview/counts on the frontend but
+// kept forever (not deleted) and can be unarchived later.
+router.post('/:id/archive', auth, requireRole('admin', 'engineer'), async (req, res) => {
+  try {
+    await ensureArchiveColumns();
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Report" SET "archived" = true, "archivedAt" = NOW(), "updatedAt" = NOW() WHERE id = $1`,
+      req.params.id
+    );
+    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    await log({ reportId: req.params.id, action: 'archived', actorName: req.user.name, actorId: req.user.id });
+    broadcastReport('report.updated', report, req.user);
+    res.json(report);
+  } catch (err) {
+    console.error('[Report archive]', err.message);
+    res.status(500).json({ error: 'Could not archive report' });
+  }
+});
+
+// POST /api/reports/:id/unarchive
+router.post('/:id/unarchive', auth, requireRole('admin', 'engineer'), async (req, res) => {
+  try {
+    await ensureArchiveColumns();
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Report" SET "archived" = false, "archivedAt" = NULL, "updatedAt" = NOW() WHERE id = $1`,
+      req.params.id
+    );
+    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    await log({ reportId: req.params.id, action: 'unarchived', actorName: req.user.name, actorId: req.user.id });
+    broadcastReport('report.updated', report, req.user);
+    res.json(report);
+  } catch (err) {
+    console.error('[Report unarchive]', err.message);
+    res.status(500).json({ error: 'Could not unarchive report' });
   }
 });
 

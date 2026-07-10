@@ -59,6 +59,8 @@ Server runs at http://localhost:3001
 | POST | /api/reports | Create report (supports file uploads) |
 | PATCH | /api/reports/:id | Update status, priority, assignees |
 | POST | /api/reports/:id/upvote | Increment upvote count |
+| POST | /api/reports/:id/archive | Archive a report — excluded from Overview/counts, kept forever, admin/engineer only |
+| POST | /api/reports/:id/unarchive | Restore an archived report to active |
 | DELETE | /api/reports/:id | Delete report |
 
 ### Tasks
