@@ -32,10 +32,10 @@ async function generateUpdateLog(fixes, since, until) {
   const model = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5';
   const message = await getClient().messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: 8192,
     messages: [{ role: 'user', content: buildPrompt(fixes, since, until) }],
   });
-  console.log('[AI Update Log] stop_reason:', message.stop_reason, 'usage:', JSON.stringify(message.usage));
+  console.log('[AI Update Log] stop_reason:', message.stop_reason, 'usage:', JSON.stringify(message.usage), 'blocks:', message.content.map(b => b.type));
   return message.content.map(block => block.text || '').join('\n').trim();
 }
 
