@@ -16,6 +16,7 @@ const eventRoutes = require('./routes/events');
 const notionWebhookRoutes = require('./routes/notion-webhook');
 const notionTaskRoutes = require('./routes/notion-tasks');
 const teamReportRoutes = require('./routes/team-reports');
+const updateLogRoutes = require('./routes/update-log');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
@@ -57,6 +58,7 @@ app.use('/api/imports', importRoutes);
 app.use('/api/events', eventRoutes);
 app.use('/api/notion-tasks', notionTaskRoutes);
 app.use('/api/team-reports', teamReportRoutes);
+app.use('/api/update-logs', updateLogRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });

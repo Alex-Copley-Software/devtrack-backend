@@ -1,28 +1,18 @@
 const router = require('express').Router();
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
-const { hasRole } = require('../middleware/roles');
+const { requirePageAccess } = require('../middleware/page-access');
 const db = require('../team-reports-db');
 const ai = require('../ai-report');
 
 const prisma = new PrismaClient();
 
-// Team Reports is deliberately unlocked by the "admin" page-access checkbox
-// alone (not full admin role) — a QA/reviewer/engineer with that box checked
-// can view and generate reports without gaining user-management access,
-// which stays restricted to true admin/owner roles (see requireRole('admin')
-// elsewhere, e.g. auth.js user routes). pageAccess isn't in the JWT, so it's
-// looked up fresh on each request.
-async function requireAdminAccess(req, res, next) {
-  if (hasRole(req.user, ['admin'])) return next();
-  try {
-    const rows = await prisma.$queryRawUnsafe(`SELECT "pageAccess" FROM "User" WHERE id = $1`, req.user.id);
-    if ((rows[0]?.pageAccess || []).includes('admin')) return next();
-  } catch (err) {
-    console.error('[TeamReports access check]', err.message);
-  }
-  return res.status(403).json({ error: 'Insufficient role' });
-}
+// Team Reports lives on the "reports" dashboard page, unlocked by that
+// page-access checkbox alone (not full admin role) — a QA/reviewer/engineer
+// with the box checked can view and generate reports without gaining
+// user-management access, which stays restricted to true admin/owner roles
+// (see requireRole('admin') elsewhere, e.g. auth.js user routes).
+const requireAdminAccess = requirePageAccess('reports');
 
 router.use(async (req, res, next) => {
   try {
