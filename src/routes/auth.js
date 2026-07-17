@@ -9,7 +9,7 @@ const { ensureNotionNicknameColumn } = require('../notion-tasks-db');
 
 const prisma = new PrismaClient();
 const VALID_ROLES = new Set(['owner', 'admin', 'engineer', 'qa', 'reviewer']);
-const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks']);
+const VALID_PAGE_ACCESS = new Set(['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks', 'reports']);
 const LOGIN_WINDOW_MS = parseInt(process.env.LOGIN_RATE_WINDOW_MS || `${15 * 60 * 1000}`, 10);
 const LOGIN_MAX_ATTEMPTS = parseInt(process.env.LOGIN_RATE_MAX_ATTEMPTS || '8', 10);
 const loginAttempts = new Map();
@@ -61,11 +61,17 @@ async function ensureUserAccessColumn() {
     WHERE role IN ('owner', 'admin', 'engineer')
       AND NOT ('imports' = ANY(COALESCE("pageAccess", ARRAY[]::text[])))
   `);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "User"
+    SET "pageAccess" = array_append(COALESCE("pageAccess", ARRAY[]::text[]), 'reports')
+    WHERE role IN ('owner', 'admin', 'engineer')
+      AND NOT ('reports' = ANY(COALESCE("pageAccess", ARRAY[]::text[])))
+  `);
 }
 
 function defaultPageAccess(role) {
-  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks'];
-  if (role === 'engineer') return ['bugs', 'suggestions', 'imports', 'tasks'];
+  if (['owner', 'admin'].includes(role)) return ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks', 'reports'];
+  if (role === 'engineer') return ['bugs', 'suggestions', 'imports', 'tasks', 'reports'];
   return ['bugs'];
 }
 

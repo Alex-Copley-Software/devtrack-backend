@@ -5,7 +5,7 @@ const { hasRole } = require('../middleware/roles');
 const { ensureNotionNicknameColumn } = require('../notion-tasks-db');
 
 const prisma = new PrismaClient();
-const PAGE_KEYS = ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks'];
+const PAGE_KEYS = ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks', 'reports'];
 
 async function ensureUserAccessColumn() {
   await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "pageAccess" TEXT[]`);
@@ -14,6 +14,12 @@ async function ensureUserAccessColumn() {
     SET "pageAccess" = array_append(COALESCE("pageAccess", ARRAY[]::text[]), 'imports')
     WHERE role IN ('owner', 'admin', 'engineer')
       AND NOT ('imports' = ANY(COALESCE("pageAccess", ARRAY[]::text[])))
+  `);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "User"
+    SET "pageAccess" = array_append(COALESCE("pageAccess", ARRAY[]::text[]), 'reports')
+    WHERE role IN ('owner', 'admin', 'engineer')
+      AND NOT ('reports' = ANY(COALESCE("pageAccess", ARRAY[]::text[])))
   `);
 }
 
@@ -65,10 +71,10 @@ router.get('/', auth, async (req, res) => {
         u.role,
         u."notionNickname",
         CASE
-          WHEN u.role = 'owner' THEN ARRAY['bugs','suggestions','imports','expenses','admin','tasks']::text[]
+          WHEN u.role = 'owner' THEN ARRAY['bugs','suggestions','imports','expenses','admin','tasks','reports']::text[]
           ELSE COALESCE(u."pageAccess", CASE
-          WHEN u.role = 'admin' THEN ARRAY['bugs','suggestions','imports','expenses','admin','tasks']::text[]
-          WHEN u.role = 'engineer' THEN ARRAY['bugs','suggestions','imports','tasks']::text[]
+          WHEN u.role = 'admin' THEN ARRAY['bugs','suggestions','imports','expenses','admin','tasks','reports']::text[]
+          WHEN u.role = 'engineer' THEN ARRAY['bugs','suggestions','imports','tasks','reports']::text[]
           WHEN u.role IN ('qa', 'reviewer') THEN ARRAY['bugs']::text[]
           ELSE ARRAY['bugs']::text[]
         END)
