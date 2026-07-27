@@ -104,6 +104,47 @@ Comments require the integration to have "Read comments" enabled under the integ
 
 `period` in the POST body is `"daily"` (last 24h) or `"weekly"` (last 7 days, default). All three sources now have real audit trails: `ReportHistory` (bugs/suggestions — status, priority, bug level, assignment, dev notes), `ImportHistory` (queued/ready/imported, assignment, other edits), and `NotionTaskHistory` (status/priority/assignee transitions, logged with `source: 'app'` or `'notion'` depending on where the change originated — Notion-originated changes are attributed to the task's current assignee since the webhook payload doesn't reliably identify which Notion user made the edit). Notion's free-text page content/comments are read live via `/content` rather than logged here. Requires `ANTHROPIC_API_KEY`.
 
+### Roblox Webhook Dump
+| Method | Route | Description | Auth |
+|--------|-------|-------------|------|
+| POST | /api/roblox-dump/webhook | Roblox posts arbitrary JSON here (game content snapshots, debug dumps, etc) | `x-roblox-secret` header |
+| GET | /api/roblox-dump | List dumps (id/eventType/robloxUserId/createdAt/payloadSize, no payload) — supports `?eventType=` | Bearer token, `admin` page access |
+| GET | /api/roblox-dump/event-types | Distinct event types seen so far, for the filter dropdown | Bearer token, `admin` page access |
+| GET | /api/roblox-dump/:id | Full record including the payload | Bearer token, `admin` page access |
+| DELETE | /api/roblox-dump/:id | Delete a dump | Bearer token, `admin` page access |
+
+Pure audit/debug log — there's no "import into DevTrack entities" step, since DevTrack doesn't model game content (units/equipment/etc). Admins just view the payload as beautified JSON on the dashboard's Admin page. Requires `ROBLOX_WEBHOOK_SECRET`.
+
+**Roblox side (Lua, `HttpService`):**
+```lua
+local HttpService = game:GetService("HttpService")
+
+local payload = {
+    eventType = "units_snapshot", -- whatever label you want to filter by later
+    userId = tostring(game.CreatorId), -- optional, any identifying string
+    data = yourDataTable, -- the actual content — units, equipment, whatever
+}
+
+local body = HttpService:JSONEncode(payload)
+
+local ok, response = pcall(function()
+    return HttpService:RequestAsync({
+        Url = "https://devtrack-backend-production.up.railway.app/api/roblox-dump/webhook",
+        Method = "POST",
+        Headers = {
+            ["Content-Type"] = "application/json",
+            ["x-roblox-secret"] = "<ROBLOX_WEBHOOK_SECRET value>",
+        },
+        Body = body,
+    })
+end)
+
+if not ok or not response.Success then
+    warn("[RobloxDump] Failed to send:", ok and response.StatusMessage or response)
+end
+```
+`HttpService.HttpEnabled` must be turned on in Game Settings, and this needs to run from a script with HTTP access (a server script, or Studio's command bar / a plugin for one-off manual dumps).
+
 ---
 
 ## Authentication
