@@ -29,6 +29,15 @@ async function ensureArchiveColumns() {
   archiveColumnsReady = true;
 }
 
+let categoryColumnReady = false;
+
+async function ensureCategoryColumn() {
+  if (categoryColumnReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "category" TEXT`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "Report_category_idx" ON "Report"("category")`);
+  categoryColumnReady = true;
+}
+
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -64,7 +73,7 @@ function authorizeReportPatch(req, res) {
     }
   }
 
-  const queueFields = ['priority', 'bugLevel', 'assigneeIds', 'queued', 'tags'];
+  const queueFields = ['priority', 'bugLevel', 'category', 'assigneeIds', 'queued', 'tags'];
   if (queueFields.some(field => body[field] !== undefined) && !hasRole(req.user, ['qa', 'engineer'])) {
     res.status(403).json({ error: 'Insufficient role for queue fields' });
     return false;
@@ -157,7 +166,7 @@ function devNotesHistoryDetail(previous, next) {
 
 // GET /api/reports
 router.get('/', auth, async (req, res) => {
-  const { type, status, priority, bugLevel, search, assigneeId, queued } = req.query;
+  const { type, status, priority, bugLevel, category, search, assigneeId, queued } = req.query;
   const where = {};
   if (type) where.type = type;
   if (status) where.status = status;
@@ -171,6 +180,7 @@ router.get('/', auth, async (req, res) => {
   if (assigneeId) where.assignees = { some: { id: assigneeId } };
   try {
     if (status !== undefined) await ensureStatusEnumValues();
+    if (category !== undefined) await ensureCategoryColumn();
     const whereClauses = [];
     const vals = [];
     let idx = 1;
@@ -178,6 +188,7 @@ router.get('/', auth, async (req, res) => {
     if (status)     { whereClauses.push(`r.status = $${idx++}::"Status"`);   vals.push(status); }
     if (priority)   { whereClauses.push(`r.priority = $${idx++}::"Priority"`); vals.push(priority); }
     if (bugLevel)   { whereClauses.push(`r."bugLevel" = $${idx++}::"BugLevel"`); vals.push(bugLevel); }
+    if (category)   { whereClauses.push(`r.category = $${idx++}`); vals.push(category); }
     if (queued !== undefined) { whereClauses.push(`r.queued = $${idx++}`);   vals.push(queued === 'true'); }
     if (assigneeId) { whereClauses.push(`EXISTS (SELECT 1 FROM "_AssignedReports" x WHERE x."A" = r.id AND x."B" = $${idx++})`); vals.push(assigneeId); }
     if (search) {
@@ -322,12 +333,13 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   if (!authorizeReportPatch(req, res)) return;
 
-  const { status, priority, bugLevel, assigneeIds, tags, devNotes, queued, expectedUpdatedAt } = req.body;
+  const { status, priority, bugLevel, category, assigneeIds, tags, devNotes, queued, expectedUpdatedAt } = req.body;
   const id = req.params.id;
 
   try {
     // Build raw SQL SET clauses — fully bypasses Prisma enum validation
     if (status !== undefined) await ensureStatusEnumValues();
+    if (category !== undefined) await ensureCategoryColumn();
 
     const [existingReport] = await fetchReports(['r.id = $1'], [id]);
     if (!existingReport) return res.status(404).json({ error: 'Report not found' });
@@ -343,6 +355,7 @@ router.patch('/:id', auth, async (req, res) => {
     if (status === 'declined' && queued === undefined) { setClauses.push(`queued = $${idx++}`); values.push(false); }
     if (priority    !== undefined) { setClauses.push(`priority = $${idx++}::"Priority"`);    values.push(priority); }
     if (bugLevel    !== undefined) { setClauses.push(`"bugLevel" = $${idx++}::"BugLevel"`);  values.push(bugLevel === '' ? null : bugLevel); }
+    if (category    !== undefined) { setClauses.push(`category = $${idx++}`);                values.push(category === '' ? null : category); }
     if (devNotes    !== undefined) { setClauses.push(`"devNotes" = $${idx++}`);               values.push(devNotes); }
     if (queued      !== undefined) { setClauses.push(`queued = $${idx++}`);                   values.push(queued); }
     if (req.body.publishStatus !== undefined) { setClauses.push(`"publishStatus" = $${idx++}`); values.push(req.body.publishStatus); }
@@ -416,6 +429,9 @@ router.patch('/:id', auth, async (req, res) => {
     if (bugLevel !== undefined && bugLevel !== existingReport.bugLevel) {
       await log({ reportId: id, action: 'buglevel', detail: bugLevel || 'cleared', actorName: req.user.name, actorId: req.user.id });
     }
+    if (category !== undefined && category !== existingReport.category) {
+      await log({ reportId: id, action: 'category', detail: category || 'cleared', actorName: req.user.name, actorId: req.user.id });
+    }
 
     // Notify Discord on status changes
     if (status && ['in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'].includes(status)) {
@@ -441,9 +457,10 @@ router.patch('/:id', auth, async (req, res) => {
 });
 // POST /api/reports/:id/accept
 router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (req, res) => {
-  const { bugLevel, assigneeIds, devNotes, priority } = req.body;
+  const { bugLevel, assigneeIds, devNotes, priority, category } = req.body;
   try {
-    const report = await prisma.report.update({
+    await ensureCategoryColumn();
+    await prisma.report.update({
       where: { id: req.params.id },
       data: {
         queued:    false,
@@ -453,8 +470,11 @@ router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (
         priority:  priority || 'medium',
         assignees: assigneeIds?.length ? { set: assigneeIds.map(id => ({ id })) } : undefined
       },
-      include
     });
+    if (category !== undefined) {
+      await prisma.$executeRawUnsafe(`UPDATE "Report" SET category = $1 WHERE id = $2`, category || null, req.params.id);
+    }
+    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
 
     notify({
       threadId:      report.discordThreadId,
@@ -470,10 +490,12 @@ router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (
     await log({ reportId: req.params.id, action: 'accepted', detail: `${report.bugLevel||''}${report.assignees?.[0]?.name ? ' → ' + report.assignees[0].name : ''}`, actorName: req.user.name, actorId: req.user.id });
     if (report.assignees?.[0]?.name) await log({ reportId: req.params.id, action: 'assigned', detail: report.assignees[0].name, actorName: req.user.name, actorId: req.user.id });
     if (report.bugLevel) await log({ reportId: req.params.id, action: 'buglevel', detail: report.bugLevel, actorName: req.user.name, actorId: req.user.id });
+    if (report.category) await log({ reportId: req.params.id, action: 'category', detail: report.category, actorName: req.user.name, actorId: req.user.id });
 
     broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
+    console.error('[Accept]', err.message);
     res.status(500).json({ error: 'Could not accept report' });
   }
 });

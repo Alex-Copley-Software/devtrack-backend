@@ -15,6 +15,7 @@ const ACTION_LABELS = {
   published: 'Marked as Published',
   assigned: 'Assigned to engineer',
   buglevel: 'Bug level set',
+  category: 'Category set',
   devnotes: 'Dev notes updated',
   flagged: 'Flagged as ready to publish',
   unflagged: 'Unflagged',
