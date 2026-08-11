@@ -58,4 +58,16 @@ async function importStatus(payload) {
   }
 }
 
-module.exports = { notify, alert, importStatus };
+async function patchFixNotice(payload) {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/patch-fix`, payload, {
+      headers: { 'x-bot-secret': BOT_SECRET },
+      timeout: 5000,
+    });
+    console.log(`[Notifier] Patch-fix notice sent: ${payload.title}`);
+  } catch (err) {
+    console.error('[Notifier] Failed to send patch-fix notice:', err.message);
+  }
+}
+
+module.exports = { notify, alert, importStatus, patchFixNotice };

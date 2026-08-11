@@ -5,7 +5,7 @@ const fs = require('fs');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { hasRole, requireRole } = require('../middleware/roles');
-const { notify } = require('../discord-notifier');
+const { notify, patchFixNotice } = require('../discord-notifier');
 const { log } = require('../history-logger');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
@@ -155,6 +155,20 @@ function assertFreshReport(existing, expectedUpdatedAt) {
     };
   }
   return null;
+}
+
+// Posts a summarized "what was fixed" card to the patch-fixes Discord
+// channel whenever a report moves into QA Review — no dashboard link,
+// just enough detail for the server to know what patch is being tested.
+function sendPatchFixForReport(report) {
+  patchFixNotice({
+    title:        report.title,
+    reportType:   report.type,
+    bugLevel:     report.bugLevel,
+    category:     report.category,
+    assigneeName: Array.isArray(report.assignees) ? report.assignees[0]?.name || null : null,
+    summary:      report.devNotes || report.description || 'No summary provided.',
+  }).catch(err => console.error('[PatchFix]', err.message));
 }
 
 function devNotesHistoryDetail(previous, next) {
@@ -411,6 +425,7 @@ router.patch('/:id', auth, async (req, res) => {
       await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
       if (status === 'reviewing') {
         alertQaReview(prisma).catch(err => console.error('[PATCH] QA alert failed:', err.message));
+        sendPatchFixForReport(report);
       }
     }
     if (assigneeIds !== undefined && assigneeIds.length > 0) {
@@ -585,7 +600,10 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
     const updatedReports = flagged.length
       ? await fetchReports([`r.id = ANY($1::text[])`], [flagged.map(r => r.id)])
       : [];
-    for (const report of updatedReports) broadcastReport('report.updated', report, req.user);
+    for (const report of updatedReports) {
+      broadcastReport('report.updated', report, req.user);
+      sendPatchFixForReport(report);
+    }
     alertQaReview(prisma).catch(err => console.error('[PublishAll] QA alert failed:', err.message));
 
     res.json({ success: true, count: flagged.length });

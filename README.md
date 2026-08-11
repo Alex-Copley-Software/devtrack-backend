@@ -63,6 +63,14 @@ Server runs at http://localhost:3001
 | POST | /api/reports/:id/unarchive | Restore an archived report to active |
 | DELETE | /api/reports/:id | Delete report |
 
+Whenever a bug/crash report moves into QA Review (single PATCH or the
+"Send to QA" bulk action), a summarized patch note — title, type, severity,
+category, assignee, and dev notes (falling back to the report description)
+— is posted to the bot's `patch-fixes` Discord channel, with no dashboard
+link, so the server has a running log of what's being tested. Configured via
+`PATCH_FIXES_CHANNEL_ID` on the bot service (defaults to the current
+`patch-fixes` channel if unset).
+
 ### Tasks
 | Method | Route | Description |
 |--------|-------|-------------|
