@@ -5,7 +5,7 @@ const fs = require('fs');
 const { PrismaClient } = require('@prisma/client');
 const auth = require('../middleware/auth');
 const { hasRole, requireRole } = require('../middleware/roles');
-const { notify, patchFixNotice } = require('../discord-notifier');
+const { notify, patchFixNotice, notifyTesters } = require('../discord-notifier');
 const { log } = require('../history-logger');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
@@ -161,7 +161,7 @@ function assertFreshReport(existing, expectedUpdatedAt) {
 // channel whenever a report moves into QA Review — no dashboard link,
 // just enough detail for the server to know what patch is being tested.
 function sendPatchFixForReport(report) {
-  patchFixNotice({
+  return patchFixNotice({
     title:        report.title,
     reportType:   report.type,
     bugLevel:     report.bugLevel,
@@ -347,7 +347,7 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   if (!authorizeReportPatch(req, res)) return;
 
-  const { status, priority, bugLevel, category, assigneeIds, tags, devNotes, queued, expectedUpdatedAt, target } = req.body;
+  const { status, priority, bugLevel, category, assigneeIds, tags, devNotes, queued, expectedUpdatedAt, target, pingTesters } = req.body;
   const id = req.params.id;
 
   try {
@@ -425,7 +425,10 @@ router.patch('/:id', auth, async (req, res) => {
       await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
       if (status === 'reviewing') {
         alertQaReview(prisma).catch(err => console.error('[PATCH] QA alert failed:', err.message));
-        if (target === 'test') sendPatchFixForReport(report);
+        if (target === 'test') {
+          const patchFixSent = sendPatchFixForReport(report);
+          if (pingTesters) patchFixSent.then(() => notifyTesters());
+        }
       }
     }
     if (assigneeIds !== undefined && assigneeIds.length > 0) {
@@ -579,7 +582,7 @@ router.delete('/:id', auth, requireRole('admin', 'qa', 'engineer'), async (req, 
 
 // POST /api/reports/publish-all — move in_progress+flagged to reviewing
 router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, res) => {
-  const { target } = req.body || {};
+  const { target, pingTesters } = req.body || {};
   try {
     const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", "bugLevel", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
     if (!flagged.length) return res.json({ success: true, count: 0 });
@@ -601,9 +604,15 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
     const updatedReports = flagged.length
       ? await fetchReports([`r.id = ANY($1::text[])`], [flagged.map(r => r.id)])
       : [];
+    const patchFixSends = [];
     for (const report of updatedReports) {
       broadcastReport('report.updated', report, req.user);
-      if (target === 'test') sendPatchFixForReport(report);
+      if (target === 'test') patchFixSends.push(sendPatchFixForReport(report));
+    }
+    // Ping testers once for the whole batch, after every patch-fix notice
+    // in it has been sent — not once per card.
+    if (target === 'test' && pingTesters && patchFixSends.length) {
+      Promise.all(patchFixSends).then(() => notifyTesters());
     }
     alertQaReview(prisma).catch(err => console.error('[PublishAll] QA alert failed:', err.message));
 

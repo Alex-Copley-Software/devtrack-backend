@@ -70,4 +70,16 @@ async function patchFixNotice(payload) {
   }
 }
 
-module.exports = { notify, alert, importStatus, patchFixNotice };
+async function notifyTesters() {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/ping-testers`, {}, {
+      headers: { 'x-bot-secret': BOT_SECRET },
+      timeout: 5000,
+    });
+    console.log('[Notifier] Tester ping sent');
+  } catch (err) {
+    console.error('[Notifier] Failed to send tester ping:', err.message);
+  }
+}
+
+module.exports = { notify, alert, importStatus, patchFixNotice, notifyTesters };
