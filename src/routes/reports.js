@@ -347,7 +347,7 @@ router.post('/', auth, upload.array('attachments', 10), async (req, res) => {
 router.patch('/:id', auth, async (req, res) => {
   if (!authorizeReportPatch(req, res)) return;
 
-  const { status, priority, bugLevel, category, assigneeIds, tags, devNotes, queued, expectedUpdatedAt } = req.body;
+  const { status, priority, bugLevel, category, assigneeIds, tags, devNotes, queued, expectedUpdatedAt, target } = req.body;
   const id = req.params.id;
 
   try {
@@ -425,7 +425,7 @@ router.patch('/:id', auth, async (req, res) => {
       await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
       if (status === 'reviewing') {
         alertQaReview(prisma).catch(err => console.error('[PATCH] QA alert failed:', err.message));
-        sendPatchFixForReport(report);
+        if (target === 'test') sendPatchFixForReport(report);
       }
     }
     if (assigneeIds !== undefined && assigneeIds.length > 0) {
@@ -579,6 +579,7 @@ router.delete('/:id', auth, requireRole('admin', 'qa', 'engineer'), async (req, 
 
 // POST /api/reports/publish-all — move in_progress+flagged to reviewing
 router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, res) => {
+  const { target } = req.body || {};
   try {
     const flagged = await prisma.$queryRaw`SELECT id, "discordThreadId", "discordUserId", "notifyOwner", "devNotes", "bugLevel", type FROM "Report" WHERE status = 'in_progress' AND "publishStatus" = 'flagged'`;
     if (!flagged.length) return res.json({ success: true, count: 0 });
@@ -602,7 +603,7 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
       : [];
     for (const report of updatedReports) {
       broadcastReport('report.updated', report, req.user);
-      sendPatchFixForReport(report);
+      if (target === 'test') sendPatchFixForReport(report);
     }
     alertQaReview(prisma).catch(err => console.error('[PublishAll] QA alert failed:', err.message));
 
