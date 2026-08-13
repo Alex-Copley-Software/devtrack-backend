@@ -15,38 +15,55 @@ async function ensureBoardTaskTable(prisma) {
           "status" TEXT NOT NULL DEFAULT 'todo',
           "details" TEXT,
           "notionUrl" TEXT,
-          "assigneeId" TEXT REFERENCES "User"(id) ON DELETE SET NULL,
+          "assigneeIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
           "tags" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
           "createdById" TEXT REFERENCES "User"(id) ON DELETE SET NULL,
           "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
           "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      // Migrate from the original single-assignee column (cards created
+      // before multi-assignee support) to the array column, then drop it.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "BoardTask" ADD COLUMN IF NOT EXISTS "assigneeIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[]`);
+      await prisma.$executeRawUnsafe(`
+        DO $$ BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'BoardTask' AND column_name = 'assigneeId') THEN
+            UPDATE "BoardTask" SET "assigneeIds" = ARRAY["assigneeId"]
+              WHERE "assigneeId" IS NOT NULL AND (cardinality("assigneeIds") = 0);
+            ALTER TABLE "BoardTask" DROP COLUMN "assigneeId";
+          END IF;
+        END $$;
+      `);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_status_idx" ON "BoardTask"("status")`);
-      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_assigneeId_idx" ON "BoardTask"("assigneeId")`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_assigneeIds_idx" ON "BoardTask" USING GIN ("assigneeIds")`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_tags_idx" ON "BoardTask" USING GIN ("tags")`);
     })();
   }
   await tableReady;
 }
 
+// assignees is resolved live from the current assigneeIds array, so a
+// renamed/deleted user reflects immediately without needing a rewrite.
 const SELECT_FIELDS = `
   bt.*,
-  CASE WHEN u.id IS NOT NULL THEN jsonb_build_object('id', u.id, 'name', u.name) ELSE NULL END AS assignee
+  COALESCE(
+    (SELECT json_agg(jsonb_build_object('id', u.id, 'name', u.name) ORDER BY u.name) FROM "User" u WHERE u.id = ANY(bt."assigneeIds")),
+    '[]'
+  ) AS assignees
 `;
 
-async function create(prisma, { title, status, details, notionUrl, assigneeId, tags, createdById }) {
+async function create(prisma, { title, status, details, notionUrl, assigneeIds, tags, createdById }) {
   const id = require('crypto').randomUUID();
   await prisma.$executeRawUnsafe(`
-    INSERT INTO "BoardTask" ("id", "title", "status", "details", "notionUrl", "assigneeId", "tags", "createdById")
+    INSERT INTO "BoardTask" ("id", "title", "status", "details", "notionUrl", "assigneeIds", "tags", "createdById")
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-  `, id, title, status || 'todo', details || null, notionUrl || null, assigneeId || null, tags || [], createdById || null);
+  `, id, title, status || 'todo', details || null, notionUrl || null, assigneeIds || [], tags || [], createdById || null);
   return fetchById(prisma, id);
 }
 
 async function fetchById(prisma, id) {
   const rows = await prisma.$queryRawUnsafe(
-    `SELECT ${SELECT_FIELDS} FROM "BoardTask" bt LEFT JOIN "User" u ON u.id = bt."assigneeId" WHERE bt.id = $1`,
+    `SELECT ${SELECT_FIELDS} FROM "BoardTask" bt WHERE bt.id = $1`,
     id
   );
   return rows[0] || null;
@@ -58,19 +75,19 @@ async function fetchAll(prisma, { status, assigneeId, tag, search } = {}) {
   let idx = 1;
   if (status && status !== 'all') { clauses.push(`bt.status = $${idx++}`); values.push(status); }
   if (assigneeId && assigneeId !== 'all') {
-    if (assigneeId === 'unassigned') clauses.push(`bt."assigneeId" IS NULL`);
-    else { clauses.push(`bt."assigneeId" = $${idx++}`); values.push(assigneeId); }
+    if (assigneeId === 'unassigned') clauses.push(`cardinality(bt."assigneeIds") = 0`);
+    else { clauses.push(`$${idx++} = ANY(bt."assigneeIds")`); values.push(assigneeId); }
   }
   if (tag && tag !== 'all') { clauses.push(`$${idx++} = ANY(bt.tags)`); values.push(tag); }
   if (search) { clauses.push(`bt.title ILIKE $${idx++}`); values.push(`%${search}%`); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   return prisma.$queryRawUnsafe(
-    `SELECT ${SELECT_FIELDS} FROM "BoardTask" bt LEFT JOIN "User" u ON u.id = bt."assigneeId" ${where} ORDER BY bt."updatedAt" DESC`,
+    `SELECT ${SELECT_FIELDS} FROM "BoardTask" bt ${where} ORDER BY bt."updatedAt" DESC`,
     ...values
   );
 }
 
-async function update(prisma, id, { title, status, details, notionUrl, assigneeId, tags }) {
+async function update(prisma, id, { title, status, details, notionUrl, assigneeIds, tags }) {
   const updates = [];
   const values = [];
   let idx = 1;
@@ -78,7 +95,7 @@ async function update(prisma, id, { title, status, details, notionUrl, assigneeI
   if (status !== undefined) { updates.push(`"status" = $${idx++}`); values.push(status); }
   if (details !== undefined) { updates.push(`"details" = $${idx++}`); values.push(details || null); }
   if (notionUrl !== undefined) { updates.push(`"notionUrl" = $${idx++}`); values.push(notionUrl || null); }
-  if (assigneeId !== undefined) { updates.push(`"assigneeId" = $${idx++}`); values.push(assigneeId || null); }
+  if (assigneeIds !== undefined) { updates.push(`"assigneeIds" = $${idx++}`); values.push(assigneeIds || []); }
   if (tags !== undefined) { updates.push(`"tags" = $${idx++}`); values.push(tags || []); }
   if (!updates.length) return fetchById(prisma, id);
   updates.push(`"updatedAt" = CURRENT_TIMESTAMP`);

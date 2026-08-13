@@ -5,11 +5,10 @@
 // skips any NotionTask whose title+notionUrl pair already has a matching
 // BoardTask, so accidental double-runs don't duplicate cards.
 //
-// Simplifications from the old multi-assignee Notion model: BoardTask has a
-// single assigneeId, so only the first live-mapped assignee is kept.
-// NotionTask had no free-text "details" field, so it's left blank; tags are
-// a brand-new concept and start empty. The original notionUrl is preserved
-// as the new card's link-out field.
+// All live-mapped Notion assignees are carried over (BoardTask supports
+// multiple assignees per card). NotionTask had no free-text "details"
+// field, so it's left blank; tags are a brand-new concept and start empty.
+// The original notionUrl is preserved as the new card's link-out field.
 
 const { PrismaClient } = require('@prisma/client');
 const { ensureBoardTaskTable } = require('../src/board-tasks-db');
@@ -63,13 +62,13 @@ async function main() {
     if (already.length) { skipped++; continue; }
 
     const status = mapStatus(nt.status);
-    const assigneeId = (nt.liveAssigneeIds || [])[0] || null;
+    const assigneeIds = nt.liveAssigneeIds || [];
     const id = require('crypto').randomUUID();
 
     await prisma.$executeRawUnsafe(`
-      INSERT INTO "BoardTask" ("id", "title", "status", "notionUrl", "assigneeId", "tags", "createdAt")
+      INSERT INTO "BoardTask" ("id", "title", "status", "notionUrl", "assigneeIds", "tags", "createdAt")
       VALUES ($1,$2,$3,$4,$5,ARRAY[]::TEXT[],$6)
-    `, id, nt.title, status, nt.notionUrl || null, assigneeId, nt.createdAt);
+    `, id, nt.title, status, nt.notionUrl || null, assigneeIds, nt.createdAt);
 
     await prisma.$executeRawUnsafe(`
       INSERT INTO "BoardTaskHistory" ("id", "boardTaskId", "action", "detail", "actorName", "actorId")
