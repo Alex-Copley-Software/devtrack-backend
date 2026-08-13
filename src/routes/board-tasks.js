@@ -26,6 +26,7 @@ router.get('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
       status: req.query.status,
       assigneeId: req.query.assigneeId,
       tag: req.query.tag,
+      update: req.query.update,
       search: req.query.search,
     });
     res.json(tasks);
@@ -46,9 +47,20 @@ router.get('/tags', auth, requireRole('engineer', 'admin'), async (req, res) => 
   }
 });
 
+// GET /api/board-tasks/updates — distinct "update" (version) values in use,
+// for the filter dropdown and the update-input autocomplete
+router.get('/updates', auth, requireRole('engineer', 'admin'), async (req, res) => {
+  try {
+    res.json(await db.listUpdates(prisma));
+  } catch (err) {
+    console.error('[BoardTasks updates]', err.message);
+    res.status(500).json({ error: 'Could not fetch updates' });
+  }
+});
+
 // POST /api/board-tasks — create a card
 router.post('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
-  const { title, status, details, notionUrl, assigneeIds, tags } = req.body;
+  const { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags } = req.body;
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
   try {
     const task = await db.create(prisma, {
@@ -56,6 +68,7 @@ router.post('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
       status,
       details,
       notionUrl,
+      update: updateVersion,
       assigneeIds: Array.isArray(assigneeIds) ? assigneeIds.filter(Boolean) : [],
       tags: Array.isArray(tags) ? tags.filter(Boolean) : [],
       createdById: req.user.id,
@@ -76,8 +89,8 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     const existing = await db.fetchById(prisma, req.params.id);
     if (!existing) return res.status(404).json({ error: 'Task not found' });
 
-    const { title, status, details, notionUrl, assigneeIds, tags } = req.body;
-    const task = await db.update(prisma, req.params.id, { title, status, details, notionUrl, assigneeIds, tags });
+    const { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags } = req.body;
+    const task = await db.update(prisma, req.params.id, { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags });
 
     if (title !== undefined && title !== existing.title) {
       await taskHistory.log(prisma, { boardTaskId: req.params.id, action: 'title', detail: title, actorName: req.user.name, actorId: req.user.id });
@@ -94,6 +107,9 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     }
     if (details !== undefined && details !== existing.details) {
       await taskHistory.log(prisma, { boardTaskId: req.params.id, action: 'details', detail: 'Details updated', actorName: req.user.name, actorId: req.user.id });
+    }
+    if (updateVersion !== undefined && updateVersion !== existing.update) {
+      await taskHistory.log(prisma, { boardTaskId: req.params.id, action: 'update', detail: updateVersion || 'cleared', actorName: req.user.name, actorId: req.user.id });
     }
 
     broadcast('boardTask.updated', { task, timestamp: new Date().toISOString() });

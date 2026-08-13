@@ -15,6 +15,7 @@ async function ensureBoardTaskTable(prisma) {
           "status" TEXT NOT NULL DEFAULT 'todo',
           "details" TEXT,
           "notionUrl" TEXT,
+          "update" TEXT,
           "assigneeIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
           "tags" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
           "createdById" TEXT REFERENCES "User"(id) ON DELETE SET NULL,
@@ -34,9 +35,12 @@ async function ensureBoardTaskTable(prisma) {
           END IF;
         END $$;
       `);
+      // Defensive add for tables created before the "update" field existed.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "BoardTask" ADD COLUMN IF NOT EXISTS "update" TEXT`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_status_idx" ON "BoardTask"("status")`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_assigneeIds_idx" ON "BoardTask" USING GIN ("assigneeIds")`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_tags_idx" ON "BoardTask" USING GIN ("tags")`);
+      await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BoardTask_update_idx" ON "BoardTask"("update")`);
     })();
   }
   await tableReady;
@@ -52,12 +56,12 @@ const SELECT_FIELDS = `
   ) AS assignees
 `;
 
-async function create(prisma, { title, status, details, notionUrl, assigneeIds, tags, createdById }) {
+async function create(prisma, { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags, createdById }) {
   const id = require('crypto').randomUUID();
   await prisma.$executeRawUnsafe(`
-    INSERT INTO "BoardTask" ("id", "title", "status", "details", "notionUrl", "assigneeIds", "tags", "createdById")
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-  `, id, title, status || 'todo', details || null, notionUrl || null, assigneeIds || [], tags || [], createdById || null);
+    INSERT INTO "BoardTask" ("id", "title", "status", "details", "notionUrl", "update", "assigneeIds", "tags", "createdById")
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+  `, id, title, status || 'todo', details || null, notionUrl || null, updateVersion || null, assigneeIds || [], tags || [], createdById || null);
   return fetchById(prisma, id);
 }
 
@@ -69,7 +73,7 @@ async function fetchById(prisma, id) {
   return rows[0] || null;
 }
 
-async function fetchAll(prisma, { status, assigneeId, tag, search } = {}) {
+async function fetchAll(prisma, { status, assigneeId, tag, update: updateVersion, search } = {}) {
   const clauses = [];
   const values = [];
   let idx = 1;
@@ -79,6 +83,10 @@ async function fetchAll(prisma, { status, assigneeId, tag, search } = {}) {
     else { clauses.push(`$${idx++} = ANY(bt."assigneeIds")`); values.push(assigneeId); }
   }
   if (tag && tag !== 'all') { clauses.push(`$${idx++} = ANY(bt.tags)`); values.push(tag); }
+  if (updateVersion && updateVersion !== 'all') {
+    if (updateVersion === 'none') clauses.push(`bt."update" IS NULL`);
+    else { clauses.push(`bt."update" = $${idx++}`); values.push(updateVersion); }
+  }
   if (search) { clauses.push(`bt.title ILIKE $${idx++}`); values.push(`%${search}%`); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
   return prisma.$queryRawUnsafe(
@@ -87,7 +95,7 @@ async function fetchAll(prisma, { status, assigneeId, tag, search } = {}) {
   );
 }
 
-async function update(prisma, id, { title, status, details, notionUrl, assigneeIds, tags }) {
+async function update(prisma, id, { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags }) {
   const updates = [];
   const values = [];
   let idx = 1;
@@ -95,6 +103,7 @@ async function update(prisma, id, { title, status, details, notionUrl, assigneeI
   if (status !== undefined) { updates.push(`"status" = $${idx++}`); values.push(status); }
   if (details !== undefined) { updates.push(`"details" = $${idx++}`); values.push(details || null); }
   if (notionUrl !== undefined) { updates.push(`"notionUrl" = $${idx++}`); values.push(notionUrl || null); }
+  if (updateVersion !== undefined) { updates.push(`"update" = $${idx++}`); values.push(updateVersion || null); }
   if (assigneeIds !== undefined) { updates.push(`"assigneeIds" = $${idx++}`); values.push(assigneeIds || []); }
   if (tags !== undefined) { updates.push(`"tags" = $${idx++}`); values.push(tags || []); }
   if (!updates.length) return fetchById(prisma, id);
@@ -113,6 +122,11 @@ async function listTags(prisma) {
   return rows.map(r => r.tag);
 }
 
+async function listUpdates(prisma) {
+  const rows = await prisma.$queryRawUnsafe(`SELECT DISTINCT "update" FROM "BoardTask" WHERE "update" IS NOT NULL ORDER BY "update"`);
+  return rows.map(r => r.update);
+}
+
 module.exports = {
   ensureBoardTaskTable,
   create,
@@ -121,4 +135,5 @@ module.exports = {
   update,
   deleteTask,
   listTags,
+  listUpdates,
 };
