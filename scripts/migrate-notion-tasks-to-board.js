@@ -34,7 +34,7 @@ async function main() {
   await ensureBoardTaskTable(prisma);
   await ensureBoardTaskHistoryTable(prisma);
 
-  const exists = await prisma.$queryRawUnsafe(`SELECT to_regclass('"NotionTask"') AS reg`);
+  const exists = await prisma.$queryRawUnsafe(`SELECT to_regclass('"NotionTask"')::text AS reg`);
   if (!exists[0]?.reg) {
     console.log('No NotionTask table found — nothing to migrate.');
     return;
