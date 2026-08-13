@@ -60,7 +60,7 @@ router.get('/updates', auth, requireRole('engineer', 'admin'), async (req, res) 
 
 // POST /api/board-tasks — create a card
 router.post('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
-  const { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags } = req.body;
+  const { title, status, details, notionUrl, update: updateVersion, priority, assigneeIds, tags } = req.body;
   if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
   try {
     const task = await db.create(prisma, {
@@ -69,6 +69,7 @@ router.post('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
       details,
       notionUrl,
       update: updateVersion,
+      priority,
       assigneeIds: Array.isArray(assigneeIds) ? assigneeIds.filter(Boolean) : [],
       tags: Array.isArray(tags) ? tags.filter(Boolean) : [],
       createdById: req.user.id,
@@ -89,8 +90,8 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     const existing = await db.fetchById(prisma, req.params.id);
     if (!existing) return res.status(404).json({ error: 'Task not found' });
 
-    const { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags } = req.body;
-    const task = await db.update(prisma, req.params.id, { title, status, details, notionUrl, update: updateVersion, assigneeIds, tags });
+    const { title, status, details, notionUrl, update: updateVersion, priority, assigneeIds, tags } = req.body;
+    const task = await db.update(prisma, req.params.id, { title, status, details, notionUrl, update: updateVersion, priority, assigneeIds, tags });
 
     if (title !== undefined && title !== existing.title) {
       await taskHistory.log(prisma, { boardTaskId: req.params.id, action: 'title', detail: title, actorName: req.user.name, actorId: req.user.id });
@@ -110,6 +111,9 @@ router.patch('/:id', auth, requireRole('engineer', 'admin'), async (req, res) =>
     }
     if (updateVersion !== undefined && updateVersion !== existing.update) {
       await taskHistory.log(prisma, { boardTaskId: req.params.id, action: 'update', detail: updateVersion || 'cleared', actorName: req.user.name, actorId: req.user.id });
+    }
+    if (priority !== undefined && priority !== existing.priority) {
+      await taskHistory.log(prisma, { boardTaskId: req.params.id, action: 'priority', detail: priority || 'cleared', actorName: req.user.name, actorId: req.user.id });
     }
 
     broadcast('boardTask.updated', { task, timestamp: new Date().toISOString() });
