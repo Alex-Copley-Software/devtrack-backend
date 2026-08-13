@@ -13,8 +13,7 @@ const historyRoutes = require('./routes/history');
 const expenseRoutes = require('./routes/expenses');
 const importRoutes = require('./routes/imports');
 const eventRoutes = require('./routes/events');
-const notionWebhookRoutes = require('./routes/notion-webhook');
-const notionTaskRoutes = require('./routes/notion-tasks');
+const boardTaskRoutes = require('./routes/board-tasks');
 const teamReportRoutes = require('./routes/team-reports');
 const updateLogRoutes = require('./routes/update-log');
 const robloxDumpRoutes = require('./routes/roblox-dump');
@@ -36,9 +35,6 @@ app.use(cors({
     return callback(error);
   }
 }));
-// Notion webhook signature verification needs the exact raw request bytes,
-// so it's mounted with a raw body parser before the global JSON parser below.
-app.use('/api/notion', express.raw({ type: '*/*' }), notionWebhookRoutes);
 // Roblox game content dumps can be larger than the default 100kb JSON limit.
 app.use('/api/roblox-dump/webhook', express.json({ limit: '10mb' }));
 
@@ -59,7 +55,7 @@ app.use('/api/history', historyRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/imports', importRoutes);
 app.use('/api/events', eventRoutes);
-app.use('/api/notion-tasks', notionTaskRoutes);
+app.use('/api/board-tasks', boardTaskRoutes);
 app.use('/api/team-reports', teamReportRoutes);
 app.use('/api/update-logs', updateLogRoutes);
 app.use('/api/roblox-dump', robloxDumpRoutes);

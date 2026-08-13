@@ -17,7 +17,7 @@ function getClient() {
 function buildPrompt(period, start, end, summary) {
   return `You are writing a concise ${period} engineering status report for a small game development team (Anime Expeditions), covering ${start.toDateString()} to ${end.toDateString()}.
 
-Summarize the activity below into a report suitable for a standup. For each engineer, cover what they worked on across three sources: bug/suggestion actions, import assets touched, and Notion tasks touched. Distinguish completed/resolved work from in-progress work where the data shows it. If an engineer has no activity in this period, say so in one short line rather than skipping them.
+Summarize the activity below into a report suitable for a standup. For each engineer, cover what they worked on across three sources: bug/suggestion actions, import assets touched, and dev board tasks touched. Distinguish completed/resolved work from in-progress work where the data shows it. If an engineer has no activity in this period, say so in one short line rather than skipping them.
 
 End with a short team-wide summary (2-3 sentences) on overall pace and any notable patterns (e.g. one person carrying most of the load, a lot of severe-priority items, etc.) if the data supports it — don't invent anything not backed by the data.
 

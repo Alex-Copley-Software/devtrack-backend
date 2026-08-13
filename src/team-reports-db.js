@@ -52,14 +52,12 @@ const ACTIVITY_CAP_PER_ENGINEER = 50;
 
 // Gathers each engineer's activity within [start, end] from the real audit
 // trails: ReportHistory (bugs/suggestions), ImportHistory (imports), and
-// NotionTaskHistory (tasks — status/priority/assignee transitions, logged
-// regardless of whether the change came from the dashboard or a Notion
-// edit synced in via webhook). This is genuine "did X then Y" history, not
-// just a snapshot of current state for items touched in the window.
+// BoardTaskHistory (dev board tasks — status/assignee/tag transitions).
+// This is genuine "did X then Y" history, not just a snapshot of current
+// state for items touched in the window.
 async function buildActivitySummary(prisma, start, end) {
   const users = await prisma.$queryRawUnsafe(`SELECT id, name FROM "User" WHERE role = 'engineer' ORDER BY name`);
   const engineerByName = new Map(users.map(u => [u.name, u]));
-  const engineerById = new Map(users.map(u => [u.id, u]));
 
   const bugHistory = await prisma.$queryRawUnsafe(`
     SELECT rh."actorName", rh.action, rh.detail, rh."createdAt",
@@ -79,10 +77,9 @@ async function buildActivitySummary(prisma, start, end) {
   `, start, end).catch(() => []); // table may not exist yet if no imports have ever been created
 
   const taskHistoryRows = await prisma.$queryRawUnsafe(`
-    SELECT th."actorName", th.action, th.detail, th.source, th."createdAt", nt.title AS "taskTitle",
-      COALESCE((SELECT array_agg(u.id) FROM "User" u WHERE u.role = 'engineer' AND u."notionNickname" = ANY(nt."assigneeNicknames")), ARRAY[]::TEXT[]) AS "currentAssigneeIds"
-    FROM "NotionTaskHistory" th
-    JOIN "NotionTask" nt ON nt.id = th."notionTaskId"
+    SELECT th."actorName", th.action, th.detail, th."createdAt", bt.title AS "taskTitle"
+    FROM "BoardTaskHistory" th
+    JOIN "BoardTask" bt ON bt.id = th."boardTaskId"
     WHERE th."createdAt" >= $1 AND th."createdAt" <= $2
     ORDER BY th."createdAt" ASC
   `, start, end).catch(() => []); // table may not exist yet if no tasks have ever changed status
@@ -109,18 +106,10 @@ async function buildActivitySummary(prisma, start, end) {
     }
   }
   for (const t of taskHistoryRows) {
-    // App-originated changes are attributed to the actor directly. Notion-
-    // originated changes (source: 'notion') don't reliably identify which
-    // Notion user made the edit, so they're attributed to whoever the task
-    // is currently assigned to instead.
-    const targetNames = t.source === 'app' && engineerByName.has(t.actorName)
-      ? [t.actorName]
-      : (t.currentAssigneeIds || []).map(id => engineerById.get(id)?.name).filter(Boolean);
-    for (const name of targetNames) {
-      const b = bucket(name);
-      if (b.taskActivity.length < ACTIVITY_CAP_PER_ENGINEER) {
-        b.taskActivity.push({ action: t.action, detail: t.detail, taskTitle: t.taskTitle, source: t.source, at: t.createdAt });
-      }
+    if (!engineerByName.has(t.actorName)) continue; // skip non-engineer actors (admins/QA editing a card)
+    const b = bucket(t.actorName);
+    if (b.taskActivity.length < ACTIVITY_CAP_PER_ENGINEER) {
+      b.taskActivity.push({ action: t.action, detail: t.detail, taskTitle: t.taskTitle, source: 'app', at: t.createdAt });
     }
   }
 

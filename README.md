@@ -90,19 +90,16 @@ link, so the server has a running log of what's being tested. Configured via
 |--------|-------|-------------|------|
 | POST | /api/bot/report | Discord bot submits new report | x-bot-secret header |
 
-### Notion Tasks
+### Board Tasks
 | Method | Route | Description | Auth |
 |--------|-------|-------------|------|
-| POST | /api/notion/webhook | Notion sends page.created / page.properties_updated events here | X-Notion-Signature header |
-| GET | /api/notion-tasks | List synced tasks (filter by ?status=&notionDatabaseId=&assigneeId=&search=) | Bearer token, engineer+ |
-| POST | /api/notion-tasks/sync | Backfill every existing page in each known database (not just webhook-triggered ones); safe to re-run | Bearer token, engineer+ |
-| PATCH | /api/notion-tasks/:id | Update a task; writes back to the source Notion page | Bearer token, engineer+ |
-| POST | /api/notion-tasks/:id/resync | Retry pushing the current row to Notion after a failed write-back | Bearer token, engineer+ |
-| GET | /api/notion-tasks/nicknames | List the Notion "Assigned to" option values, for the admin nickname-mapping dropdown | Bearer token, admin |
-| GET | /api/notion-tasks/update-options | List the Notion "Update" (version) select option values, for the card-front dropdown and page filter | Bearer token, engineer+ |
-| GET | /api/notion-tasks/:id/content | Live page body (text/images) + comments for a task, fetched fresh each time | Bearer token, engineer+ |
+| GET | /api/board-tasks | List cards (filter by ?status=&assigneeId=&tag=&search=) | Bearer token, engineer+ |
+| GET | /api/board-tasks/tags | Distinct tags currently in use, for the filter dropdown and tag autocomplete | Bearer token, engineer+ |
+| POST | /api/board-tasks | Create a card | Bearer token, engineer+ |
+| PATCH | /api/board-tasks/:id | Update any subset of fields (title/status/details/notionUrl/assigneeId/tags); drag-and-drop status changes go through here too | Bearer token, engineer+ |
+| DELETE | /api/board-tasks/:id | Delete a card | Bearer token, engineer+ |
 
-Comments require the integration to have "Read comments" enabled under the integration's Capabilities settings in Notion — without it, `/content` still returns page body content and just omits comments (fails gracefully, logged server-side).
+A native dev task board — no external sync. Each card has a title, one of five fixed statuses (Needs Prerequisite / To Do / In Progress / Done / Archive), a single assignee, freeform tags, an optional Notion link (clicking a card with one set opens it directly; clicking a card without one opens the edit form instead), and a free-text details field. Every create/status/assignee/tag/title change is logged to `BoardTaskHistory`, which also feeds Team Reports.
 
 ### Team Reports
 | Method | Route | Description | Auth |
@@ -110,7 +107,7 @@ Comments require the integration to have "Read comments" enabled under the integ
 | GET | /api/team-reports | List past generated reports (most recent 20) | Bearer token, admin |
 | POST | /api/team-reports/generate | Gather engineer activity for the period and generate a new AI report | Bearer token, admin |
 
-`period` in the POST body is `"daily"` (last 24h) or `"weekly"` (last 7 days, default). All three sources now have real audit trails: `ReportHistory` (bugs/suggestions — status, priority, bug level, assignment, dev notes), `ImportHistory` (queued/ready/imported, assignment, other edits), and `NotionTaskHistory` (status/priority/assignee transitions, logged with `source: 'app'` or `'notion'` depending on where the change originated — Notion-originated changes are attributed to the task's current assignee since the webhook payload doesn't reliably identify which Notion user made the edit). Notion's free-text page content/comments are read live via `/content` rather than logged here. Requires `ANTHROPIC_API_KEY`.
+`period` in the POST body is `"daily"` (last 24h) or `"weekly"` (last 7 days, default). All three sources have real audit trails: `ReportHistory` (bugs/suggestions — status, priority, bug level, assignment, dev notes), `ImportHistory` (queued/ready/imported, assignment, other edits), and `BoardTaskHistory` (title/status/assignee/tag transitions on the dev task board). Requires `ANTHROPIC_API_KEY`.
 
 ### Roblox Webhook Dump
 | Method | Route | Description | Auth |
@@ -176,54 +173,18 @@ x-bot-secret: <your BOT_SECRET from .env>
 
 ---
 
-## Notion Task Sync Setup
+## Board Tasks (formerly Notion-synced)
 
-### 1. Create the integration
-1. Go to https://www.notion.so/my-integrations → New integration → Internal.
-2. Copy the integration's secret — this is `NOTION_API_KEY`.
-
-### 2. Share the parent page
-1. Open the Notion page that has your task databases nested under it.
-2. Click `···` → Connections → add your integration.
-   Access is inherited by all child databases automatically.
-
-### 3. Point the backend at your database
-`NOTION_DATABASE_ID` should be the **database ID** of the specific database to sync
-(not the parent page ID). You can find it in the database's URL:
-`notion.so/<workspace>/<DATABASE_ID>?v=...`. Multiple databases can be
-comma-separated if you add more later.
-
-Only databases with a `title`-type property, a `Status` property, and an
-"Assigned to"-style property are synced meaningfully — see
-`src/notion-client.js` for the per-database property-name map
-(`DB_PROPERTY_MAP`) if a database uses different property names.
-
-### 4. Register the webhook
-1. In the integration settings, add a webhook subscription pointing to:
-   `https://<your-railway-domain>/api/notion/webhook`
-2. Notion will send a one-time verification request. Check the Railway
-   deploy logs for a line like:
-   `[Notion Webhook] Verification token received — paste this into your
-   Notion integration's webhook settings: <token>`
-3. Paste that token into the Notion integration's webhook setup screen to
-   confirm the subscription. Once confirmed, Notion will show you the
-   webhook's signing secret — set that as `NOTION_WEBHOOK_SECRET`.
-4. Subscribe to `page.created` and `page.properties_updated` events.
-
-### 5. Map engineer nicknames
-Notion's "Assigned to" field is a multi-select of nicknames, not full names,
-so there's no automatic name matching. In the dashboard's Admin page, each
-user has a Notion Nickname dropdown (populated from the live option list via
-`GET /api/notion-tasks/nicknames`) — set it once per engineer and the sync
-will resolve assignees both ways from then on.
-
-### Environment variables (Railway)
-```text
-NOTION_API_KEY        — the integration's internal secret
-NOTION_DATABASE_ID     — target database ID(s), comma-separated
-NOTION_WEBHOOK_SECRET  — signing secret shown after webhook verification
-NOTION_ENGINEER_NICKNAMES — comma-separated nicknames to sync (mirrors the Notion "Engineers" view filter); unset syncs everything
-```
+The Tasks page used to be a two-way Notion sync (webhook + REST write-back,
+`NOTION_API_KEY`/`NOTION_DATABASE_ID`/`NOTION_WEBHOOK_SECRET`/
+`NOTION_ENGINEER_NICKNAMES`, engineer nickname mapping in Admin). That
+integration has been removed entirely — the Tasks page is now a fully
+native DevTrack kanban board (`BoardTask`/`BoardTaskHistory`, see the route
+table above) with no external dependency or setup required. The old synced
+data was migrated once into the new table via
+`scripts/migrate-notion-tasks-to-board.js` and the original `NotionTask`/
+`NotionTaskHistory` rows are left in place in Postgres (unused, not deleted)
+in case anything needs to be cross-referenced later.
 
 ## AI Team Reports Setup
 
