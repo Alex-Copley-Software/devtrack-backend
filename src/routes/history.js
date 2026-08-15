@@ -5,10 +5,11 @@ const { requireRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
 
-// GET /api/history/activity/feed - recent activity across bug reports
+// GET /api/history/activity/feed - recent activity across bug reports and
+// dev board task cards, merged into one chronological feed
 router.get('/activity/feed', auth, async (req, res) => {
   try {
-    const activity = await prisma.$queryRawUnsafe(`
+    const reportActivity = await prisma.$queryRawUnsafe(`
       SELECT
         rh.id,
         rh."reportId",
@@ -28,7 +29,35 @@ router.get('/activity/feed', auth, async (req, res) => {
       ORDER BY rh."createdAt" DESC
       LIMIT 250
     `);
-    res.json(activity);
+
+    // Board task activity — same "must have a real actor" filter as reports,
+    // which also has the side effect of excluding the one-time migration's
+    // backfilled "created" entries (logged with actorId NULL).
+    const boardTaskActivity = await prisma.$queryRawUnsafe(`
+      SELECT
+        bth.id,
+        bth."boardTaskId",
+        bth.action,
+        bth.detail,
+        bth."actorName",
+        bth."actorId",
+        bth."createdAt",
+        bt.title
+      FROM "BoardTaskHistory" bth
+      JOIN "BoardTask" bt ON bt.id = bth."boardTaskId"
+      JOIN "User" u ON u.id = bth."actorId"
+      ORDER BY bth."createdAt" DESC
+      LIMIT 250
+    `).catch(() => []); // table may not exist yet if no board task has ever changed
+
+    const merged = [
+      ...reportActivity.map(r => ({ ...r, sourceType: 'report' })),
+      ...boardTaskActivity.map(b => ({ ...b, sourceType: 'boardTask' })),
+    ]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 250);
+
+    res.json(merged);
   } catch (err) {
     console.error('[Activity GET]', err.message);
     res.status(500).json({ error: 'Could not fetch activity' });

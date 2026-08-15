@@ -3,6 +3,17 @@
 // here is app-originated (no external sync source anymore), unlike the old
 // NotionTaskHistory which tracked a 'source' of 'app' vs 'notion'.
 
+const ACTION_LABELS = {
+  created: 'Card created',
+  title: 'Title changed',
+  status: 'Status changed',
+  assigned: 'Assigned',
+  tags: 'Tags updated',
+  details: 'Details updated',
+  update: 'Update value changed',
+  priority: 'Priority changed',
+};
+
 let tableReady;
 
 async function ensureBoardTaskHistoryTable(prisma) {
@@ -36,7 +47,7 @@ async function log(prisma, { boardTaskId, action, detail, actorName, actorId }) 
     await prisma.$executeRawUnsafe(`
       INSERT INTO "BoardTaskHistory" ("id", "boardTaskId", "action", "detail", "actorName", "actorId")
       VALUES ($1,$2,$3,$4,$5,$6)
-    `, require('crypto').randomUUID(), boardTaskId, action, detail || null, actorName || 'System', actorId || null);
+    `, require('crypto').randomUUID(), boardTaskId, ACTION_LABELS[action] || action, detail || null, actorName || 'System', actorId || null);
   } catch (err) {
     console.error('[BoardTaskHistory] Failed to log:', err.message);
   }

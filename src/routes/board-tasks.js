@@ -58,6 +58,21 @@ router.get('/updates', auth, requireRole('engineer', 'admin'), async (req, res) 
   }
 });
 
+// GET /api/board-tasks/:id/history — per-card activity log (who moved it,
+// edited it, etc), most recent first
+router.get('/:id/history', auth, requireRole('engineer', 'admin'), async (req, res) => {
+  try {
+    const history = await prisma.$queryRawUnsafe(
+      `SELECT * FROM "BoardTaskHistory" WHERE "boardTaskId" = $1 ORDER BY "createdAt" DESC`,
+      req.params.id
+    );
+    res.json(history);
+  } catch (err) {
+    console.error('[BoardTasks history]', err.message);
+    res.status(500).json({ error: 'Could not fetch history' });
+  }
+});
+
 // POST /api/board-tasks — create a card
 router.post('/', auth, requireRole('engineer', 'admin'), async (req, res) => {
   const { title, status, details, notionUrl, update: updateVersion, priority, assigneeIds, tags } = req.body;
