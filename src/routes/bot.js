@@ -17,6 +17,39 @@ async function ensureStatusEnumValues() {
   await prisma.$executeRawUnsafe(`ALTER TYPE "Status" ADD VALUE IF NOT EXISTS 'on_hold'`);
   statusEnumReady = true;
 }
+
+let creditColumnsReady = false;
+async function ensureCreditColumns() {
+  if (creditColumnsReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUserId" TEXT`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUser" TEXT`);
+  creditColumnsReady = true;
+}
+
+let creditRequestTableReady = false;
+async function ensureCreditRequestTable() {
+  if (creditRequestTableReady) return;
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "CreditRequest" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "reportId" TEXT NOT NULL REFERENCES "Report"(id) ON DELETE CASCADE,
+      "requestedDiscordUserId" TEXT NOT NULL,
+      "requestedDiscordUser" TEXT NOT NULL,
+      "ownerDiscordUserId" TEXT,
+      "threadId" TEXT NOT NULL,
+      "promptMessageId" TEXT,
+      "status" TEXT NOT NULL DEFAULT 'pending',
+      "resolvedByDiscordUserId" TEXT,
+      "resolvedByDiscordUser" TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "escalatedAt" TIMESTAMP(3),
+      "resolvedAt" TIMESTAMP(3)
+    )
+  `);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "CreditRequest_reportId_idx" ON "CreditRequest"("reportId")`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "CreditRequest_status_idx" ON "CreditRequest"("status")`);
+  creditRequestTableReady = true;
+}
 const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYTES || 125 * 1024 * 1024);
 
 const uploadsDir = path.join(__dirname, '../../uploads');
@@ -276,8 +309,11 @@ router.patch('/report/:id', botAuth, async (req, res) => {
 // GET /api/bot/report-by-thread/:threadId
 router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
   try {
+    await ensureCreditColumns();
     const reports = await prisma.$queryRawUnsafe(
-      'SELECT id, title, type::text AS type, status::text AS status, queued FROM "Report" WHERE "discordThreadId" = $1 ORDER BY "createdAt" DESC LIMIT 1',
+      `SELECT id, title, type::text AS type, status::text AS status, queued,
+              "discordUserId", "discordUser", "creditedDiscordUserId", "creditedDiscordUser"
+       FROM "Report" WHERE "discordThreadId" = $1 ORDER BY "createdAt" DESC LIMIT 1`,
       req.params.threadId
     );
     if (!reports.length) return res.status(404).json({ error: 'Not found' });
@@ -306,9 +342,11 @@ router.get('/report-by-message/:messageId', botAuth, async (req, res) => {
 // GET /api/bot/reports — bot fetches all reports for leaderboard
 router.get('/reports', botAuth, async (req, res) => {
   try {
+    await ensureCreditColumns();
     const reports = await prisma.$queryRaw`
       SELECT id, type::text, "bugLevel"::text, status::text,
-             "discordUser", "discordUserId", queued, "createdAt"
+             "discordUser", "discordUserId", "creditedDiscordUserId", "creditedDiscordUser",
+             queued, "createdAt"
       FROM "Report"
       WHERE queued = false
       ORDER BY "createdAt" DESC
@@ -317,6 +355,219 @@ router.get('/reports', botAuth, async (req, res) => {
   } catch (err) {
     console.error('[Bot GET /reports]', err.message);
     res.status(500).json({ error: 'Could not fetch reports' });
+  }
+});
+
+// POST /api/bot/report/:id/credit — the report owner attaches another
+// Discord user as a co-finder, so that person's leaderboard count also
+// reflects this bug. Overwrites any previously credited user.
+router.post('/report/:id/credit', botAuth, async (req, res) => {
+  const { creditedDiscordUserId, creditedDiscordUser, actorDiscordUserId, actorDiscordUser } = req.body;
+  if (!creditedDiscordUserId || !creditedDiscordUser) {
+    return res.status(400).json({ error: 'creditedDiscordUserId and creditedDiscordUser are required' });
+  }
+  try {
+    await ensureCreditColumns();
+    const rows = await prisma.$queryRawUnsafe(`SELECT id, "discordUserId" FROM "Report" WHERE id = $1`, req.params.id);
+    if (!rows.length) return res.status(404).json({ error: 'Report not found' });
+
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Report" SET "creditedDiscordUserId" = $1, "creditedDiscordUser" = $2, "updatedAt" = NOW() WHERE id = $3`,
+      creditedDiscordUserId, creditedDiscordUser, req.params.id
+    );
+
+    const { log } = require('../history-logger');
+    await log({
+      reportId: req.params.id,
+      action: 'credited',
+      detail: `${creditedDiscordUser} credited for finding this bug`,
+      actorName: actorDiscordUser || 'Discord',
+      actorId: actorDiscordUserId || '',
+    });
+
+    const fresh = await prisma.$queryRawUnsafe(`
+      SELECT r.*,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
+      FROM "Report" r
+      LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
+      LEFT JOIN "User" u ON u.id = ar."B"
+      LEFT JOIN "Attachment" a ON a."reportId" = r.id
+      WHERE r.id = $1
+      GROUP BY r.id
+    `, req.params.id);
+    broadcastReport('report.updated', fresh[0]);
+    res.json({ success: true, report: fresh[0] });
+  } catch (err) {
+    console.error('[Bot POST /report/:id/credit]', err.message);
+    res.status(500).json({ error: 'Could not credit report' });
+  }
+});
+
+// POST /api/bot/credit-request — creates a pending credit request
+router.post('/credit-request', botAuth, async (req, res) => {
+  const { reportId, requestedDiscordUserId, requestedDiscordUser, ownerDiscordUserId, threadId } = req.body;
+  if (!reportId || !requestedDiscordUserId || !requestedDiscordUser || !threadId) {
+    return res.status(400).json({ error: 'reportId, requestedDiscordUserId, requestedDiscordUser, and threadId are required' });
+  }
+  try {
+    await ensureCreditRequestTable();
+    const id = require('crypto').randomUUID();
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO "CreditRequest" ("id", "reportId", "requestedDiscordUserId", "requestedDiscordUser", "ownerDiscordUserId", "threadId")
+      VALUES ($1,$2,$3,$4,$5,$6)
+    `, id, reportId, requestedDiscordUserId, requestedDiscordUser, ownerDiscordUserId || null, threadId);
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, id);
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error('[Bot POST /credit-request]', err.message);
+    res.status(500).json({ error: 'Could not create credit request' });
+  }
+});
+
+// GET /api/bot/credit-request/existing — check for an already-pending/
+// escalated request from this user on this report, to avoid duplicates
+router.get('/credit-request/existing', botAuth, async (req, res) => {
+  const { reportId, requestedDiscordUserId } = req.query;
+  if (!reportId || !requestedDiscordUserId) {
+    return res.status(400).json({ error: 'reportId and requestedDiscordUserId are required' });
+  }
+  try {
+    await ensureCreditRequestTable();
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT * FROM "CreditRequest" WHERE "reportId" = $1 AND "requestedDiscordUserId" = $2 AND status IN ('pending','escalated') ORDER BY "createdAt" DESC LIMIT 1`,
+      reportId, requestedDiscordUserId
+    );
+    res.json(rows[0] || null);
+  } catch (err) {
+    console.error('[Bot GET /credit-request/existing]', err.message);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+// GET /api/bot/credit-request/:id
+router.get('/credit-request/:id', botAuth, async (req, res) => {
+  try {
+    await ensureCreditRequestTable();
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, req.params.id);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[Bot GET /credit-request/:id]', err.message);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+// PATCH /api/bot/credit-request/:id — currently only used to record the
+// posted prompt message's id so later steps can reference/edit it
+router.patch('/credit-request/:id', botAuth, async (req, res) => {
+  const { promptMessageId } = req.body;
+  try {
+    await ensureCreditRequestTable();
+    if (promptMessageId !== undefined) {
+      await prisma.$executeRawUnsafe(`UPDATE "CreditRequest" SET "promptMessageId" = $1 WHERE id = $2`, promptMessageId, req.params.id);
+    }
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, req.params.id);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[Bot PATCH /credit-request/:id]', err.message);
+    res.status(500).json({ error: 'Could not update credit request' });
+  }
+});
+
+// POST /api/bot/credit-request/:id/approve — marks the request approved
+// and applies credit to the linked report in one step
+router.post('/credit-request/:id/approve', botAuth, async (req, res) => {
+  const { resolvedByDiscordUserId, resolvedByDiscordUser } = req.body;
+  try {
+    await ensureCreditRequestTable();
+    await ensureCreditColumns();
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, req.params.id);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const request = rows[0];
+    if (request.status === 'approved' || request.status === 'denied') {
+      return res.status(409).json({ error: `Request already ${request.status}`, request });
+    }
+
+    await prisma.$executeRawUnsafe(
+      `UPDATE "CreditRequest" SET status = 'approved', "resolvedByDiscordUserId" = $1, "resolvedByDiscordUser" = $2, "resolvedAt" = NOW() WHERE id = $3`,
+      resolvedByDiscordUserId || null, resolvedByDiscordUser || null, req.params.id
+    );
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Report" SET "creditedDiscordUserId" = $1, "creditedDiscordUser" = $2, "updatedAt" = NOW() WHERE id = $3`,
+      request.requestedDiscordUserId, request.requestedDiscordUser, request.reportId
+    );
+
+    const { log } = require('../history-logger');
+    await log({
+      reportId: request.reportId,
+      action: 'credited',
+      detail: `${request.requestedDiscordUser} credited for finding this bug (approved by ${resolvedByDiscordUser || 'unknown'})`,
+      actorName: resolvedByDiscordUser || 'Discord',
+      actorId: resolvedByDiscordUserId || '',
+    });
+
+    const fresh = await prisma.$queryRawUnsafe(`
+      SELECT r.*,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
+        COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
+      FROM "Report" r
+      LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
+      LEFT JOIN "User" u ON u.id = ar."B"
+      LEFT JOIN "Attachment" a ON a."reportId" = r.id
+      WHERE r.id = $1
+      GROUP BY r.id
+    `, request.reportId);
+    broadcastReport('report.updated', fresh[0]);
+
+    const updated = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, req.params.id);
+    res.json({ success: true, request: updated[0] });
+  } catch (err) {
+    console.error('[Bot POST /credit-request/:id/approve]', err.message);
+    res.status(500).json({ error: 'Could not approve credit request' });
+  }
+});
+
+// POST /api/bot/credit-request/:id/deny
+router.post('/credit-request/:id/deny', botAuth, async (req, res) => {
+  const { resolvedByDiscordUserId, resolvedByDiscordUser } = req.body;
+  try {
+    await ensureCreditRequestTable();
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, req.params.id);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const request = rows[0];
+    if (request.status === 'approved' || request.status === 'denied') {
+      return res.status(409).json({ error: `Request already ${request.status}`, request });
+    }
+    await prisma.$executeRawUnsafe(
+      `UPDATE "CreditRequest" SET status = 'denied', "resolvedByDiscordUserId" = $1, "resolvedByDiscordUser" = $2, "resolvedAt" = NOW() WHERE id = $3`,
+      resolvedByDiscordUserId || null, resolvedByDiscordUser || null, req.params.id
+    );
+    const updated = await prisma.$queryRawUnsafe(`SELECT * FROM "CreditRequest" WHERE id = $1`, req.params.id);
+    res.json({ success: true, request: updated[0] });
+  } catch (err) {
+    console.error('[Bot POST /credit-request/:id/deny]', err.message);
+    res.status(500).json({ error: 'Could not deny credit request' });
+  }
+});
+
+// POST /api/bot/credit-requests/escalate-stale — atomically flips any
+// still-pending request older than 12h to 'escalated' and returns them,
+// so the bot can ping Senior Testers exactly once per request.
+router.post('/credit-requests/escalate-stale', botAuth, async (req, res) => {
+  try {
+    await ensureCreditRequestTable();
+    const rows = await prisma.$queryRawUnsafe(`
+      UPDATE "CreditRequest"
+      SET status = 'escalated', "escalatedAt" = NOW()
+      WHERE status = 'pending' AND "createdAt" < NOW() - INTERVAL '12 hours'
+      RETURNING *
+    `);
+    res.json(rows);
+  } catch (err) {
+    console.error('[Bot POST /credit-requests/escalate-stale]', err.message);
+    res.status(500).json({ error: 'Could not escalate credit requests' });
   }
 });
 

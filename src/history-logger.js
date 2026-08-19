@@ -21,6 +21,7 @@ const ACTION_LABELS = {
   unflagged: 'Unflagged',
   archived: 'Archived',
   unarchived: 'Unarchived',
+  credited: 'Credit given',
 };
 
 async function log({ reportId, action, detail, actorName, actorId }) {

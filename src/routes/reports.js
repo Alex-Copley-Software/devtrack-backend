@@ -38,6 +38,15 @@ async function ensureCategoryColumn() {
   categoryColumnReady = true;
 }
 
+let creditColumnsReady = false;
+
+async function ensureCreditColumns() {
+  if (creditColumnsReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUserId" TEXT`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUser" TEXT`);
+  creditColumnsReady = true;
+}
+
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -195,6 +204,7 @@ router.get('/', auth, async (req, res) => {
   try {
     if (status !== undefined) await ensureStatusEnumValues();
     if (category !== undefined) await ensureCategoryColumn();
+    await ensureCreditColumns();
     const whereClauses = [];
     const vals = [];
     let idx = 1;
