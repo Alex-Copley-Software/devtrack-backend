@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
   );
   console.log('Report credit columns:', cols);
 
-  const tbl = await prisma.$queryRawUnsafe(`SELECT to_regclass('public."CreditRequest"') AS exists`);
+  const tbl = await prisma.$queryRawUnsafe(`SELECT to_regclass('public."CreditRequest"')::text AS exists`);
   console.log('CreditRequest table:', tbl);
 
   process.exit(0);
