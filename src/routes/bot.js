@@ -50,6 +50,39 @@ async function ensureCreditRequestTable() {
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "CreditRequest_status_idx" ON "CreditRequest"("status")`);
   creditRequestTableReady = true;
 }
+let reportPauseReady = false;
+async function ensureReportPauseTables() {
+  if (reportPauseReady) return;
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ReportPauseState" (
+      "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'singleton',
+      "paused" BOOLEAN NOT NULL DEFAULT false,
+      "pausedAt" TIMESTAMP(3),
+      "pausedByName" TEXT,
+      "pausedById" TEXT,
+      "resumedAt" TIMESTAMP(3),
+      "resumedByName" TEXT,
+      "resumedById" TEXT
+    )
+  `);
+  await prisma.$executeRawUnsafe(`INSERT INTO "ReportPauseState" ("id") VALUES ('singleton') ON CONFLICT ("id") DO NOTHING`);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "PausedReportAttempt" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "threadId" TEXT NOT NULL,
+      "channelId" TEXT,
+      "discordUserId" TEXT,
+      "discordUser" TEXT,
+      "title" TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "pinged" BOOLEAN NOT NULL DEFAULT false,
+      "pingedAt" TIMESTAMP(3)
+    )
+  `);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "PausedReportAttempt_pinged_idx" ON "PausedReportAttempt"("pinged")`);
+  reportPauseReady = true;
+}
+
 const MAX_REMOTE_ATTACHMENT_BYTES = Number(process.env.MAX_REMOTE_ATTACHMENT_BYTES || 125 * 1024 * 1024);
 
 const uploadsDir = path.join(__dirname, '../../uploads');
@@ -568,6 +601,62 @@ router.post('/credit-requests/escalate-stale', botAuth, async (req, res) => {
   } catch (err) {
     console.error('[Bot POST /credit-requests/escalate-stale]', err.message);
     res.status(500).json({ error: 'Could not escalate credit requests' });
+  }
+});
+
+// GET /api/bot/report-pause-status — bot syncs this once on startup, and
+// receives live updates via the /reports-pause-state webhook after that
+router.get('/report-pause-status', botAuth, async (req, res) => {
+  try {
+    await ensureReportPauseTables();
+    const rows = await prisma.$queryRawUnsafe(`SELECT paused FROM "ReportPauseState" WHERE id = 'singleton'`);
+    res.json({ paused: rows[0]?.paused || false });
+  } catch (err) {
+    console.error('[Bot GET /report-pause-status]', err.message);
+    res.status(500).json({ error: 'Could not fetch pause status' });
+  }
+});
+
+// POST /api/bot/report-pause/attempt — bot registers a thread that tried to
+// report while paused, so it can be pinged once reports resume
+router.post('/report-pause/attempt', botAuth, async (req, res) => {
+  const { threadId, channelId, discordUserId, discordUser, title } = req.body;
+  if (!threadId) return res.status(400).json({ error: 'threadId is required' });
+  try {
+    await ensureReportPauseTables();
+    const id = require('crypto').randomUUID();
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "PausedReportAttempt" ("id","threadId","channelId","discordUserId","discordUser","title") VALUES ($1,$2,$3,$4,$5,$6)`,
+      id, threadId, channelId || null, discordUserId || null, discordUser || null, title || null
+    );
+    res.status(201).json({ success: true, id });
+  } catch (err) {
+    console.error('[Bot POST /report-pause/attempt]', err.message);
+    res.status(500).json({ error: 'Could not register paused attempt' });
+  }
+});
+
+// GET /api/bot/report-pause/pending — un-pinged attempts, for the resume sweep
+router.get('/report-pause/pending', botAuth, async (req, res) => {
+  try {
+    await ensureReportPauseTables();
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "PausedReportAttempt" WHERE pinged = false ORDER BY "createdAt" ASC`);
+    res.json(rows);
+  } catch (err) {
+    console.error('[Bot GET /report-pause/pending]', err.message);
+    res.status(500).json({ error: 'Could not fetch pending attempts' });
+  }
+});
+
+// POST /api/bot/report-pause/pending/:id/mark-pinged
+router.post('/report-pause/pending/:id/mark-pinged', botAuth, async (req, res) => {
+  try {
+    await ensureReportPauseTables();
+    await prisma.$executeRawUnsafe(`UPDATE "PausedReportAttempt" SET pinged = true, "pingedAt" = NOW() WHERE id = $1`, req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[Bot POST /report-pause/pending/:id/mark-pinged]', err.message);
+    res.status(500).json({ error: 'Could not mark attempt pinged' });
   }
 });
 

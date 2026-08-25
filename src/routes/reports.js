@@ -47,6 +47,40 @@ async function ensureCreditColumns() {
   creditColumnsReady = true;
 }
 
+let reportPauseReady = false;
+
+async function ensureReportPauseTables() {
+  if (reportPauseReady) return;
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ReportPauseState" (
+      "id" TEXT NOT NULL PRIMARY KEY DEFAULT 'singleton',
+      "paused" BOOLEAN NOT NULL DEFAULT false,
+      "pausedAt" TIMESTAMP(3),
+      "pausedByName" TEXT,
+      "pausedById" TEXT,
+      "resumedAt" TIMESTAMP(3),
+      "resumedByName" TEXT,
+      "resumedById" TEXT
+    )
+  `);
+  await prisma.$executeRawUnsafe(`INSERT INTO "ReportPauseState" ("id") VALUES ('singleton') ON CONFLICT ("id") DO NOTHING`);
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "PausedReportAttempt" (
+      "id" TEXT NOT NULL PRIMARY KEY,
+      "threadId" TEXT NOT NULL,
+      "channelId" TEXT,
+      "discordUserId" TEXT,
+      "discordUser" TEXT,
+      "title" TEXT,
+      "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "pinged" BOOLEAN NOT NULL DEFAULT false,
+      "pingedAt" TIMESTAMP(3)
+    )
+  `);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "PausedReportAttempt_pinged_idx" ON "PausedReportAttempt"("pinged")`);
+  reportPauseReady = true;
+}
+
 const uploadsDir = path.join(__dirname, '../../uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -302,6 +336,58 @@ router.get('/similar', auth, async (req, res) => {
   } catch (err) {
     console.error('[Similar]', err.message);
     res.status(500).json({ error: 'Could not search similar' });
+  }
+});
+
+// GET /api/reports/pause-status — is the bug queue currently paused, and by
+// whom, plus how many Discord threads are waiting to be pinged on resume
+router.get('/pause-status', auth, async (req, res) => {
+  try {
+    await ensureReportPauseTables();
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "ReportPauseState" WHERE id = 'singleton'`);
+    const pending = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS count FROM "PausedReportAttempt" WHERE pinged = false`);
+    res.json({ ...(rows[0] || { paused: false }), pendingCount: pending[0]?.count || 0 });
+  } catch (err) {
+    console.error('[Reports pause-status GET]', err.message);
+    res.status(500).json({ error: 'Could not fetch pause status' });
+  }
+});
+
+// POST /api/reports/pause — stop new Discord bug reports from entering the
+// queue; the bot posts a "reports are paused" notice instead of logging a ticket
+router.post('/pause', auth, requireRole('admin', 'engineer'), async (req, res) => {
+  try {
+    await ensureReportPauseTables();
+    await prisma.$executeRawUnsafe(
+      `UPDATE "ReportPauseState" SET paused = true, "pausedAt" = NOW(), "pausedByName" = $1, "pausedById" = $2 WHERE id = 'singleton'`,
+      req.user.name, req.user.id
+    );
+    const { notifyReportPauseState } = require('../discord-notifier');
+    notifyReportPauseState(true).catch(err => console.error('[Reports pause]', err.message));
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "ReportPauseState" WHERE id = 'singleton'`);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[Reports pause POST]', err.message);
+    res.status(500).json({ error: 'Could not pause reports' });
+  }
+});
+
+// POST /api/reports/resume — re-enable Discord bug report intake and ping
+// every thread that tried to report while paused
+router.post('/resume', auth, requireRole('admin', 'engineer'), async (req, res) => {
+  try {
+    await ensureReportPauseTables();
+    await prisma.$executeRawUnsafe(
+      `UPDATE "ReportPauseState" SET paused = false, "resumedAt" = NOW(), "resumedByName" = $1, "resumedById" = $2 WHERE id = 'singleton'`,
+      req.user.name, req.user.id
+    );
+    const { notifyReportPauseState } = require('../discord-notifier');
+    notifyReportPauseState(false).catch(err => console.error('[Reports resume]', err.message));
+    const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "ReportPauseState" WHERE id = 'singleton'`);
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[Reports resume POST]', err.message);
+    res.status(500).json({ error: 'Could not resume reports' });
   }
 });
 

@@ -82,4 +82,16 @@ async function notifyTesters() {
   }
 }
 
-module.exports = { notify, alert, importStatus, patchFixNotice, notifyTesters };
+async function notifyReportPauseState(paused) {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/reports-pause-state`, { paused }, {
+      headers: { 'x-bot-secret': BOT_SECRET },
+      timeout: 5000,
+    });
+    console.log(`[Notifier] Report pause state sent: ${paused}`);
+  } catch (err) {
+    console.error('[Notifier] Failed to send report pause state:', err.message);
+  }
+}
+
+module.exports = { notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState };
