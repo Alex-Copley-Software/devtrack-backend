@@ -19,6 +19,16 @@ async function ensureStatusEnumValues() {
   statusEnumReady = true;
 }
 
+let bugLevelEnumReady = false;
+
+async function ensureBugLevelEnumValues() {
+  if (bugLevelEnumReady) return;
+  // Placed below 'minor' — it's a step lower in severity, tracked on the
+  // leaderboard but excluded from the reporter's total count.
+  await prisma.$executeRawUnsafe(`ALTER TYPE "BugLevel" ADD VALUE IF NOT EXISTS 'insignificant' BEFORE 'minor'`);
+  bugLevelEnumReady = true;
+}
+
 let archiveColumnsReady = false;
 
 async function ensureArchiveColumns() {
@@ -238,6 +248,7 @@ router.get('/', auth, async (req, res) => {
   try {
     if (status !== undefined) await ensureStatusEnumValues();
     if (category !== undefined) await ensureCategoryColumn();
+    if (bugLevel !== undefined) await ensureBugLevelEnumValues();
     await ensureCreditColumns();
     const whereClauses = [];
     const vals = [];
@@ -450,6 +461,7 @@ router.patch('/:id', auth, async (req, res) => {
     // Build raw SQL SET clauses — fully bypasses Prisma enum validation
     if (status !== undefined) await ensureStatusEnumValues();
     if (category !== undefined) await ensureCategoryColumn();
+    if (bugLevel !== undefined) await ensureBugLevelEnumValues();
 
     const [existingReport] = await fetchReports(['r.id = $1'], [id]);
     if (!existingReport) return res.status(404).json({ error: 'Report not found' });
@@ -574,17 +586,21 @@ router.post('/:id/accept', auth, requireRole('admin', 'qa', 'engineer'), async (
   const { bugLevel, assigneeIds, devNotes, priority, category } = req.body;
   try {
     await ensureCategoryColumn();
+    await ensureBugLevelEnumValues();
     await prisma.report.update({
       where: { id: req.params.id },
       data: {
         queued:    false,
         status:    'open',
-        bugLevel:  bugLevel || null,
         devNotes:  devNotes || null,
         priority:  priority || 'medium',
         assignees: assigneeIds?.length ? { set: assigneeIds.map(id => ({ id })) } : undefined
       },
     });
+    // Raw SQL, not the Prisma-typed field above — bypasses the generated
+    // client's enum validation, which won't know about a newly added enum
+    // value (like 'insignificant') until `prisma generate` runs again.
+    await prisma.$executeRawUnsafe(`UPDATE "Report" SET "bugLevel" = $1::"BugLevel" WHERE id = $2`, bugLevel || null, req.params.id);
     if (category !== undefined) {
       await prisma.$executeRawUnsafe(`UPDATE "Report" SET category = $1 WHERE id = $2`, category || null, req.params.id);
     }

@@ -151,6 +151,7 @@ enum Priority {
 }
 
 enum BugLevel {
+  insignificant
   minor
   moderate
   major
