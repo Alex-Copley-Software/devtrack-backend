@@ -662,6 +662,26 @@ async function updateDev(ctx, id, data) {
   return (await q.listDevs(prisma)).find(d => d.id === id);
 }
 
+// Takes someone off the roster for good. Their tasks stay, unassigned, with
+// each unassignment in the log; updates they led and items they owned keep
+// their name as plain text. Past log entries keep the name too.
+async function deleteDev(ctx, id) {
+  const { prisma } = ctx;
+  const dev = await devExists(prisma, id);
+  if (!dev) throw missing('Dev');
+  const assigned = await prisma.$queryRawUnsafe(`SELECT id FROM "AssetTask" WHERE "assigneeDevId" = $1`, id);
+  if (assigned.length) await applyTaskPatches(ctx, assigned.map(t => ({ id: t.id, patch: { assigneeDevId: null } })));
+  await prisma.$executeRawUnsafe(`UPDATE "AssetUpdate" SET "leadName" = $2, "leadDevId" = NULL WHERE "leadDevId" = $1`, id, dev.name);
+  await prisma.$executeRawUnsafe(`UPDATE "AssetContentItem" SET "ownerName" = $2, "ownerDevId" = NULL WHERE "ownerDevId" = $1`, id, dev.name);
+  await prisma.$executeRawUnsafe(`DELETE FROM "AssetDev" WHERE id = $1`, id);
+  await logActivity(ctx, [{
+    entityType: 'dev', entityId: id, action: 'deleted',
+    label: `${dev.name} removed from the roster${assigned.length ? ` (${assigned.length} task${assigned.length === 1 ? '' : 's'} unassigned)` : ''}`,
+  }]);
+  notify(ctx, { kind: 'devs' });
+  return { removed: dev.name, tasksUnassigned: assigned.length };
+}
+
 async function addDiscipline(ctx, name) {
   const { prisma } = ctx;
   const value = clean(name);
@@ -682,5 +702,5 @@ module.exports = {
   applyTaskPatches, updateTask, updateTasks, appendTaskNote,
   createContentType, updateContentType,
   createTemplate, updateTemplate, reorderTemplates, previewTemplateImpact,
-  createDev, updateDev, addDiscipline,
+  createDev, updateDev, deleteDev, addDiscipline,
 };

@@ -222,6 +222,11 @@ router.patch('/devs/:id', h(req => {
   return service.updateDev(req.ctx, req.params.id, req.body);
 }));
 
+router.delete('/devs/:id', h(req => {
+  if (!perms.canEditRoster(req.access)) throw forbidden();
+  return service.deleteDev(req.ctx, req.params.id);
+}));
+
 // ── templates (admin) ────────────────────────────────────────────────────────
 
 router.post('/content-types', h(async (req, res) => {

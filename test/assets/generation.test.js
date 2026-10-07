@@ -119,3 +119,20 @@ test('a blocked task needs a reason, and the reason goes when the block does', a
   const cleared = await service.updateTask(ctx, task.id, { status: 'In Progress' });
   assert.deepEqual([cleared.status, cleared.blockedReason], ['In Progress', null]);
 });
+
+test('removing a dev unassigns their tasks, keeps their name on what they led, and logs it', async () => {
+  const prisma = await createTestDb();
+  const { ctx, aizen, ani, bee, update } = await seedBasics(prisma);
+  const [task] = await q.listTasks(prisma, { contentItemId: aizen.id });
+  await service.updateTask(ctx, task.id, { assigneeDevId: ani.id, status: 'In Progress' });
+  assert.deepEqual(await service.deleteDev(ctx, ani.id), { removed: 'Ani', tasksUnassigned: 1 });
+  const [after] = await q.listTasks(prisma, { ids: [task.id] });
+  assert.deepEqual([after.assigneeDevId, after.status], [null, 'In Progress']);
+  await service.deleteDev(ctx, bee.id);
+  const lead = (await q.listUpdates(prisma)).find(u => u.id === update.id);
+  assert.deepEqual([lead.leadDevId, lead.leadName], [null, 'MrBee']);
+  assert.deepEqual((await q.listDevs(prisma)).map(d => d.name), []);
+  const log = await prisma.$queryRawUnsafe(`SELECT label FROM "AssetActivity" WHERE action = 'deleted' ORDER BY "createdAt"`);
+  assert.equal(log[0].label, 'Ani removed from the roster (1 task unassigned)');
+  await assert.rejects(service.deleteDev(ctx, ani.id), /not found/i);
+});
