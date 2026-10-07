@@ -89,11 +89,13 @@ async function filter(batchText) {
   const model = FILTER_MODEL();
   const message = await getClient().messages.create({
     model,
-    max_tokens: 16,
+    max_tokens: 32,
     system: loadPrompt('filter'),
     messages: [{ role: 'user', content: batchText }],
   }, { timeout: REQUEST_TIMEOUT_MS });
-  assertUsable(message);
+  // Only the first word matters here. If the model starts explaining itself
+  // and is cut off, that is still an answer, not a failure.
+  if (message.stop_reason !== 'max_tokens') assertUsable(message);
   const answer = message.content.filter(b => b.type === 'text').map(b => b.text).join(' ').trim().toUpperCase();
   // Anything that is not a clear SKIP goes on to the careful pass.
   return { relevant: !answer.startsWith('SKIP'), model, usage: message.usage };
