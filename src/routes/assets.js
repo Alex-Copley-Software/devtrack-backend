@@ -259,4 +259,7 @@ router.delete('/views/:id', h(async req => {
   await req.prisma.$executeRawUnsafe(`DELETE FROM "AssetSavedView" WHERE id = $1 AND "userId" = $2`, req.params.id, req.user.id);
 }));
 
+// Suggestions inbox and agent settings.
+require('./assets-agent')(router, h);
+
 module.exports = router;

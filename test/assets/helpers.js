@@ -9,9 +9,11 @@ const q = require('../../src/assets/queries');
 async function createTestDb() {
   const pg = new PGlite();
   await pg.exec(`SET TIME ZONE 'UTC'`); // match production, where timestamps are stored in UTC
+  // Read TIMESTAMP columns (type 1114) as UTC, the way Prisma does. PGlite's default reads them as local time.
+  const parsers = { 1114: value => new Date(`${value.replace(' ', 'T')}Z`) };
   const prisma = {
-    $queryRawUnsafe: async (sql, ...values) => (await pg.query(sql, values)).rows,
-    $executeRawUnsafe: async (sql, ...values) => (await pg.query(sql, values)).affectedRows ?? 0,
+    $queryRawUnsafe: async (sql, ...values) => (await pg.query(sql, values, { parsers })).rows,
+    $executeRawUnsafe: async (sql, ...values) => (await pg.query(sql, values, { parsers })).affectedRows ?? 0,
     close: () => pg.close(),
   };
   // The only pre-existing table the asset schema references.

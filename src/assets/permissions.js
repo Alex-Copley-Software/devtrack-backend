@@ -9,9 +9,8 @@
 
 const DEV_EDITABLE_TASK_FIELDS = ['status', 'dueDate', 'notes'];
 
-function resolveAccess(user, { devs = [], updates = [] } = {}) {
-  const role = user?.role || '';
-  const dev = devs.find(d => d.userId && d.userId === user?.id) || null;
+// role: DevTrack role of the login, if any. dev: the roster entry, if any.
+function accessFor({ role = '', dev = null, updates = [] }) {
   const isAdmin = role === 'owner' || role === 'admin';
   const hasManagerDiscipline = !!dev && [dev.discipline, dev.secondaryDiscipline, ...(dev.disciplines || [])].includes('Manager');
   const isManager = isAdmin || role === 'engineer' || hasManagerDiscipline;
@@ -23,6 +22,12 @@ function resolveAccess(user, { devs = [], updates = [] } = {}) {
     devId: dev?.id || null,
     leadUpdateIds,
   };
+}
+
+// For a signed-in DevTrack user: the roster dev linked to that login, if any.
+function resolveAccess(user, { devs = [], updates = [] } = {}) {
+  const dev = devs.find(d => d.userId && d.userId === user?.id) || null;
+  return accessFor({ role: user?.role || '', dev, updates });
 }
 
 function canManageUpdate(access, updateId) {
@@ -43,6 +48,7 @@ const canResolveSuggestion = (access, updateId) => canManageUpdate(access, updat
 
 module.exports = {
   DEV_EDITABLE_TASK_FIELDS,
+  accessFor,
   resolveAccess,
   canManageUpdate,
   canEditTask,

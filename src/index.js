@@ -51,6 +51,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/bot/assets', require('./routes/bot-assets'));
 app.use('/api/bot', botRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/history', historyRoutes);
