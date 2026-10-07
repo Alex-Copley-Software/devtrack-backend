@@ -31,14 +31,14 @@ async function allowedChannelIds(prisma) {
 // ── ingest ───────────────────────────────────────────────────────────────────
 
 // Stores only what the agent needs. Anything from a channel that is not on
-// the allowlist (directly, or as the parent of a thread) is discarded, even
-// if the bot sent it.
+// the allowlist (directly, as the parent of a thread, or through its
+// category) is discarded, even if the bot sent it.
 async function ingestMessages(prisma, messages) {
   const allowed = await allowedChannelIds(prisma);
   let stored = 0;
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || !/^\d{5,25}$/.test(String(m.id || '')) || !m.channelId || !m.authorDiscordId) continue;
-    if (!allowed.has(String(m.channelId)) && !allowed.has(String(m.parentChannelId || ''))) continue;
+    if (![m.channelId, m.parentChannelId, m.categoryId].some(id => id && allowed.has(String(id)))) continue;
     const postedAt = new Date(m.postedAt || Date.now());
     if (Number.isNaN(postedAt.getTime())) continue;
     const attachments = (Array.isArray(m.attachments) ? m.attachments : []).slice(0, 10)
@@ -46,11 +46,11 @@ async function ingestMessages(prisma, messages) {
     const content = String(m.content || '').slice(0, MAX_CONTENT);
     if (!content.trim() && !attachments.length) continue;
     stored += await prisma.$executeRawUnsafe(`
-      INSERT INTO "AssetAgentMessage" ("id", "channelId", "parentChannelId", "guildId", "authorDiscordId", "authorName", "content", "attachments", "postedAt")
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz)
+      INSERT INTO "AssetAgentMessage" ("id", "channelId", "parentChannelId", "guildId", "authorDiscordId", "authorName", "content", "attachments", "postedAt", "categoryId")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::timestamptz, $10)
       ON CONFLICT ("id") DO NOTHING
     `, String(m.id), String(m.channelId), m.parentChannelId ? String(m.parentChannelId) : null, m.guildId ? String(m.guildId) : null,
-    String(m.authorDiscordId), String(m.authorName || '').slice(0, 100), content, JSON.stringify(attachments), postedAt.toISOString());
+    String(m.authorDiscordId), String(m.authorName || '').slice(0, 100), content, JSON.stringify(attachments), postedAt.toISOString(), m.categoryId ? String(m.categoryId) : null);
   }
   return stored;
 }

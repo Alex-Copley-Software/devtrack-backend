@@ -149,7 +149,9 @@ message in an allowlisted channel
 **Discord setup.** The bot needs the Message Content privileged intent,
 which it already has for logging report threads. Nothing outside the
 allowlist is read or stored; a thread is covered when its parent channel is
-listed. Add channels under **Agent settings** by ID (Discord settings,
+listed. A category ID works too: every channel, forum and forum post under
+that category is read, including ones created later. Add channels or
+categories under **Agent settings** by ID (Discord settings,
 Advanced, Developer Mode; then right-click a channel, Copy Channel ID). The
 bot picks up allowlist changes within two minutes.
 

@@ -83,7 +83,7 @@ module.exports = function registerAgentRoutes(router, h) {
   router.post('/agent/channels', h(async (req, res) => {
     requireAdmin(req);
     const channelId = String(req.body.channelId || '').trim();
-    if (!/^\d{17,20}$/.test(channelId)) throw new AssetError(400, 'Enter a Discord channel ID (17 to 20 digits). Right-click the channel in Discord and choose Copy Channel ID.');
+    if (!/^\d{17,20}$/.test(channelId)) throw new AssetError(400, 'Enter a Discord channel or category ID (17 to 20 digits). Right-click the channel in Discord and choose Copy Channel ID.');
     await req.prisma.$executeRawUnsafe(`
       INSERT INTO "AssetAgentChannel" ("channelId", "label", "addedByName") VALUES ($1, $2, $3)
       ON CONFLICT ("channelId") DO UPDATE SET label = EXCLUDED.label, enabled = true
@@ -108,7 +108,7 @@ module.exports = function registerAgentRoutes(router, h) {
     requireAdmin(req);
     await req.prisma.$executeRawUnsafe(`DELETE FROM "AssetAgentChannel" WHERE "channelId" = $1`, req.params.id);
     await req.prisma.$executeRawUnsafe(
-      `DELETE FROM "AssetAgentMessage" WHERE "batchId" IS NULL AND ("channelId" = $1 OR "parentChannelId" = $1)`, req.params.id);
+      `DELETE FROM "AssetAgentMessage" WHERE "batchId" IS NULL AND ("channelId" = $1 OR "parentChannelId" = $1 OR "categoryId" = $1)`, req.params.id);
     return { channels: await pipeline.listChannels(req.prisma) };
   }));
 };

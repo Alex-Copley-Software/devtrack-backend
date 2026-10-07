@@ -45,8 +45,8 @@ async function setup() {
 }
 
 // minutesAgo defaults to 10 so the conversation counts as "gone quiet".
-const say = (authorDiscordId, content, { minutesAgo = 10, channelId = CHANNEL, parentChannelId } = {}) => ({
-  id: String(nextMessageId++), channelId, parentChannelId, guildId: '900', authorDiscordId, authorName: 'someone', content,
+const say = (authorDiscordId, content, { minutesAgo = 10, channelId = CHANNEL, parentChannelId, categoryId } = {}) => ({
+  id: String(nextMessageId++), channelId, parentChannelId, categoryId, guildId: '900', authorDiscordId, authorName: 'someone', content,
   postedAt: new Date(Date.now() - minutesAgo * 60000).toISOString(),
 });
 
@@ -101,10 +101,11 @@ test('only allowlisted channels (or threads under them) are stored', async () =>
   const stored = await pipeline.ingestMessages(prisma, [
     say(ANI, 'in the allowlisted channel'),
     say(ANI, 'in a thread under it', { channelId: '500000000000000099', parentChannelId: CHANNEL }),
-    say(ANI, 'somewhere else entirely', { channelId: '500000000000000002' }),
+    say(ANI, 'a forum post in an allowlisted category', { channelId: '500000000000000098', parentChannelId: '500000000000000097', categoryId: CHANNEL }),
+    say(ANI, 'somewhere else entirely', { channelId: '500000000000000002', categoryId: '500000000000000003' }),
     say(ANI, '   '),
   ]);
-  assert.equal(stored, 2);
+  assert.equal(stored, 3);
   const again = say(ANI, 'same id twice');
   assert.equal(await pipeline.ingestMessages(prisma, [again, again]), 1);
 });

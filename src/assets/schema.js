@@ -243,6 +243,8 @@ async function ensureAssetSchema(prisma) {
       for (const sql of TABLES) await prisma.$executeRawUnsafe(sql);
       // Update numbers were whole numbers at first; the real tracker has 3.5.
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetUpdate" ALTER COLUMN "number" TYPE DOUBLE PRECISION`);
+      // Lets a whole Discord category be allowlisted, not just single channels.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetAgentMessage" ADD COLUMN IF NOT EXISTS "categoryId" TEXT`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();
