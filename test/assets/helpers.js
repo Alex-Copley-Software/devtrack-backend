@@ -8,6 +8,7 @@ const q = require('../../src/assets/queries');
 
 async function createTestDb() {
   const pg = new PGlite();
+  await pg.exec(`SET TIME ZONE 'UTC'`); // match production, where timestamps are stored in UTC
   const prisma = {
     $queryRawUnsafe: async (sql, ...values) => (await pg.query(sql, values)).rows,
     $executeRawUnsafe: async (sql, ...values) => (await pg.query(sql, values)).affectedRows ?? 0,
