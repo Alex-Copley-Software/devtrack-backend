@@ -200,3 +200,26 @@ and unmapped rows and writes nothing. Optional nightly export to a
 10. **Tests** use Node's built-in runner, with PGlite (in-process Postgres)
     as a dev dependency so the real SQL is exercised without a database
     server. Nothing in production depends on it.
+
+Found while building:
+
+11. **Slash command shape.** Discord does not allow a bare word like `mine`
+    alongside top-level options, so `/assets` uses subcommands:
+    `/assets update [number]`, `/assets mine`, `/assets item name:`,
+    `/assets task id: status:`.
+12. **Tool calling on the extraction model.** `claude-sonnet-5-5` rejects a
+    forced `tool_choice`, so the extraction pass sends `tool_choice: auto`
+    with a `strict: true` tool, asks for the call in the prompt, and retries
+    once if no call comes back. The schema guarantee is the same; every
+    action is validated in code regardless.
+13. **Model declines.** If the model declines a batch (rare for this
+    content), the batch is marked failed and skipped. A server-side fallback
+    model was not added, because it needs a newer SDK than the one the
+    existing team-report features run on; upgrading that is a separate change.
+14. **Batch timing.** The bot polls once a minute, so a conversation is
+    picked up within a minute of going quiet for 3, not at exactly 3.
+15. **Never auto-applied.** `flag_unknown` joins `create_content_item` on the
+    list that always waits for a person, since accepting one changes nothing.
+16. **Item fields that cannot change.** An item's content type and update are
+    fixed after creation, because its tasks come from that type's template.
+    Archive it and create a new one instead.
