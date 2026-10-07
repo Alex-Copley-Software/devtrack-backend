@@ -5,25 +5,19 @@
 //   node scripts/import-asset-sheet.js               import (safe to re-run)
 //   node scripts/import-asset-sheet.js --export      push the current tracker to the "DevTrack Export" tab now
 //
-// Env: GOOGLE_SERVICE_ACCOUNT_JSON, ASSET_SHEET_ID, and DATABASE_URL for a
-// real import (a dry run does not touch the database).
+// Env: ASSET_SHEET_ID, and DATABASE_URL for a real import (a dry run does
+// not touch the database). With GOOGLE_SERVICE_ACCOUNT_JSON the sheet is read
+// through the Sheets API; without it the sheet must be shared as "Anyone
+// with the link" and is read anonymously. --export always needs the account.
 
 require('dotenv').config();
-const client = require('../src/assets/sheets/client');
 const { buildImportPlan, formatReport } = require('../src/assets/sheets/parse');
-const { resolveTabs, applyImportPlan } = require('../src/assets/sheets/importer');
+const { readSheetTabs, applyImportPlan } = require('../src/assets/sheets/importer');
 
 async function readSheet() {
   const sheetId = process.env.ASSET_SHEET_ID;
   if (!sheetId) throw new Error('ASSET_SHEET_ID is not set');
-  const { token, email } = await client.getAccessToken({ readOnly: true });
-  console.log(`Reading sheet as ${email}`);
-  const titles = (await client.listTabs(token, sheetId)).map(t => t.title);
-  const { found, missing } = resolveTabs(titles);
-  if (missing.length) console.log(`Tabs not found (skipped): ${missing.join(', ')}\nTabs in the sheet: ${titles.join(', ')}`);
-  const keys = Object.keys(found);
-  const values = await client.readTabs(token, sheetId, keys.map(k => found[k]));
-  return Object.fromEntries(keys.map((k, i) => [k, values[i]]));
+  return readSheetTabs(sheetId, console.log);
 }
 
 async function main() {

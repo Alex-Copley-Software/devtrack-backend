@@ -65,7 +65,7 @@ function validateActions(rawActions, { snapshot, labels }) {
     if (type === 'create_content_item') {
       const internalName = text(raw.item_internal_name);
       const contentType = typeByName.get(norm(raw.content_type));
-      const update = openUpdateByNumber.get(text(raw.update_number).replace(/^#/, ''));
+      const update = openUpdateByNumber.get(String(Number(text(raw.update_number).replace(/^#/, ''))));
       if (!internalName) { drop('create_content_item without a name'); continue; }
       if (!contentType) { drop(`unknown content type "${text(raw.content_type)}"`); continue; }
       if (!update) { drop(`unknown or closed update "${text(raw.update_number)}"`); continue; }

@@ -56,7 +56,7 @@ function parseDiscordUserId(value) {
 function splitNotionUrl(text) {
   const raw = clean(text);
   if (!raw) return { notes: null, notionUrl: null };
-  const match = raw.match(/https?:\/\/(?:[\w-]+\.)?notion\.(?:so|site)\/\S+/i);
+  const match = raw.match(/https?:\/\/(?:[\w-]+\.)?notion\.(?:so|site|com)\/\S+/i);
   if (!match) return { notes: raw, notionUrl: null };
   return { notes: clean(raw.replace(match[0], '')), notionUrl: match[0] };
 }
@@ -128,7 +128,7 @@ async function normalizeUpdate(prisma, data, { partial }) {
   const out = {};
   if (!partial || data.number !== undefined) {
     const number = Number(data.number);
-    if (!Number.isInteger(number) || number < 0) throw bad('Update # must be a whole number');
+    if (data.number === '' || data.number === null || !Number.isFinite(number) || number < 0) throw bad('Update # must be a number, for example 4 or 3.5');
     out.number = number;
   }
   if (!partial || data.name !== undefined) {

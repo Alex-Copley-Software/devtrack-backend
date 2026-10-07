@@ -30,6 +30,29 @@ function resolveTabs(available) {
   return { found, missing };
 }
 
+// Reads every tab the importer uses. With a service account it goes through
+// the Sheets API; without one it reads a link-shared sheet anonymously.
+async function readSheetTabs(sheetId, log = () => {}) {
+  const client = require('./client');
+  const wanted = Object.fromEntries(Object.entries(TAB_TITLES).map(([key, names]) => [key, names[0]]));
+  if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    const { token, email } = await client.getAccessToken({ readOnly: true });
+    log(`Reading sheet as ${email}`);
+    const titles = (await client.listTabs(token, sheetId)).map(t => t.title);
+    const { found, missing } = resolveTabs(titles);
+    if (missing.length) log(`Tabs not found (skipped): ${missing.join(', ')}\nTabs in the sheet: ${titles.join(', ')}`);
+    const keys = Object.keys(found);
+    const values = await client.readTabs(token, sheetId, keys.map(k => found[k]));
+    return Object.fromEntries(keys.map((k, i) => [k, values[i]]));
+  }
+  log('No service account set: reading the sheet through its public link');
+  const listed = await client.listPublicTabs(sheetId);
+  const { found } = resolveTabs(listed.map(t => t.title));
+  const keys = Object.keys(wanted);
+  const values = await client.readPublicTabs(sheetId, keys.map(k => found[k] || wanted[k]), listed);
+  return Object.fromEntries(keys.map((k, i) => [k, values[i]]));
+}
+
 async function applyImportPlan(prisma, plan, { actorName = 'Sheet import' } = {}) {
   const ctx = { prisma, source: 'import', actor: { userId: null, name: actorName }, silent: true };
   const stats = { created: {}, updated: {} };
@@ -145,4 +168,4 @@ async function applyImportPlan(prisma, plan, { actorName = 'Sheet import' } = {}
   return stats;
 }
 
-module.exports = { TAB_TITLES, resolveTabs, applyImportPlan };
+module.exports = { TAB_TITLES, resolveTabs, readSheetTabs, applyImportPlan };

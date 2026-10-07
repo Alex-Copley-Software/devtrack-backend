@@ -18,7 +18,8 @@ request after the flag is on.
 | Backend | `ASSETS_ENABLED=true` | Turns on `/api/assets` and the page. Off means 404 and no tables. |
 | Backend | `ASSET_AGENT_ENABLED=true` | Turns on message storage, the agent and the suggestions inbox. |
 | Backend | `ANTHROPIC_API_KEY` | Already set for team reports. The agent uses the same key. |
-| Backend | `GOOGLE_SERVICE_ACCOUNT_JSON`, `ASSET_SHEET_ID` | Only for the sheet import and export. |
+| Backend | `ASSET_SHEET_ID` | The sheet to import. |
+| Backend | `GOOGLE_SERVICE_ACCOUNT_JSON` | Only for importing a private sheet, and for the export. |
 | Backend | `ASSET_SHEET_EXPORT=true` | Optional nightly export back to the sheet. |
 | Bot | `ASSETS_ENABLED=true` | Registers the `/assets` command. |
 | Bot | `ASSET_AGENT_ENABLED=true` | Starts reading allowlisted channels and polling the agent. |
@@ -46,6 +47,12 @@ price overrides for the cost log), `ASSET_SHEET_EXPORT_HOUR` (UTC hour,
 default 8).
 
 ## Importing the sheet
+
+The quick way: share the sheet as **Anyone with the link can view**, set
+`ASSET_SHEET_ID`, and skip to step 4. With no service account configured the
+importer reads the sheet anonymously through its public link (hidden tabs
+included). The service account is only needed for a private sheet or for the
+nightly export.
 
 1. In Google Cloud, create a service account and a JSON key for it, and
    enable the Google Sheets API on that project.
@@ -80,6 +87,10 @@ What it does with rows that do not fit:
 - An assignee who is not on the Devs tab is left unassigned and reported.
 - A status outside the list is left as Not Started and reported.
 - A blank cell never overwrites a value already in DevTrack.
+- Pre-numbered rows nobody has filled in, and the helper columns on Dev
+  Lists, are skipped without comment.
+
+Update numbers can be decimal (3.5).
 
 After the import DevTrack is the source of truth. With
 `ASSET_SHEET_EXPORT=true` the backend rewrites a **DevTrack Export** tab once
@@ -210,6 +221,7 @@ Things worth adjusting first:
 ```bash
 node scripts/assets-dev-server.js          # then open http://localhost:4321
 node scripts/assets-dev-server.js --big    # 6,000+ tasks
+node scripts/assets-dev-server.js --sheet <sheet id>   # the real tracker, read from a link-shared sheet
 npm test
 ```
 

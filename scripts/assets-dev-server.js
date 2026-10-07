@@ -4,6 +4,7 @@
 // routes, and the dashboard's static files, all on one port.
 //
 //   node scripts/assets-dev-server.js [--big] [--port 4321] [--static ../devtrack-dashboard]
+//   node scripts/assets-dev-server.js --sheet <google sheet id>    the real tracker instead of demo data
 //
 // Then open http://localhost:4321/dev-login?as=admin (or manager, dev, viewer).
 
@@ -99,12 +100,26 @@ async function main() {
     await prisma.$executeRawUnsafe(`INSERT INTO "User" VALUES ($1, $2, $3, $4, $5::text[])`, user.id, user.name, user.email, user.role, ['bugs', 'assets']);
   }
   await ensureAssetSchema(prisma);
-  const seeded = await seedDemo(prisma, { big: flag('big') });
-  // The "dev" login is the roster's Ani, so that role can edit its own tasks.
-  await prisma.$executeRawUnsafe(`UPDATE "AssetDev" SET "userId" = 'dev-dev' WHERE name = 'Ani'`);
-  const [{ n }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM "AssetTask"`);
-  console.log(`Seeded ${seeded.updates} updates, ${seeded.items} items, ${n} tasks`);
-  await seedDemoSuggestions(prisma);
+  const sheetId = option('sheet', process.env.ASSET_SHEET_ID);
+  if (sheetId) {
+    // The real tracker, read from the sheet at startup. Nothing is written back.
+    const { buildImportPlan } = require('../src/assets/sheets/parse');
+    const { readSheetTabs, applyImportPlan } = require('../src/assets/sheets/importer');
+    const plan = buildImportPlan(await readSheetTabs(sheetId, console.log));
+    await applyImportPlan(prisma, plan);
+    // The "dev" login becomes whoever has the most assigned tasks, so that role has something to edit.
+    await prisma.$executeRawUnsafe(`UPDATE "AssetDev" SET "userId" = 'dev-dev' WHERE id = (
+      SELECT "assigneeDevId" FROM "AssetTask" WHERE "assigneeDevId" IS NOT NULL GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 1)`);
+    const [{ n }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM "AssetTask"`);
+    console.log(`Loaded the sheet: ${plan.counts.updates} updates, ${plan.counts.items} items, ${n} tasks, ${plan.counts.problems} rows not mapped`);
+  } else {
+    const seeded = await seedDemo(prisma, { big: flag('big') });
+    // The "dev" login is the roster's Ani, so that role can edit its own tasks.
+    await prisma.$executeRawUnsafe(`UPDATE "AssetDev" SET "userId" = 'dev-dev' WHERE name = 'Ani'`);
+    const [{ n }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM "AssetTask"`);
+    console.log(`Seeded ${seeded.updates} updates, ${seeded.items} items, ${n} tasks`);
+    await seedDemoSuggestions(prisma);
+  }
 
   const app = express();
   app.use(express.json());

@@ -46,13 +46,55 @@ test('dry-run plan: counts, ignored computed columns and every unmapped row', ()
   const issues = plan.problems.map(p => p.issue).join('\n');
   for (const expected of [
     'Unknown dev status "Retired"', 'Unknown secondary discipline "Juggling"', 'No Discord user id',
-    '"Stranger" is listed under Lighting', 'Unknown discipline "Cooking"', 'Lead "Somebody Else"',
+    'Unknown discipline "Cooking"', 'Lead "Somebody Else"',
     'Unknown update status "On Fire"', 'Owner "Ghost"', 'Unknown content type "Vehicle"', 'Update #9 is not on the Updates tab',
     'Unknown dev "Nobody"', 'Status "Almost" is outside the list', 'Task ID T0999 is not on the Templates tab',
     'No matching content item for T0001 / item 77',
   ]) assert.ok(issues.includes(expected), `expected a problem mentioning: ${expected}`);
-  assert.equal(plan.problems.length, 14);
-  assert.match(formatReport(plan), /Could not map 14 row\(s\)/);
+  assert.equal(plan.problems.length, 13);
+  assert.match(formatReport(plan), /Could not map 13 row\(s\)/);
+});
+
+test('the live sheet shape: decimal update numbers, pre-numbered blank rows, helper columns, CSV strings', () => {
+  const { parseCsv } = require('../../src/assets/sheets/client');
+  const csv = rows => parseCsv(rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join(String.fromCharCode(13, 10)));
+  const plan = buildImportPlan({
+    ...fixture,
+    updates: csv([
+      ['Update #', 'Update Name', 'Status', 'Target Release', 'Lead', 'Summary / Notes'],
+      ['3.5', 'Kafka Update', 'In Development', '', '', 'Example row.'],
+      ['4', 'Bleach', 'In Development', '', 'MrBee', 'https://app.notion.com/p/Update-4-0-Bleach-3df2?source=copy_link'],
+      ['6', '', '', '', '', ''],
+    ]),
+    items: csv([
+      ['#', 'Update #', 'Content Type', 'Display Name', 'Internal Name (ID)', 'Owner', 'Priority', 'Description / Notes'],
+      ['1', '3.5', 'Unit', 'Mythic', 'Kafka', '', 'High', 'Says "hi", twice'],
+      ['2', '4', 'Unit', 'Mythic', 'Aizen', '', 'High', ''],
+      ['3', '', '', '', '', '', '', ''],
+    ]),
+    tasks: csv([
+      ['Update #', 'Internal Name', 'Assigned To', 'Status', 'Status Calc', 'Item #', 'Task ID', 'Active'],
+      ['3.5', 'Kafka', 'Ani', '', 'Not Started', '1', 'T0002', 'TRUE'],
+      ['4', 'Aizen', '', 'Done', 'Done', '2', 'T0001', 'TRUE'],
+      ['', '', '', '', '', '', '', 'FALSE'],
+    ]),
+    devLists: csv([
+      ['Design', 'Animation', '', 'Design #', 'Animation #'],
+      ['MrBee', 'Ani', '', '0', '1'],
+      ['2', '1', '', '', ''],
+    ]),
+  });
+  // Devs and Templates still come from the fixture, which has bad rows on purpose.
+  assert.deepEqual(plan.problems.filter(p => !['Devs', 'Templates'].includes(p.tab)), []);
+  assert.deepEqual(plan.updates.map(u => u.number), [3.5, 4]);
+  assert.equal(plan.items.find(i => i.internalName === 'Kafka').updateNumber, 3.5);
+  assert.equal(plan.items.find(i => i.internalName === 'Kafka').notes, 'Says "hi", twice');
+  assert.deepEqual(plan.tasks, [
+    { updateNumber: 3.5, internalName: 'Kafka', taskCode: 'T0002', assignee: 'Ani' },
+    { updateNumber: 4, internalName: 'Aizen', taskCode: 'T0001', status: 'Done' },
+  ]);
+  const { splitNotionUrl } = require('../../src/assets/service');
+  assert.equal(splitNotionUrl(plan.updates[1].notes).notionUrl, 'https://app.notion.com/p/Update-4-0-Bleach-3df2?source=copy_link');
 });
 
 test('import writes everything, keeps manual task fields on the right task, and is idempotent', async () => {

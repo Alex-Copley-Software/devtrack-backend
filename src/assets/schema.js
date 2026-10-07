@@ -52,7 +52,7 @@ const TABLES = [
   )`,
   `CREATE TABLE IF NOT EXISTS "AssetUpdate" (
     "id" TEXT NOT NULL PRIMARY KEY,
-    "number" INT NOT NULL UNIQUE,
+    "number" DOUBLE PRECISION NOT NULL UNIQUE,
     "name" TEXT NOT NULL,
     "status" TEXT NOT NULL DEFAULT 'Planning',
     "targetRelease" DATE,
@@ -241,6 +241,8 @@ async function ensureAssetSchema(prisma) {
   if (!ready.has(prisma)) {
     const run = (async () => {
       for (const sql of TABLES) await prisma.$executeRawUnsafe(sql);
+      // Update numbers were whole numbers at first; the real tracker has 3.5.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetUpdate" ALTER COLUMN "number" TYPE DOUBLE PRECISION`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();

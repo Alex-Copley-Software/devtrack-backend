@@ -142,6 +142,13 @@ function parseInteger(value) {
   return Number.isInteger(n) ? n : null;
 }
 
+// Update numbers can be decimal (3.5 is a mid-cycle update).
+function parseUpdateNumber(value) {
+  const s = text(value).replace(/^#/, '');
+  const n = Number(s);
+  return s !== '' && Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 // Match a cell to an enum value, ignoring case and spacing.
 function matchEnum(value, allowed) {
   const key = norm(value);
@@ -168,11 +175,13 @@ function parseLists(rows) {
 }
 
 // Dev Lists tab: header row is discipline names, cells below are dev names.
-function parseDevLists(rows) {
+// The sheet keeps helper columns to the right ("Design #", counters); only
+// columns headed by a known discipline are read.
+function parseDevLists(rows, disciplines) {
   const out = [];
   if (!rows || !rows.length) return out;
   rows[0].forEach((cell, col) => {
-    const discipline = text(cell);
+    const discipline = matchEnum(cell, disciplines);
     if (!discipline) return;
     for (const row of rows.slice(1)) {
       const name = text(row?.[col]);
@@ -217,11 +226,9 @@ function buildImportPlan(tabs) {
     devs.push(dev);
     devByName.set(norm(name), dev);
   }
-  for (const { discipline, name } of parseDevLists(tabs.devLists)) {
-    const d = findDiscipline(discipline);
+  for (const { discipline: d, name } of parseDevLists(tabs.devLists, disciplines)) {
     const dev = devByName.get(norm(name));
-    if (!d) { add('Dev Lists', null, `Unknown discipline column "${discipline}"`); continue; }
-    if (!dev) { add('Dev Lists', null, `"${name}" is listed under ${d} but is not on the Devs tab`); continue; }
+    if (!dev) continue; // the tab is built from Devs by formulas; anything else in it is a counter or a note
     if (!dev.disciplines.includes(d)) dev.disciplines.push(d);
   }
   const findDev = v => devByName.get(norm(v))?.name;
@@ -257,8 +264,10 @@ function buildImportPlan(tabs) {
   const updates = [];
   const updateNumbers = new Set();
   for (const r of readTable(tabs.updates, 'updates', 'Updates', problems)) {
-    const number = parseInteger(r.number);
+    const number = parseUpdateNumber(r.number);
     const name = text(r.name);
+    // A pre-numbered row nobody has filled in yet.
+    if (!name && !text(r.status) && !text(r.lead) && !text(r.notes)) continue;
     if (number === null || !name) { add('Updates', r._row, 'Missing Update # or Update Name'); continue; }
     if (updateNumbers.has(number)) { add('Updates', r._row, `Duplicate Update #${number}`); continue; }
     const status = matchEnum(r.status, C.UPDATE_STATUSES);
@@ -279,8 +288,9 @@ function buildImportPlan(tabs) {
   const itemByNumber = new Map();
   const itemByKey = new Map();
   for (const r of readTable(tabs.items, 'items', 'Update Content', problems)) {
-    const updateNumber = parseInteger(r.updateNumber);
+    const updateNumber = parseUpdateNumber(r.updateNumber);
     const internalName = text(r.internalName) || text(r.displayName);
+    if (!text(r.updateNumber) && !internalName && !text(r.contentType)) continue; // pre-numbered blank row
     if (updateNumber === null || !internalName) { add('Update Content', r._row, 'Missing Update # or Internal Name'); continue; }
     if (!updateNumbers.has(updateNumber)) { add('Update Content', r._row, `Update #${updateNumber} is not on the Updates tab (${internalName})`); continue; }
     const contentType = matchEnum(r.contentType, contentTypes);
@@ -309,7 +319,7 @@ function buildImportPlan(tabs) {
     const taskCode = text(r.taskCode).toUpperCase();
     if (!taskCode) continue;
     const itemNumber = parseInteger(r.itemNumber);
-    const updateNumber = parseInteger(r.updateNumber);
+    const updateNumber = parseUpdateNumber(r.updateNumber);
     const item = (itemNumber !== null && itemByNumber.get(itemNumber))
       || itemByKey.get(`${updateNumber}:${norm(r.internalName)}`);
     const where = `${taskCode} / item ${itemNumber ?? text(r.internalName)}`;

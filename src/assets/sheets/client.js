@@ -66,6 +66,62 @@ async function readTabs(token, sheetId, titles) {
   return (data.valueRanges || []).map(r => r.values || []);
 }
 
+// A sheet shared as "anyone with the link" can be read with no credentials:
+// the published view lists the tabs, and each one exports as CSV. Hidden
+// tabs are not listed, so those are asked for by name instead.
+function parseCsv(source) {
+  const rows = [];
+  let row = [], cell = '', quoted = false;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (quoted) {
+      if (ch === '"' && source[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(cell); cell = ''; }
+    else if (ch === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (ch !== '\r') cell += ch;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+async function publicGet(url, { html = false } = {}) {
+  const res = await fetchWithFreshConnection(url);
+  const body = await res.text();
+  // A sheet that is not link-shared answers with a sign-in page, not an error status.
+  if (!res.ok || (!html && /^\s*<!DOCTYPE html/i.test(body))) {
+    throw new Error(`Could not read the sheet (${res.status}). Is it shared as "Anyone with the link"?`);
+  }
+  return body;
+}
+
+async function listPublicTabs(sheetId) {
+  const html = await publicGet(`https://docs.google.com/spreadsheets/d/${sheetId}/htmlview`, { html: true });
+  const tabs = [];
+  for (const m of html.matchAll(/items\.push\(\{name: "((?:[^"\\]|\\.)*)", pageUrl: "[^"]*", gid: "(\d+)"/g)) {
+    const title = m[1].replace(/\\x([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\(.)/g, '$1');
+    tabs.push({ title, sheetId: m[2] });
+  }
+  if (!tabs.length) throw new Error('Could not list the tabs. Is the sheet shared as "Anyone with the link"?');
+  return tabs;
+}
+
+// titles: tab names wanted. Returns one array of rows per title ([] when a tab cannot be read).
+async function readPublicTabs(sheetId, titles, listed) {
+  const base = `https://docs.google.com/spreadsheets/d/${sheetId}`;
+  const out = [];
+  for (const title of titles) {
+    const tab = listed.find(t => t.title === title);
+    const url = tab
+      ? `${base}/export?format=csv&gid=${tab.sheetId}`
+      : `${base}/gviz/tq?tqx=out:csv&headers=0&sheet=${encodeURIComponent(title)}`;
+    out.push(await publicGet(url).then(parseCsv, () => []));
+  }
+  return out;
+}
+
 async function replaceTab(token, sheetId, title, rows) {
   const tabs = await listTabs(token, sheetId);
   if (!tabs.some(t => t.title === title)) {
@@ -76,4 +132,4 @@ async function replaceTab(token, sheetId, title, rows) {
   await call(token, `${SHEETS}/${sheetId}/values/${range}?valueInputOption=RAW`, { method: 'PUT', body: { values: rows } });
 }
 
-module.exports = { getAccessToken, listTabs, readTabs, replaceTab };
+module.exports = { getAccessToken, listTabs, readTabs, replaceTab, parseCsv, listPublicTabs, readPublicTabs };
