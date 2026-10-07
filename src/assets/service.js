@@ -611,7 +611,7 @@ function normalizeDev(data, { partial }) {
     // Accepts the bare id or a link to the post.
     const raw = clean(data.discordThreadId);
     out.discordThreadId = raw ? (raw.match(/(\d{17,20})\/?$/) || [])[1] || null : null;
-    if (raw && !out.discordThreadId) throw bad('Status post must be a Discord post ID or a link to the post');
+    if (raw && !out.discordThreadId) throw bad('Status channel must be a Discord channel or post ID, or a link to it');
   }
   return out;
 }

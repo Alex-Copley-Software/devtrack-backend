@@ -24,7 +24,12 @@ async function listChannels(prisma) {
 }
 
 async function allowedChannelIds(prisma) {
-  const rows = await prisma.$queryRawUnsafe(`SELECT "channelId" FROM "AssetAgentChannel" WHERE enabled`);
+  // The allowlist, plus every active dev's own channel (the Status post field
+  // on the roster): work talk in a dev's forum is exactly what the agent is for.
+  const rows = await prisma.$queryRawUnsafe(`
+    SELECT "channelId" FROM "AssetAgentChannel" WHERE enabled
+    UNION
+    SELECT "discordThreadId" FROM "AssetDev" WHERE "discordThreadId" IS NOT NULL AND status <> 'Inactive'`);
   return new Set(rows.map(r => r.channelId));
 }
 

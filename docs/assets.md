@@ -145,10 +145,12 @@ dev's forum post gets a dot at the start of its title: 🟢 has open tasks,
 🟡 ready to be tasked. It is rechecked every two minutes, so it follows the
 tracker: when a task is marked Done (by hand, or by accepting the agent's
 suggestion after a dev says they are finished) and nothing else is open, the
-post turns yellow. A post is matched to a dev when its title starts with
-their name and it is in a forum the agent reads; set **Status post** on the
-roster entry to pick one explicitly. The bot needs Manage Threads in those
-forums. Discord allows two renames per post every ten minutes.
+dot turns yellow. **Status channel** on the roster entry says where the dot
+goes: the dev's own forum channel, or a single post. The agent also reads
+every post inside a dev's forum and treats it as being about that dev's
+tasks. A dev with nothing set falls back to a post whose title starts with
+their name in a forum the agent reads. The bot needs Manage Channels to
+rename forums and Manage Threads to rename posts. Discord allows two renames per post every ten minutes.
 `ASSET_STATUS_POSTS_DRY_RUN=true` logs what it would rename and changes
 nothing.
 

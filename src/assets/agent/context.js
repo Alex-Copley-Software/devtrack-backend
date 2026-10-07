@@ -84,6 +84,11 @@ function renderBatch(messages, snapshot) {
     const files = Array.isArray(m.attachments) && m.attachments.length ? ` {attachments: ${m.attachments.map(a => a.name || a.url).join(', ')}}` : '';
     return `[${label}] ${when} UTC | ${who}: ${String(m.content || '').replace(/\s+/g, ' ').trim()}${files}`;
   });
+  // A conversation in a dev's own channel (or a post inside their forum) is
+  // almost always about that dev's tasks, whoever is typing.
+  const place = new Set(messages.flatMap(m => [m.channelId, m.parentChannelId]).filter(Boolean).map(String));
+  const owner = snapshot.devs.find(d => d.discordThreadId && place.has(d.discordThreadId));
+  if (owner) lines.unshift(`[channel] This conversation is in ${owner.name}'s own work channel. Unless a message says otherwise, it is about ${owner.name}'s tasks.`);
   return { text: lines.join('\n'), labels };
 }
 
