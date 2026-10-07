@@ -629,10 +629,13 @@ async function updateDev(ctx, id, data) {
   }
   const changes = diffFields(rows[0], patch, { entityType: 'dev', entityId: id });
   if (changes.length) await setColumns(prisma, 'AssetDev', id, Object.fromEntries(changes.map(c => [c.field, c.after])));
-  if (data.disciplines !== undefined) {
-    const merged = { ...rows[0], ...patch };
-    await setDevDisciplines(prisma, id, [merged.discipline, merged.secondaryDiscipline, ...data.disciplines]);
-    changes.push({ entityType: 'dev', entityId: id, action: 'updated', field: 'disciplines', after: data.disciplines });
+  // Primary and secondary are always part of the set a dev can be assigned under.
+  const merged = { ...rows[0], ...patch };
+  const current = (await prisma.$queryRawUnsafe(`SELECT discipline FROM "AssetDevDiscipline" WHERE "devId" = $1 ORDER BY discipline`, id)).map(r => r.discipline);
+  const wanted = [...new Set([merged.discipline, merged.secondaryDiscipline, ...(data.disciplines ?? current)].map(clean).filter(Boolean))].sort();
+  if (JSON.stringify(current) !== JSON.stringify(wanted)) {
+    await setDevDisciplines(prisma, id, wanted);
+    changes.push({ entityType: 'dev', entityId: id, action: 'updated', field: 'disciplines', before: current, after: wanted });
   }
   if (changes.length) {
     await logActivity(ctx, changes);

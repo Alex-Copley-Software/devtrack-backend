@@ -83,3 +83,6 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`DevTrack API running on http://localhost:${PORT}`);
 });
+
+// No-op unless ASSETS_ENABLED and ASSET_SHEET_EXPORT are both true.
+require('./assets/sheets/exporter').startNightlyExport();
