@@ -82,17 +82,18 @@ async function logActivity(ctx, rows) {
     actorName: ctx.actor?.name || 'System',
     suggestionId: ctx.suggestionId || null,
     evidence: ctx.evidence || null,
+    revertOf: ctx.revertOf || null,
   }));
   for (let i = 0; i < payload.length; i += 500) {
     await ctx.prisma.$executeRawUnsafe(`
       INSERT INTO "AssetActivity" ("id", "entityType", "entityId", "updateId", "contentItemId", "taskId", "action",
-        "field", "before", "after", "label", "source", "actorUserId", "actorName", "suggestionId", "evidence")
+        "field", "before", "after", "label", "source", "actorUserId", "actorName", "suggestionId", "evidence", "revertOf")
       SELECT v.id, v."entityType", v."entityId", v."updateId", v."contentItemId", v."taskId", v.action,
-        v.field, v.before, v.after, v.label, v.source, v."actorUserId", v."actorName", v."suggestionId", v.evidence
+        v.field, v.before, v.after, v.label, v.source, v."actorUserId", v."actorName", v."suggestionId", v.evidence, v."revertOf"
       FROM jsonb_to_recordset($1::jsonb) AS v(
         id text, "entityType" text, "entityId" text, "updateId" text, "contentItemId" text, "taskId" text, action text,
         field text, before jsonb, after jsonb, label text, source text, "actorUserId" text, "actorName" text,
-        "suggestionId" text, evidence jsonb)
+        "suggestionId" text, evidence jsonb, "revertOf" text)
     `, JSON.stringify(payload.slice(i, i + 500)));
   }
 }

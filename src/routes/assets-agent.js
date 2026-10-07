@@ -52,6 +52,10 @@ module.exports = function registerAgentRoutes(router, h) {
     return { accepted, failed };
   }));
 
+  const logSetting = (req, label) => require('../assets/service').logActivity(req.ctx, [{
+    entityType: 'setting', entityId: 'agent', action: 'updated', label,
+  }]);
+
   // ── settings (admin) ───────────────────────────────────────────────────────
 
   router.get('/agent/settings', h(async req => {
@@ -76,6 +80,7 @@ module.exports = function registerAgentRoutes(router, h) {
     requireAdmin(req);
     if (!C.isEnabled('ASSET_AGENT_ENABLED')) throw new AssetError(400, 'The agent is switched off.');
     await pipeline.requestSelfTest(req.prisma, req.user.name);
+    await logSetting(req, 'Agent self-test requested');
     return { ok: true };
   }));
 
@@ -97,6 +102,7 @@ module.exports = function registerAgentRoutes(router, h) {
       INSERT INTO "AssetAgentChannel" ("channelId", "label", "addedByName") VALUES ($1, $2, $3)
       ON CONFLICT ("channelId") DO UPDATE SET label = EXCLUDED.label, enabled = true
     `, channelId, String(req.body.label || '').trim().slice(0, 80) || null, req.user.name);
+    await logSetting(req, `Agent started reading channel or category ${String(req.body.label || '').trim().slice(0, 80) || channelId} (${channelId})`);
     res.status(201);
     return { channels: await pipeline.listChannels(req.prisma) };
   }));
@@ -105,6 +111,7 @@ module.exports = function registerAgentRoutes(router, h) {
     requireAdmin(req);
     if (req.body.enabled !== undefined) {
       await req.prisma.$executeRawUnsafe(`UPDATE "AssetAgentChannel" SET enabled = $1 WHERE "channelId" = $2`, !!req.body.enabled, req.params.id);
+      await logSetting(req, `Agent reading ${req.body.enabled ? 'resumed' : 'paused'} for channel ${req.params.id}`);
     }
     if (req.body.label !== undefined) {
       await req.prisma.$executeRawUnsafe(`UPDATE "AssetAgentChannel" SET label = $1 WHERE "channelId" = $2`, String(req.body.label).trim().slice(0, 80) || null, req.params.id);
@@ -116,6 +123,7 @@ module.exports = function registerAgentRoutes(router, h) {
   router.delete('/agent/channels/:id', h(async req => {
     requireAdmin(req);
     await req.prisma.$executeRawUnsafe(`DELETE FROM "AssetAgentChannel" WHERE "channelId" = $1`, req.params.id);
+    await logSetting(req, `Agent stopped reading channel or category ${req.params.id}`);
     await req.prisma.$executeRawUnsafe(
       `DELETE FROM "AssetAgentMessage" WHERE "batchId" IS NULL AND ("channelId" = $1 OR "parentChannelId" = $1 OR "categoryId" = $1)`, req.params.id);
     return { channels: await pipeline.listChannels(req.prisma) };

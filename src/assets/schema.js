@@ -209,6 +209,7 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS "AssetActivity_taskId_idx" ON "AssetActivity"("taskId")`,
   `CREATE INDEX IF NOT EXISTS "AssetActivity_contentItemId_idx" ON "AssetActivity"("contentItemId")`,
   `CREATE INDEX IF NOT EXISTS "AssetActivity_updateId_createdAt_idx" ON "AssetActivity"("updateId", "createdAt")`,
+  `CREATE INDEX IF NOT EXISTS "AssetActivity_createdAt_idx" ON "AssetActivity"("createdAt")`,
   `CREATE INDEX IF NOT EXISTS "AssetSavedView_userId_idx" ON "AssetSavedView"("userId")`,
   `CREATE INDEX IF NOT EXISTS "AssetAgentMessage_unbatched_idx" ON "AssetAgentMessage"("channelId", "postedAt") WHERE "batchId" IS NULL`,
   `CREATE INDEX IF NOT EXISTS "AssetAgentMessage_postedAt_idx" ON "AssetAgentMessage"("postedAt")`,
@@ -245,6 +246,8 @@ async function ensureAssetSchema(prisma) {
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetUpdate" ALTER COLUMN "number" TYPE DOUBLE PRECISION`);
       // Lets a whole Discord category be allowlisted, not just single channels.
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetAgentMessage" ADD COLUMN IF NOT EXISTS "categoryId" TEXT`);
+      // Audit log: a revert points at the entry it undoes.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetActivity" ADD COLUMN IF NOT EXISTS "revertOf" TEXT`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();

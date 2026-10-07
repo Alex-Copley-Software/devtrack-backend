@@ -113,6 +113,36 @@ router.get('/activity', h(req => q.listActivity(req.prisma, {
   limit: req.query.limit,
 })));
 
+// ── audit log ────────────────────────────────────────────────────────────────
+// Reading it is for leads and managers. Reverting is checked per change, with
+// the same rules as editing the thing directly.
+
+const audit = require('../assets/audit');
+const requireAuditor = req => { if (!req.access.isManager && !req.access.leadUpdateIds.length) throw forbidden(); };
+
+router.get('/audit', h(req => {
+  requireAuditor(req);
+  return audit.listAudit(req.prisma, req.query);
+}));
+router.get('/audit/facets', h(req => {
+  requireAuditor(req);
+  return audit.facets(req.prisma);
+}));
+// body: { ids: [...], dryRun }. Puts each field back to its value before those entries.
+router.post('/audit/revert', h(req => {
+  requireAuditor(req);
+  const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).map(String);
+  if (!ids.length) throw new AssetError(400, 'Nothing selected');
+  return audit.revertEntries(req.ctx, req.access, ids, { dryRun: req.body.dryRun === true });
+}));
+// body: { entryId, scope: 'entity' | 'item' | 'update' | 'all', dryRun }. Undoes everything since that entry.
+router.post('/audit/restore', h(req => {
+  requireAuditor(req);
+  const kind = String(req.body.scope || 'entity');
+  if (kind === 'all' && !req.access.isManager) throw forbidden();
+  return audit.restoreToEntry(req.ctx, req.access, String(req.body.entryId || ''), { kind }, { dryRun: req.body.dryRun === true });
+}));
+
 // DevTrack logins, for linking a roster dev to an account.
 router.get('/users', h(async req => {
   if (!perms.canEditRoster(req.access)) throw forbidden();

@@ -133,6 +133,26 @@ existing item of the type, without touching their status or assignments;
 the editor shows how many tasks that will be before you save. Removing an
 entry hides its tasks and keeps their history; restoring it brings them back.
 
+## Audit log
+
+**Audit log** in the left rail, for leads, managers and admins. Every change
+to a task, item, update, roster entry or template is listed with who made
+it, when, where it came from (a person, the agent, the sheet import) and the
+value before and after. Rejected agent suggestions, agent setting changes
+and channel allowlist changes are listed too. Filter by person, source, kind
+and date, search any name or value, and export what the filters show as CSV.
+
+- **Revert** on an entry puts that one field back to what it was before the
+  change. If the field has been changed again since, the preview says so.
+- **Restore to here** undoes everything recorded after an entry, for one
+  thing, one item, one update or the whole tracker. A preview lists every
+  field that will change before anything is written.
+
+Nothing is ever removed from the log. A revert is a new change, recorded
+under the person who did it and linked to the entry it undoes, so it can be
+reverted in turn. Things that were created or deleted after the chosen point
+are reported in the preview but not undone automatically.
+
 ## The agent
 
 ```

@@ -136,6 +136,14 @@ async function resolveSuggestion(prisma, id, { decision, actor, via = 'web', edi
       throw err;
     }
   }
+  if (decision === 'reject') {
+    // Accepted suggestions show up in the audit log as the change they made; a rejection changes nothing, so it is logged here.
+    const rejected = await getSuggestion(prisma, id);
+    await require('../service').logActivity({ prisma, source: 'human', actor, suggestionId: id, evidence: rejected.evidence || null }, [{
+      entityType: 'suggestion', entityId: id, updateId: rejected.updateId || null, taskId: rejected.taskId || null, action: 'rejected',
+      label: `Rejected agent suggestion${via === 'discord' ? ' (from Discord)' : ''}: ${String(rejected.summary || '').slice(0, 300)}`,
+    }]);
+  }
   notify();
   return getSuggestion(prisma, id);
 }
