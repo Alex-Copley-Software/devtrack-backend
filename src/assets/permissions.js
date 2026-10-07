@@ -7,7 +7,7 @@
 //            tasks assigned to that dev
 //   viewer   everyone else with the page: read only
 
-const DEV_EDITABLE_TASK_FIELDS = ['status', 'dueDate', 'notes'];
+const DEV_EDITABLE_TASK_FIELDS = ['status', 'dueDate', 'notes', 'blockedReason'];
 
 // role: DevTrack role of the login, if any. dev: the roster entry, if any.
 function accessFor({ role = '', dev = null, updates = [] }) {

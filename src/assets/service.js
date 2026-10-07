@@ -315,7 +315,7 @@ async function updateContentItem(ctx, id, data) {
 
 // ── tasks ────────────────────────────────────────────────────────────────────
 
-const TASK_FIELDS = ['status', 'assigneeDevId', 'dueDate', 'notes'];
+const TASK_FIELDS = ['status', 'assigneeDevId', 'dueDate', 'notes', 'blockedReason'];
 
 function normalizeTaskPatch(patch, devIds) {
   const out = {};
@@ -329,6 +329,7 @@ function normalizeTaskPatch(patch, devIds) {
   }
   if (patch.dueDate !== undefined) out.dueDate = parseDate(patch.dueDate, 'due date');
   if (patch.notes !== undefined) out.notes = clean(patch.notes);
+  if (patch.blockedReason !== undefined) out.blockedReason = clean(patch.blockedReason)?.slice(0, 500) || null;
   return out;
 }
 
@@ -339,7 +340,7 @@ async function applyTaskPatches(ctx, patches) {
   if (!patches.length) return [];
   const ids = [...new Set(patches.map(p => p.id))];
   const current = await prisma.$queryRawUnsafe(`
-    SELECT t.id, t.status, t."assigneeDevId", to_char(t."dueDate", 'YYYY-MM-DD') AS "dueDate", t.notes,
+    SELECT t.id, t.status, t."assigneeDevId", to_char(t."dueDate", 'YYYY-MM-DD') AS "dueDate", t.notes, t."blockedReason",
       t."contentItemId", ci."updateId"
     FROM "AssetTask" t JOIN "AssetContentItem" ci ON ci.id = t."contentItemId"
     WHERE t.id = ANY($1::text[])
@@ -355,7 +356,15 @@ async function applyTaskPatches(ctx, patches) {
     const row = byId.get(id);
     if (!row) throw missing('Task');
     const base = next.get(id) || row;
-    const merged = { ...base, ...normalizeTaskPatch(patch, devIds) };
+    const change = normalizeTaskPatch(patch, devIds);
+    const merged = { ...base, ...change };
+    // A blocked task says why. The reason goes away with the block. Imports
+    // and reverts restore what was recorded, so they are not held to this.
+    if (merged.status !== 'Blocked') merged.blockedReason = null;
+    else if (!merged.blockedReason && (row.status !== 'Blocked' || change.blockedReason !== undefined)
+      && !ctx.revertOf && ctx.source !== 'import') {
+      throw bad('Say what is blocking this task');
+    }
     next.set(id, merged);
   }
   const changed = [];
@@ -380,11 +389,12 @@ async function applyTaskPatches(ctx, patches) {
     await prisma.$executeRawUnsafe(`
       UPDATE "AssetTask" t
       SET status = v.status, "assigneeDevId" = v."assigneeDevId", "dueDate" = v."dueDate"::date, notes = v.notes,
-        "updatedAt" = CURRENT_TIMESTAMP
-      FROM jsonb_to_recordset($1::jsonb) AS v(id text, status text, "assigneeDevId" text, "dueDate" text, notes text)
+        "blockedReason" = v."blockedReason", "updatedAt" = CURRENT_TIMESTAMP
+      FROM jsonb_to_recordset($1::jsonb) AS v(id text, status text, "assigneeDevId" text, "dueDate" text, notes text, "blockedReason" text)
       WHERE t.id = v.id
     `, JSON.stringify(changed.slice(i, i + 500).map(r => ({
       id: r.id, status: r.status, assigneeDevId: r.assigneeDevId || null, dueDate: r.dueDate || null, notes: r.notes || null,
+      blockedReason: r.blockedReason || null,
     }))));
   }
   await logActivity(ctx, activity);
@@ -597,6 +607,12 @@ function normalizeDev(data, { partial }) {
   if (data.discordUserId !== undefined && data.discordProfileUrl === undefined) out.discordUserId = parseDiscordUserId(data.discordUserId);
   if (data.notes !== undefined) out.notes = clean(data.notes);
   if (data.userId !== undefined) out.userId = clean(data.userId);
+  if (data.discordThreadId !== undefined) {
+    // Accepts the bare id or a link to the post.
+    const raw = clean(data.discordThreadId);
+    out.discordThreadId = raw ? (raw.match(/(\d{17,20})\/?$/) || [])[1] || null : null;
+    if (raw && !out.discordThreadId) throw bad('Status post must be a Discord post ID or a link to the post');
+  }
   return out;
 }
 
@@ -611,6 +627,7 @@ async function createDev(ctx, data) {
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
   `, id, fields.name, fields.discipline || null, fields.secondaryDiscipline || null, fields.status || 'Active',
   fields.discordProfileUrl || null, fields.discordUserId || null, fields.notes || null, fields.userId || null);
+  if (fields.discordThreadId) await setColumns(prisma, 'AssetDev', id, { discordThreadId: fields.discordThreadId });
   await setDevDisciplines(prisma, id, [fields.discipline, fields.secondaryDiscipline, ...(data.disciplines || [])]);
   await logActivity(ctx, [{ entityType: 'dev', entityId: id, action: 'created', label: `${fields.name} added to the roster` }]);
   notify(ctx, { kind: 'devs' });
@@ -620,7 +637,7 @@ async function createDev(ctx, data) {
 async function updateDev(ctx, id, data) {
   const { prisma } = ctx;
   const rows = await prisma.$queryRawUnsafe(`
-    SELECT id, name, discipline, "secondaryDiscipline", status, "discordProfileUrl", "discordUserId", notes, "userId"
+    SELECT id, name, discipline, "secondaryDiscipline", status, "discordProfileUrl", "discordUserId", notes, "userId", "discordThreadId"
     FROM "AssetDev" WHERE id = $1`, id);
   if (!rows.length) throw missing('Dev');
   const patch = normalizeDev(data, { partial: true });

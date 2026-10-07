@@ -248,6 +248,9 @@ async function ensureAssetSchema(prisma) {
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetAgentMessage" ADD COLUMN IF NOT EXISTS "categoryId" TEXT`);
       // Audit log: a revert points at the entry it undoes.
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetActivity" ADD COLUMN IF NOT EXISTS "revertOf" TEXT`);
+      // Why a task is blocked (required when it is), and the forum post that shows a dev's availability.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetTask" ADD COLUMN IF NOT EXISTS "blockedReason" TEXT`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetDev" ADD COLUMN IF NOT EXISTS "discordThreadId" TEXT`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();

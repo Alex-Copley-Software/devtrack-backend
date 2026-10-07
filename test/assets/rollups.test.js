@@ -22,7 +22,7 @@ test('item, update and discipline rollups come from task state', async () => {
   const { ctx, update, aizen, ani } = await seedBasics(prisma);
   const [design, animation, vfx] = await q.listTasks(prisma, { contentItemId: aizen.id });
   await service.updateTask(ctx, design.id, { status: 'Done' });
-  await service.updateTask(ctx, animation.id, { status: 'Blocked', assigneeDevId: ani.id });
+  await service.updateTask(ctx, animation.id, { status: 'Blocked', blockedReason: 'waiting on the rig', assigneeDevId: ani.id });
   await service.updateTask(ctx, vfx.id, { status: 'N/A' });
 
   const item = await q.getItem(prisma, aizen.id);

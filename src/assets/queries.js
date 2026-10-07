@@ -34,7 +34,7 @@ async function listTemplates(prisma, { includeInactive = true } = {}) {
 async function listDevs(prisma) {
   const rows = await prisma.$queryRawUnsafe(`
     SELECT d.id, d.name, d.discipline, d."secondaryDiscipline", d.status, d."discordProfileUrl", d."discordUserId",
-      d.notes, d."userId",
+      d.notes, d."userId", d."discordThreadId",
       COALESCE((SELECT array_agg(dd.discipline ORDER BY dd.discipline) FROM "AssetDevDiscipline" dd WHERE dd."devId" = d.id), ARRAY[]::text[]) AS disciplines,
       COALESCE(w."openTasks", 0) AS "openTasks",
       COALESCE(w."doneTasks", 0) AS "doneTasks",
@@ -129,7 +129,7 @@ async function getItem(prisma, id) {
 // the client joins on templateId using the templates from /bootstrap.
 const TASK_FIELDS = `
   t.id, t.ref, t."contentItemId", t."templateId", t.status, t."assigneeDevId",
-  ${DATE('t."dueDate"')} AS "dueDate", t.notes, t."updatedAt"`;
+  ${DATE('t."dueDate"')} AS "dueDate", t.notes, t."blockedReason", t."updatedAt"`;
 
 async function listTasks(prisma, { updateId, contentItemId, ids } = {}) {
   const where = [`t.active`];

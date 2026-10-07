@@ -133,6 +133,30 @@ existing item of the type, without touching their status or assignments;
 the editor shows how many tasks that will be before you save. Removing an
 entry hides its tasks and keeps their history; restoring it brings them back.
 
+## Availability and blocked tasks
+
+**Ready to be tasked.** A dev is ready when they are Active and have no open
+task in any live update. The Overview has a card listing them by discipline,
+and the Team view has a **Ready to task** filter and a dot beside each name
+(yellow ready, green tasked).
+
+**Status on Discord posts.** With `ASSET_STATUS_POSTS=true` on the bot, each
+dev's forum post gets a dot at the start of its title: 🟢 has open tasks,
+🟡 ready to be tasked. It is rechecked every two minutes, so it follows the
+tracker: when a task is marked Done (by hand, or by accepting the agent's
+suggestion after a dev says they are finished) and nothing else is open, the
+post turns yellow. A post is matched to a dev when its title starts with
+their name and it is in a forum the agent reads; set **Status post** on the
+roster entry to pick one explicitly. The bot needs Manage Threads in those
+forums. Discord allows two renames per post every ten minutes.
+`ASSET_STATUS_POSTS_DRY_RUN=true` logs what it would rename and changes
+nothing.
+
+**Blocked needs a reason.** Setting a task to Blocked asks what it is
+waiting on, on the page, in `/assets task` (the `reason` option) and for
+agent suggestions. The reason shows next to the task and is cleared when the
+task leaves Blocked. Tasks blocked before this rule show "No reason given".
+
 ## Audit log
 
 **Audit log** in the left rail, for leads, managers and admins. Every change

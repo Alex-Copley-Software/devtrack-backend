@@ -104,6 +104,17 @@ router.post('/suggestions/:id/resolve', h(async req => {
   });
 }));
 
+// ── availability ─────────────────────────────────────────────────────────────
+
+// Who is free to take work. The bot shows this on each dev's forum post.
+// "Tasked" means at least one open task in an update that is still live.
+router.get('/dev-status', h(async req => ({
+  devs: (await q.listDevs(req.prisma)).filter(d => d.status === 'Active').map(d => ({
+    id: d.id, name: d.name, discordUserId: d.discordUserId, discordThreadId: d.discordThreadId || null,
+    openTasks: d.openTasks, blockedTasks: d.blockedTasks, available: d.openTasks === 0,
+  })),
+})));
+
 // ── /assets slash command ────────────────────────────────────────────────────
 
 router.get('/update', h(async req => {
@@ -149,8 +160,10 @@ router.post('/task-status', h(async req => {
   const { dev, access } = await discordIdentity(req.prisma, req.body.discordUserId);
   if (!dev) throw new AssetError(403, 'You are not on the asset roster yet.');
   if (!perms.canEditTask(access, task, ['status'])) throw new AssetError(403, `Task #${task.ref} is not assigned to you.`);
+  const reason = String(req.body.reason || '').trim();
+  if (status === 'Blocked' && !reason) throw new AssetError(400, 'Add a reason when you mark a task blocked, so the lead knows what you are waiting on.');
   const ctx = { prisma: req.prisma, source: 'human', actor: { userId: dev.userId || null, name: `${dev.name} (Discord)` } };
-  await service.updateTask(ctx, task.id, { status });
+  await service.updateTask(ctx, task.id, status === 'Blocked' ? { status, blockedReason: reason } : { status });
   const [updated] = await q.listTasksDetailed(req.prisma, { ref: task.ref });
   return { task: updated, previousStatus: task.status };
 }));

@@ -255,7 +255,7 @@ test('mark_blocked sets the status and records the reason; create_content_item s
   }
   const [anim] = await q.listTasks(prisma, { ids: [byDiscipline.Animation.id] });
   assert.equal(anim.status, 'Blocked');
-  assert.equal(anim.notes, 'Blocked: waiting on the design brief');
+  assert.equal(anim.blockedReason, 'waiting on the design brief');
   const ichigo = (await q.listItems(prisma, { updateId: update.id })).find(i => i.internalName === 'Ichigo');
   assert.equal(ichigo.displayName, 'Legendary');
   assert.equal(ichigo.taskCount, 3);

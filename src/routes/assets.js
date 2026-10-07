@@ -193,7 +193,7 @@ async function assertCanEditTasks(req, ids, patch) {
 }
 
 const pickTaskPatch = body => Object.fromEntries(
-  ['status', 'assigneeDevId', 'dueDate', 'notes'].filter(f => body?.[f] !== undefined).map(f => [f, body[f]]));
+  ['status', 'assigneeDevId', 'dueDate', 'notes', 'blockedReason'].filter(f => body?.[f] !== undefined).map(f => [f, body[f]]));
 
 router.patch('/tasks/:id', h(async req => {
   const patch = pickTaskPatch(req.body);

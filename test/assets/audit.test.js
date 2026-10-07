@@ -94,7 +94,7 @@ test('restoring to an entry undoes everything after it, within the chosen scope'
   await tick();
   await service.updateTask(ctx, vfx.id, { status: 'Done', assigneeDevId: bee.id });
   await tick();
-  await service.updateTask(ctx, anim.id, { status: 'Blocked' });
+  await service.updateTask(ctx, anim.id, { status: 'Blocked', blockedReason: 'waiting on the rig' });
   await tick();
   await service.updateContentItem(ctx, aizen.id, { priority: 'Low' });
   await tick();
@@ -109,15 +109,15 @@ test('restoring to an entry undoes everything after it, within the chosen scope'
 
   // The whole update: the other task and the item go back too; the item created since is reported, not removed.
   const all = await audit.restoreToEntry(ctx, admin, anchor.id, { kind: 'update' }, { dryRun: true });
-  assert.deepEqual(all.changes.map(c => `${c.entityType}.${c.field}`).sort(), ['item.priority', 'task.status']);
+  assert.deepEqual(all.changes.map(c => `${c.entityType}.${c.field}`).sort(), ['item.priority', 'task.blockedReason', 'task.status']);
   assert.ok(all.unsupported >= 1);
   const done = await audit.restoreToEntry(ctx, admin, anchor.id, { kind: 'update' });
-  assert.equal(done.applied, 2);
+  assert.equal(done.applied, 3);
   assert.equal((await task(anim.id)).status, 'Not Started');
   assert.equal((await q.getItem(prisma, aizen.id)).priority, 'High');
   assert.equal((await q.listItems(prisma, { updateId: update.id })).length, 2);
 
   const restored = (await audit.listAudit(prisma, { action: 'restored' })).rows;
   assert.equal(restored.length, 2);
-  assert.match(restored[0].label, /^Restored 2 fields to how this update stood at /);
+  assert.match(restored[0].label, /^Restored 3 fields to how this update stood at /);
 });

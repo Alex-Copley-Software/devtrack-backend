@@ -87,13 +87,17 @@ async function applyChange(prisma, suggestion, { actor, edits }) {
     evidence: suggestion.evidence,
   };
   switch (suggestion.type) {
-    case 'update_task_status': await service.updateTask(ctx, suggestion.taskId, { status: payload.status }); break;
+    case 'update_task_status':
+      await service.updateTask(ctx, suggestion.taskId, {
+        status: payload.status,
+        ...(payload.status === 'Blocked' ? { blockedReason: String(suggestion.reason || 'Reported in Discord').slice(0, 300) } : {}),
+      });
+      break;
     case 'assign_task': await service.updateTask(ctx, suggestion.taskId, { assigneeDevId: payload.assigneeDevId || null }); break;
     case 'set_due_date': await service.updateTask(ctx, suggestion.taskId, { dueDate: payload.dueDate }); break;
     case 'add_task_note': await service.appendTaskNote(ctx, suggestion.taskId, payload.note); break;
     case 'mark_blocked':
-      await service.updateTask(ctx, suggestion.taskId, { status: 'Blocked' });
-      await service.appendTaskNote(ctx, suggestion.taskId, `Blocked: ${payload.reason}`);
+      await service.updateTask(ctx, suggestion.taskId, { status: 'Blocked', blockedReason: payload.reason });
       break;
     case 'create_content_item':
       await service.createContentItem(ctx, {

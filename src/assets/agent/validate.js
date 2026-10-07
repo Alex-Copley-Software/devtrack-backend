@@ -105,7 +105,7 @@ function validateActions(rawActions, { snapshot, labels }) {
       const reason = text(raw.blocker_reason) || text(raw.note);
       if (!reason) { drop('mark_blocked without a reason'); continue; }
       if (task.status === 'Blocked') { drop('task is already blocked'); continue; }
-      payload = { reason: reason.slice(0, 300) }; before = { status: task.status }; after = { status: 'Blocked', note: `Blocked: ${reason.slice(0, 300)}` };
+      payload = { reason: reason.slice(0, 300) }; before = { status: task.status }; after = { status: 'Blocked', reason: reason.slice(0, 300) };
       key = `mark_blocked:${task.id}`;
       summary = `${where}: blocked (${reason.slice(0, 120)})`;
     } else if (type === 'assign_task') {

@@ -105,3 +105,17 @@ test('dev Discord id is parsed from the profile link and disciplines include pri
   assert.equal(ani.discordUserId, '222222222222222222');
   assert.deepEqual(ani.disciplines, ['Animation', 'VFX']);
 });
+
+test('a blocked task needs a reason, and the reason goes when the block does', async () => {
+  const prisma = await createTestDb();
+  const { ctx, aizen } = await seedBasics(prisma);
+  const [task] = await q.listTasks(prisma, { contentItemId: aizen.id });
+  await assert.rejects(service.updateTask(ctx, task.id, { status: 'Blocked' }), /what is blocking/);
+  await assert.rejects(service.updateTask(ctx, task.id, { status: 'Blocked', blockedReason: '   ' }), /what is blocking/);
+  assert.equal((await service.updateTask(ctx, task.id, { status: 'Blocked', blockedReason: 'waiting on concept art' })).blockedReason, 'waiting on concept art');
+  // Other edits to a blocked task do not ask again, but the reason cannot be blanked.
+  assert.equal((await service.updateTask(ctx, task.id, { notes: 'pinged the artist' })).blockedReason, 'waiting on concept art');
+  await assert.rejects(service.updateTask(ctx, task.id, { blockedReason: '' }), /what is blocking/);
+  const cleared = await service.updateTask(ctx, task.id, { status: 'In Progress' });
+  assert.deepEqual([cleared.status, cleared.blockedReason], ['In Progress', null]);
+});
