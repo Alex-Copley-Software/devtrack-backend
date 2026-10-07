@@ -337,3 +337,14 @@ test('paused and disabled states make no model calls; old messages are pruned', 
   assert.equal((await pipeline.tick(prisma, { model })).state, 'disabled');
   process.env.ASSET_AGENT_ENABLED = 'true';
 });
+
+test('the self-test dry run reports what would be proposed and stores nothing', async () => {
+  const { prisma, byDiscipline } = await setup();
+  const model = fakeModel({ actions: [action({ task_ref: String(byDiscipline.VFX.ref), status: 'Review', evidence: ['m1'] })] });
+  const result = await pipeline.dryRun(prisma, [say(ANI, 'aizen vfx is done, sending for review')], { model });
+  assert.equal(result.relevant, true);
+  assert.deepEqual(result.proposals.map(p => p.summary), ['Aizen · Ability VFX: Not Started → Review']);
+  const count = async table => (await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM "${table}"`))[0].n;
+  assert.deepEqual([await count('AssetAgentSuggestion'), await count('AssetAgentMessage'), await count('AssetAgentBatch')], [0, 0, 0]);
+  assert.equal((await prisma.$queryRawUnsafe(`SELECT status FROM "AssetTask" WHERE id = $1`, byDiscipline.VFX.id))[0].status, 'Not Started');
+});

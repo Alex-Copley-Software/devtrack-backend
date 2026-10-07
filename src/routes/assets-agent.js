@@ -70,6 +70,15 @@ module.exports = function registerAgentRoutes(router, h) {
     };
   }));
 
+  // Asks the bot to check it can read the allowlisted channels and post to
+  // the review channel. The bot picks it up within a couple of minutes.
+  router.post('/agent/self-test', h(async req => {
+    requireAdmin(req);
+    if (!C.isEnabled('ASSET_AGENT_ENABLED')) throw new AssetError(400, 'The agent is switched off.');
+    await pipeline.requestSelfTest(req.prisma, req.user.name);
+    return { ok: true };
+  }));
+
   router.put('/agent/settings', h(async req => {
     requireAdmin(req);
     const before = await settingsStore.getSettings(req.prisma);

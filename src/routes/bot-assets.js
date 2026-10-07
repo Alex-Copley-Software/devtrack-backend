@@ -61,7 +61,18 @@ async function discordIdentity(prisma, discordUserId) {
 router.get('/agent/config', h(async req => ({
   enabled: C.isEnabled('ASSET_AGENT_ENABLED'),
   channelIds: C.isEnabled('ASSET_AGENT_ENABLED') ? [...await pipeline.allowedChannelIds(req.prisma)] : [],
+  selfTestToken: C.isEnabled('ASSET_AGENT_ENABLED') ? await pipeline.selfTestToken(req.prisma) : null,
 })));
+
+// Self-test: what would the agent propose for these messages? Stores nothing.
+router.post('/agent/dry-run', h(async req => {
+  requireAgent();
+  const messages = (Array.isArray(req.body.messages) ? req.body.messages : []).slice(0, 25)
+    .filter(m => m && m.id && m.channelId && m.authorDiscordId && String(m.content || '').trim())
+    .map(m => ({ ...m, content: String(m.content).slice(0, 2000), attachments: [] }));
+  if (!messages.length) return { relevant: false, proposals: [], dropped: [], costUsd: 0, empty: true };
+  return pipeline.dryRun(req.prisma, messages);
+}));
 
 router.post('/messages', h(async req => {
   requireAgent();

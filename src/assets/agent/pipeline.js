@@ -153,6 +153,44 @@ async function processBatch(prisma, batch, { model, settings }) {
   return { batchId: batch.id, relevant: true, stored, dropped, skipped };
 }
 
+// Self-test: runs both model passes on messages the bot just read and says
+// what the agent would have proposed. Nothing is stored except the usage row
+// (so the cost counts toward the daily budget), and the tracker is not touched.
+async function dryRun(prisma, messages, { model = require('./model') } = {}) {
+  const snapshot = await context.buildSnapshot(prisma);
+  const { text, labels } = context.renderBatch(messages, snapshot);
+  const screened = await model.filter(text);
+  await settingsStore.logUsage(prisma, { batchId: null, pass: 'filter', model: screened.model, usage: screened.usage });
+  let costUsd = settingsStore.costOf(screened.model, screened.usage);
+  const tracker = { updates: snapshot.updates.length, items: snapshot.items.length, tasks: snapshot.tasks.length };
+  if (!screened.relevant) return { relevant: false, proposals: [], dropped: [], costUsd, tracker };
+  const extracted = await model.extract({
+    trackerState: context.renderTrackerState(snapshot), batchText: text, today: new Date().toISOString().slice(0, 10),
+  });
+  await settingsStore.logUsage(prisma, { batchId: null, pass: 'extract', model: extracted.model, usage: extracted.usage });
+  costUsd += settingsStore.costOf(extracted.model, extracted.usage);
+  const { accepted, dropped } = validateActions(extracted.actions, { snapshot, labels });
+  return {
+    relevant: true, costUsd, tracker,
+    proposals: accepted.map(a => ({ type: a.type, summary: a.summary, confidence: a.confidence, reason: a.reason })),
+    dropped: dropped.map(d => d.why),
+  };
+}
+
+// The dashboard's "Run self-test" button bumps this; the bot runs the test when it sees a new value.
+async function selfTestToken(prisma) {
+  const rows = await prisma.$queryRawUnsafe(`SELECT "value" FROM "AssetSetting" WHERE "key" = 'agentSelfTest'`);
+  return rows[0]?.value?.token || null;
+}
+async function requestSelfTest(prisma, requestedBy) {
+  const token = String(Date.now());
+  await prisma.$executeRawUnsafe(`
+    INSERT INTO "AssetSetting" ("key", "value") VALUES ('agentSelfTest', $1::jsonb)
+    ON CONFLICT ("key") DO UPDATE SET "value" = EXCLUDED."value", "updatedAt" = CURRENT_TIMESTAMP
+  `, JSON.stringify({ token, requestedBy }));
+  return token;
+}
+
 // Suggestions the bot has not posted to the review channel yet. Claimed
 // atomically so a suggestion is handed to the bot once.
 async function claimDiscordPosts(prisma, limit = 10) {
@@ -191,4 +229,4 @@ async function tick(prisma, { model = require('./model'), maxBatches = 3 } = {})
   return { state, processed, toPost: await claimDiscordPosts(prisma) };
 }
 
-module.exports = { listChannels, allowedChannelIds, ingestMessages, pruneOldMessages, claimBatches, processBatch, claimDiscordPosts, tick };
+module.exports = { listChannels, allowedChannelIds, ingestMessages, pruneOldMessages, claimBatches, processBatch, claimDiscordPosts, tick, dryRun, selfTestToken, requestSelfTest };
