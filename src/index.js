@@ -17,6 +17,8 @@ const boardTaskRoutes = require('./routes/board-tasks');
 const teamReportRoutes = require('./routes/team-reports');
 const updateLogRoutes = require('./routes/update-log');
 const robloxDumpRoutes = require('./routes/roblox-dump');
+const assetRoutes = require('./routes/assets');
+const { isEnabled } = require('./assets/constants');
 const authMiddleware = require('./middleware/auth');
 
 const app = express();
@@ -59,6 +61,7 @@ app.use('/api/board-tasks', boardTaskRoutes);
 app.use('/api/team-reports', teamReportRoutes);
 app.use('/api/update-logs', updateLogRoutes);
 app.use('/api/roblox-dump', robloxDumpRoutes);
+app.use('/api/assets', assetRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -67,6 +70,8 @@ app.get('/api/health', (req, res) => {
 app.get('/api/config', (req, res) => {
   res.json({
     discordServerId: process.env.DISCORD_SERVER_ID || null,
+    assetsEnabled: isEnabled('ASSETS_ENABLED'),
+    assetAgentEnabled: isEnabled('ASSET_AGENT_ENABLED'),
   });
 });
 

@@ -10,10 +10,12 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "db:seed": "node prisma/seed.js"
+    "db:seed": "node prisma/seed.js",
+    "test": "node --test \"test/**/*.test.js\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
+    "@aws-sdk/client-s3": "^3.0.0",
     "@notionhq/client": "^2.2.0",
     "@prisma/client": "^5.0.0",
     "axios": "^1.6.0",
@@ -24,10 +26,10 @@
     "jsonwebtoken": "^9.0.0",
     "multer": "^1.4.5-lts.1",
     "node-fetch": "^2.6.1",
-    "prisma": "^5.0.0",
-    "@aws-sdk/client-s3": "^3.0.0"
+    "prisma": "^5.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "nodemon": "^3.0.0"
   }
 }
