@@ -9,6 +9,8 @@ const { notify, patchFixNotice, notifyTesters } = require('../discord-notifier')
 const { log } = require('../history-logger');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
+const testerQa = require('../tester-qa');
+const testerPay = require('../tester-pay');
 
 const prisma = new PrismaClient();
 let statusEnumReady = false;
@@ -152,9 +154,10 @@ function authorizeReportPatch(req, res) {
 
 // Raw SQL helper — bypasses Prisma enum deserialization for 'declined' etc.
 async function fetchReports(whereClauses = [], values = [], extra = '') {
+  await testerPay.ensureTables(prisma);
   const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
   const sql = `
-    SELECT r.*,
+    SELECT r.*, ${testerQa.TESTER_CHECK_COLUMN},
       COALESCE(
         json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email))
         FILTER (WHERE u.id IS NOT NULL), '[]'
@@ -507,30 +510,17 @@ router.patch('/:id', auth, async (req, res) => {
     }
 
     // Read back with raw SQL to avoid Prisma enum deserialization on 'declined' etc.
-    const rows = await prisma.$queryRawUnsafe(`
-      SELECT r.*,
-        COALESCE(
-          json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email))
-          FILTER (WHERE u.id IS NOT NULL), '[]'
-        ) AS assignees,
-        COALESCE(
-          json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename))
-          FILTER (WHERE a.id IS NOT NULL), '[]'
-        ) AS attachments
-      FROM "Report" r
-      LEFT JOIN "_AssignedReports" ar ON ar."A" = r.id
-      LEFT JOIN "User" u ON u.id = ar."B"
-      LEFT JOIN "Attachment" a ON a."reportId" = r.id
-      WHERE r.id = $1
-      GROUP BY r.id
-    `, id);
-
-    const report = rows[0];
+    let [report] = await fetchReports(['r.id = $1'], [id]);
     if (!report) return res.status(404).json({ error: 'Report not found' });
 
     // Log history
     if (status) {
       await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
+      // Going into QA Review asks the tester who filed it to confirm the fix;
+      // leaving it before they answer tells them it is handled.
+      if (await testerQa.afterStatusChange(prisma, report, existingReport.status, req.user.name)) {
+        [report] = await fetchReports(['r.id = $1'], [id]);
+      }
       if (status === 'reviewing') {
         alertQaReview(prisma).catch(err => console.error('[PATCH] QA alert failed:', err.message));
         if (target === 'test') {
@@ -717,7 +707,10 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
       ? await fetchReports([`r.id = ANY($1::text[])`], [flagged.map(r => r.id)])
       : [];
     const patchFixSends = [];
-    for (const report of updatedReports) {
+    for (let report of updatedReports) {
+      if (await testerQa.afterStatusChange(prisma, report, 'in_progress', req.user.name)) {
+        [report] = await fetchReports(['r.id = $1'], [report.id]);
+      }
       broadcastReport('report.updated', report, req.user);
       if (target === 'test') patchFixSends.push(sendPatchFixForReport(report));
     }
@@ -738,8 +731,12 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
 // POST /api/reports/:id/publish-resolved — QA approved
 router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer', 'engineer'), async (req, res) => {
   try {
+    const [before] = await fetchReports(['r.id = $1'], [req.params.id]);
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
-    const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
+    let [report] = await fetchReports(['r.id = $1'], [req.params.id]);
+    if (before && await testerQa.afterStatusChange(prisma, report, before.status, req.user.name)) {
+      [report] = await fetchReports(['r.id = $1'], [req.params.id]);
+    }
     notify({
       threadId:      report.discordThreadId,
       reportType:    report.type,

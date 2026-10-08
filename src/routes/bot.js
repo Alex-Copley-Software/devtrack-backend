@@ -7,6 +7,8 @@ const { PrismaClient } = require('@prisma/client');
 const { uploadBuffer, uploadFile } = require('../r2');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
+const testerQa = require('../tester-qa');
+const testerPay = require('../tester-pay');
 
 const prisma = new PrismaClient();
 const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'];
@@ -325,7 +327,8 @@ router.patch('/report/:id', botAuth, async (req, res) => {
         WHERE r.id = $1
         GROUP BY r.id
       `, req.params.id);
-      broadcastReport('report.updated', fresh[0] || updated[0]);
+      const changed = fresh[0] && await testerQa.afterStatusChange(prisma, fresh[0], existing[0].status, actorName);
+      broadcastReport('report.updated', (changed && await testerQa.fetchReport(prisma, req.params.id)) || fresh[0] || updated[0]);
       return res.json({ success: true, report: updated[0] });
     }
 
@@ -336,6 +339,41 @@ router.patch('/report/:id', botAuth, async (req, res) => {
   } catch (err) {
     console.error('[Bot PATCH] Error:', err.message);
     res.status(500).json({ error: 'Could not update report' });
+  }
+});
+
+// ── tester QA ────────────────────────────────────────────────────────────────
+
+// The bot posted the "ready to check" message; remember it so it can be edited later.
+router.post('/qa-check/:id/posted', botAuth, async (req, res) => {
+  try {
+    await testerPay.ensureTables(prisma);
+    await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "messageId" = $2 WHERE id = $1`, req.params.id, String(req.body.messageId || ''));
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[QA check posted]', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
+});
+
+// The tester pressed Fixed or Not fixed.
+router.post('/qa-check/:id/respond', botAuth, async (req, res) => {
+  try {
+    res.json(await testerQa.applyAnswer(prisma, req.params.id, req.body || {}));
+  } catch (err) {
+    if (err instanceof testerPay.PayError) return res.status(err.status).json({ error: err.message });
+    console.error('[QA check respond]', err.message);
+    res.status(500).json({ error: 'Something went wrong. Try again in a moment.' });
+  }
+});
+
+router.get('/qa-check/:id', botAuth, async (req, res) => {
+  try {
+    const check = await testerPay.getCheck(prisma, req.params.id);
+    if (!check) return res.status(404).json({ error: 'That QA check no longer exists.' });
+    res.json({ check, settings: await testerPay.getSettings(prisma) });
+  } catch (err) {
+    res.status(500).json({ error: 'Something went wrong' });
   }
 });
 

@@ -94,4 +94,23 @@ async function notifyReportPauseState(paused) {
   }
 }
 
-module.exports = { notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState };
+// Tester QA: ask the reporter to confirm a fix in their thread, and later
+// update that message if staff approve it or the report leaves QA first.
+async function qaCheck(payload) {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/qa-check`, payload, { headers: { 'x-bot-secret': BOT_SECRET }, timeout: 5000 });
+    console.log(`[Notifier] Tester QA check sent for thread ${payload.threadId}`);
+  } catch (err) {
+    console.error('[Notifier] Failed to send tester QA check:', err.message);
+  }
+}
+
+async function qaCheckUpdate(payload) {
+  try {
+    await axios.post(`${BOT_WEBHOOK}/qa-check-update`, payload, { headers: { 'x-bot-secret': BOT_SECRET }, timeout: 5000 });
+  } catch (err) {
+    console.error('[Notifier] Failed to update tester QA check:', err.message);
+  }
+}
+
+module.exports = { notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState, qaCheck, qaCheckUpdate };

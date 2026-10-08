@@ -22,6 +22,9 @@ const ACTION_LABELS = {
   archived: 'Archived',
   unarchived: 'Unarchived',
   credited: 'Credit given',
+  tester_qa_requested: 'Tester asked to confirm the fix',
+  tester_fixed: 'Tester confirmed the fix',
+  tester_not_fixed: 'Tester says it is not fixed',
 };
 
 async function log({ reportId, action, detail, actorName, actorId }) {

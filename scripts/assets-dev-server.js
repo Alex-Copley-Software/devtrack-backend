@@ -84,6 +84,41 @@ async function seedDemoSuggestions(prisma) {
   console.log(`Demo agent run: ${result.processed.map(b => b.error || `${b.suggestions} suggestions`).join(', ') || result.state}`);
 }
 
+// A handful of made-up bug reports and tester checks so /payouts/ has
+// something to add up. The real Report table belongs to Prisma; this is a
+// stand-in with the columns the payout queries read.
+async function seedPayoutsDemo(prisma, pg) {
+  const pay = require('../src/tester-pay');
+  await pg.exec(`
+    CREATE TABLE "Report" ("id" TEXT PRIMARY KEY, "title" TEXT, "type" TEXT, "bugLevel" TEXT, "status" TEXT, "queued" BOOLEAN,
+      "discordUserId" TEXT, "discordUser" TEXT, "discordThreadId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE "ReportHistory" ("id" SERIAL PRIMARY KEY, "reportId" TEXT, "action" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
+  await pay.ensureTables(prisma);
+  await pay.saveSettings(prisma, { rates: { insignificant: 0.5, minor: 2, moderate: 5, major: 12 , verifiedFix: 1.5 } });
+  const testers = [['u1', 'NovaTester'], ['u2', 'pixel_hunter'], ['u3', 'Kiri'], ['u4', 'a_very_long_tester_display_name_here']];
+  const levels = ['minor', 'minor', 'moderate', 'major', 'insignificant', 'minor', 'moderate', null];
+  for (let i = 0; i < 26; i++) {
+    const [uid, name] = testers[i % testers.length === 3 && i % 2 ? 0 : i % testers.length];
+    const status = i % 9 === 8 ? 'declined' : i % 4 === 0 ? 'resolved' : i % 4 === 1 ? 'reviewing' : 'open';
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Report" ("id","title","type","bugLevel","status","queued","discordUserId","discordUser","discordThreadId","creditedDiscordUserId","creditedDiscordUser")
+       VALUES ($1,$2,'bug',$3,$4,false,$5,$6,$7,$8,$9)`,
+      `rep-${i}`, `Sample bug ${i + 1}: ${['unit clips through the floor', 'banner pity counter resets', 'portal reward missing', 'boss soft locks on phase two'][i % 4]}`,
+      levels[i % levels.length], status, uid, name, `9100000000000000${String(i).padStart(2, '0')}`, i === 5 ? 'u3' : null, i === 5 ? 'Kiri' : null);
+    await prisma.$executeRawUnsafe(`INSERT INTO "ReportHistory" ("reportId","action","createdAt") VALUES ($1,'Report accepted', NOW() - ($2 || ' days')::interval)`, `rep-${i}`, String(i % 12));
+    if (i % 4 === 0) {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "ReportQaCheck" ("id","reportId","discordUserId","discordUser","threadId","status","videoUrl","note","respondedAt")
+         VALUES ($1,$2,$3,$4,'t',$5,$6,$7, NOW() - ($8 || ' days')::interval)`,
+        `chk-${i}`, `rep-${i}`, uid, name, i % 8 === 0 ? 'fixed' : 'not_fixed', i % 8 === 0 ? 'https://discord.com/channels/1/2/3' : null, i % 8 === 0 ? null : 'Still happens when two units overlap', String(i % 6));
+    }
+  }
+  const day = n => new Date(Date.now() - n * 86400000).toISOString().slice(0, 10);
+  await pay.createPeriod(prisma, { name: 'Update 4.0 testing', startsOn: day(13), endsOn: day(0) }, 'Demo');
+  const old = await pay.createPeriod(prisma, { name: 'Update 3.5 testing', startsOn: day(40), endsOn: day(14) }, 'Demo');
+  await pay.markPaid(prisma, old.id, 'Demo');
+}
+
 async function main() {
   const pg = new PGlite();
   await pg.exec(`SET TIME ZONE 'UTC'`); // match production, where timestamps are stored in UTC
@@ -127,6 +162,8 @@ async function main() {
   app.get('/api/config', (req, res) => res.json({ assetsEnabled: true, assetAgentEnabled: process.env.ASSET_AGENT_ENABLED === 'true', discordServerId: '900000000000000000' }));
   app.use('/api/events', require('../src/routes/events'));
   app.use('/api/assets', require('../src/routes/assets'));
+  await seedPayoutsDemo(prisma, pg);
+  app.use('/api/payouts', require('../src/routes/payouts'));
   try { app.use('/api/bot/assets', require('../src/routes/bot-assets')); } catch { /* added in a later phase */ }
 
   app.get('/dev-login', (req, res) => {

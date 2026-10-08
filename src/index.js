@@ -63,6 +63,7 @@ app.use('/api/team-reports', teamReportRoutes);
 app.use('/api/update-logs', updateLogRoutes);
 app.use('/api/roblox-dump', robloxDumpRoutes);
 app.use('/api/assets', assetRoutes);
+app.use('/api/payouts', require('./routes/payouts'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
