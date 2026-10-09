@@ -78,7 +78,13 @@ directory has nobody. Reopening or declining a paid payout removes that
 expense. The payout card shows the expense number.
 
 Not logged automatically, and said so on the card: a payout with no amount,
-and one whose amount was written in dollars (expenses are kept in Robux).
+one whose amount was written in dollars (expenses are kept in Robux), and
+any payout paid before the page has data (import first).
+
+An import replaces the expense log, including expenses logged this way since
+the last import. While you are still entering payments on the standalone
+site and re-importing, that is what you want (no doubles). Once you enter
+them here, stop importing.
 
 **Requests show recent payments.** A new payout request lists the last few
 expenses already logged for that dev, on the admin card and the Payouts

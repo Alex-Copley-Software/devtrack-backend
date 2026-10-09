@@ -28,6 +28,7 @@ async function setup({ roblox = '5550001' } = {}) {
   const prisma = await createTestDb();
   const seeded = await seedBasics(prisma);
   await ensureRevenueSchema(prisma);
+  await prisma.$executeRawUnsafe(`INSERT INTO rev_monthly_revenue (month, gross_revenue) VALUES ('2026-10-01', 0)`);
   await service.updateDev(ctxFor(prisma), seeded.ani.id, { discordThreadId: FORUM, robloxAccount: roblox });
   const expenses = () => prisma.$queryRawUnsafe(
     `SELECT e.*, p.display_name, p.roblox_user_id FROM rev_expenses e LEFT JOIN rev_payees p ON p.id = e.payee_id ORDER BY e.id`);
@@ -115,6 +116,9 @@ test('the assistant can read payment history, and nothing else about money', asy
   assert.deepEqual([all.payee, all.payments_found, all.total_robux, all.payments[0].for, all.payments[0].receipt], ['Ani', 2, 125000, 'Aizen shiny model', 'https://discord.com/channels/1/2/3']);
   assert.deepEqual((await revenue.paymentsTo(prisma, { text: 'starrk' })).payments.map(p => p.robux), [95000]);
   assert.match((await revenue.paymentsTo(prisma, { name: 'Zed' })).error, /Nobody called "Zed"/);
+  // Before the page is set up, nothing is logged (an import would only wipe it).
+  await prisma.$executeRawUnsafe(`DELETE FROM rev_monthly_revenue`);
+  assert.match((await revenue.logAssetPayout(prisma, { id: 'x', amount: 5, devName: 'Ani' })).skipped, /has no data yet/);
   const tools = assistant.TOOLS.map(t => t.name);
   assert.ok(tools.includes('get_payments'));
   assert.ok(!tools.some(t => /share|roster|revenue|salary/i.test(t)), 'no tool exposes shares, salaries or revenue');

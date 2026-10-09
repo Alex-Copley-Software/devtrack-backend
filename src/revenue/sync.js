@@ -76,6 +76,10 @@ async function logAssetPayout(prisma, payout) {
   await ensureRevenueSchema(prisma);
   const [existing] = await prisma.$queryRawUnsafe(`SELECT id FROM rev_expenses WHERE source = 'asset_payout' AND source_ref = $1 LIMIT 1`, payout.id);
   if (existing) return { expenseId: existing.id };
+  // Until the page has been set up (a backup imported, or months created),
+  // anything logged here would only be wiped by that first import.
+  const [{ n: months }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM rev_monthly_revenue`);
+  if (!months) return { skipped: 'the Revenue page has no data yet (import your backup first), so log this one there by hand afterwards' };
   if (!(payout.amount > 0)) return { skipped: 'no amount was given, so log this one on the Revenue page by hand' };
   if (looksLikeDollars(payout.amountText)) return { skipped: `the amount was written in dollars (${payout.amountText}), and expenses are kept in Robux: log it on the Revenue page by hand` };
 
