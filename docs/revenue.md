@@ -59,6 +59,14 @@ Revenue, Data & Backup:
    only its contents are sent; you are shown what it holds.
 3. Press **Replace everything with this file**.
 
+Or from a terminal, with the GitHub CLI signed in and `DATABASE_URL` set to
+the DevTrack database:
+
+```bash
+node scripts/import-revenue-backup.js --latest --dry-run   # shows what the newest backup holds, changes nothing
+node scripts/import-revenue-backup.js --latest             # replaces everything with it
+```
+
 An import replaces everything on the page. It can be repeated: until you
 stop entering data on the standalone site, importing its latest backup
 brings DevTrack up to date again. Once you start entering data here, stop
