@@ -85,6 +85,12 @@ The payee is found by Roblox user id first, then by name, and created if the
 directory has nobody. Reopening or declining a paid payout removes that
 expense. The payout card shows the expense number.
 
+**Who pays for it.** Pressing Paid out asks who splits the cost, the same
+choice the Expenses tab has: pick people from this month's manual-payout
+shareholders, or take the default (an even split across all of them). In
+Discord the question is shown only to the person who pressed the button. It
+can be changed afterwards by editing the expense on the Revenue page.
+
 Not logged automatically, and said so on the card: a payout with no amount,
 one whose amount was written in dollars (expenses are kept in Robux), and
 any payout paid before the page has data (import first).

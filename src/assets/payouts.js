@@ -52,7 +52,7 @@ async function saveSettings(prisma, patch) {
 
 // ── reading ──────────────────────────────────────────────────────────────────
 
-const FIELDS = `p.id, p."guildId", p."robloxAccount", p."revenueExpenseId", p."revenueNote", p."paymentHistory", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
+const FIELDS = `p.id, p."guildId", p."robloxAccount", p."revenueExpenseId", p."revenueNote", p."paymentHistory", p."costSharePersonIds", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
   p.text, p.amount, p."amountText", p.description, p."contentItemId", ci."internalName" AS "itemName", p.status, p.duplicates,
   p."adminChannelId", p."adminMessageId", p."paidAt", p."resolvedByName", p."declineReason", p."createdAt", p."updatedAt",
   COALESCE((SELECT json_agg(json_build_object('id', t.id, 'ref', t.ref, 'deliverable', tt.deliverable, 'item', tci."internalName") ORDER BY t.ref)
@@ -319,7 +319,8 @@ function broadcast() {
 
 // decision: 'paid' | 'declined' | 'reopen'. via 'discord' is applied to Discord
 // by the bot at once; via 'web' is picked up on the bot's next poll.
-async function resolve(prisma, id, { decision, actorName, reason, via = 'web' }) {
+// costSharePersonIds: for 'paid', the Revenue roster people who split this cost. Leave it out for the default split.
+async function resolve(prisma, id, { decision, actorName, reason, via = 'web', costSharePersonIds }) {
   const payout = await getPayout(prisma, id);
   if (!payout) throw new AssetError(404, 'Payout request not found');
   const next = { paid: 'paid', declined: 'declined', reopen: 'pending' }[decision];
@@ -333,6 +334,10 @@ async function resolve(prisma, id, { decision, actorName, reason, via = 'web' })
     SET status = $2, "paidAt" = CASE WHEN $2 = 'paid' THEN CURRENT_TIMESTAMP ELSE NULL END, "resolvedByName" = $3, "declineReason" = $4,
       "needsDiscordSync" = $5, "updatedAt" = CURRENT_TIMESTAMP
     WHERE id = $1`, id, next, next === 'pending' ? null : actorName || null, next === 'declined' ? why : null, via !== 'discord');
+  if (next === 'paid') {
+    const ids = [...new Set((Array.isArray(costSharePersonIds) ? costSharePersonIds : []).map(Number).filter(Number.isInteger))];
+    await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET "costSharePersonIds" = $2::jsonb WHERE id = $1`, id, ids.length ? JSON.stringify(ids) : null);
+  }
   await syncRevenue(prisma, id, next, payout.status);
   const updated = await getPayout(prisma, id);
   await service.logActivity({ prisma, source: 'human', actor: { userId: null, name: actorName || 'Admin' } }, [{

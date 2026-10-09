@@ -89,8 +89,12 @@ router.post('/payouts/:id/resolve', h(async req => {
   if (!approved && req.body.isAdministrator !== true) throw new AssetError(403, 'Only approved admins can mark payouts.');
   return payouts.resolve(req.prisma, req.params.id, {
     decision: req.body.decision, actorName: req.body.actorName, reason: req.body.reason, via: 'discord',
+    costSharePersonIds: req.body.costSharePersonIds,
   });
 }));
+
+// Who can be picked to split a payout's cost when it is logged on the Revenue page (empty when Revenue is off).
+router.get('/payout-audience', h(async req => ({ people: await require('../revenue/sync').audienceOptions(req.prisma) })));
 
 // The assistant: an approved person said something to the bot. Returns the reply to post.
 router.post('/assistant', h(async req => {

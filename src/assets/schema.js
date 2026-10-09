@@ -330,6 +330,8 @@ async function ensureAssetSchema(prisma) {
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "revenueExpenseId" INT`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "revenueNote" TEXT`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "paymentHistory" JSONB`);
+      // Who splits the cost when it is logged as an expense (Revenue roster ids). Empty: the default split.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "costSharePersonIds" JSONB`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();

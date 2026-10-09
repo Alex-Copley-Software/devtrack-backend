@@ -123,3 +123,24 @@ test('the assistant can read payment history, and nothing else about money', asy
   assert.ok(tools.includes('get_payments'));
   assert.ok(!tools.some(t => /share|roster|revenue|salary/i.test(t)), 'no tool exposes shares, salaries or revenue');
 });
+
+test('whoever marks it paid can say who splits the cost; left alone, it is the default split', async () => {
+  const { prisma, expenses, request } = await setup();
+  const month = `${new Date().toISOString().slice(0, 8)}01`;
+  await prisma.$executeRawUnsafe(`INSERT INTO rev_people (id, name) VALUES (1, 'Olive'), (2, 'Dana'), (3, 'Sam'), (4, 'Gone')`);
+  await prisma.$executeRawUnsafe(
+    `INSERT INTO rev_share_terms (person_id, share_pct, payout_method, effective_from, effective_until) VALUES
+       (1, 0.5, 'manual', '2026-01-01', NULL), (2, 0.1, 'manual', '2026-01-01', NULL), (3, 0.1, 'standard', '2026-01-01', NULL), (4, 0.1, 'manual', '2026-01-01', '2026-02-01')`);
+  // Only people on manual payout this month can be picked: they are the ones who share costs.
+  assert.deepEqual(await revenue.audienceOptions(prisma), [{ id: 2, name: 'Dana' }, { id: 1, name: 'Olive' }]);
+  assert.ok(month);
+
+  const a = (await request('30k for aizen model', { amount_text: '30k', amount_number: 30000, description: 'Aizen model' })).payout;
+  const paid = await payouts.resolve(prisma, a.id, { decision: 'paid', actorName: 'Olive', costSharePersonIds: [2, '1', 999, 2] });
+  assert.deepEqual(paid.costSharePersonIds, [2, 1, 999]);
+  assert.equal((await expenses())[0].cost_share_person_ids, '[1,2]', 'only real roster people are stored on the expense');
+
+  const b = (await request('10k for aizen icon', { amount_text: '10k', amount_number: 10000, description: 'Aizen icon' })).payout;
+  await payouts.resolve(prisma, b.id, { decision: 'paid', actorName: 'Olive' });
+  assert.equal((await expenses())[1].cost_share_person_ids, null, 'nobody chosen means the default even split');
+});

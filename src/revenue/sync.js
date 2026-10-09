@@ -66,6 +66,28 @@ async function recentPayments(prisma, { name, roblox }, limit = 5) {
   return rows.map(r => ({ id: r.id, date: r.date_incurred, description: r.description, amount: r.amount, url: r.receipt_url || null }));
 }
 
+// Who can be chosen to split a cost: this month's manual-payout shareholders,
+// which is also who splits it when nobody is chosen.
+async function audienceOptions(prisma) {
+  if (!enabled()) return [];
+  await ensureRevenueSchema(prisma);
+  const { resolveCostSharePersonIds } = require('./resolver');
+  const { reader } = require('./store');
+  const month = `${new Date().toISOString().slice(0, 8)}01`;
+  const ids = await resolveCostSharePersonIds(reader(prisma), month);
+  if (!ids.length) return [];
+  const people = await prisma.$queryRawUnsafe(`SELECT id, name FROM rev_people WHERE id = ANY($1::int[]) ORDER BY name`, ids);
+  return people.map(p => ({ id: p.id, name: p.name }));
+}
+
+// The ids that are real roster people, as the JSON text an expense stores (null: default split).
+async function audienceJson(prisma, ids) {
+  const wanted = [...new Set((Array.isArray(ids) ? ids : []).map(Number).filter(Number.isInteger))];
+  if (!wanted.length) return null;
+  const real = (await prisma.$queryRawUnsafe(`SELECT id FROM rev_people WHERE id = ANY($1::int[]) ORDER BY id`, wanted)).map(p => p.id);
+  return real.length ? JSON.stringify(real) : null;
+}
+
 // An amount the dev wrote in dollars is not a Robux figure, and expenses are
 // kept in Robux, so it is not logged on its own.
 const looksLikeDollars = text => /\$|usd|dollar/i.test(String(text || ''));
@@ -96,10 +118,10 @@ async function logAssetPayout(prisma, payout) {
 
   const date = new Date(payout.paidAt || Date.now()).toISOString().slice(0, 10);
   const [row] = await prisma.$queryRawUnsafe(
-    `INSERT INTO rev_expenses (date_incurred, month, description, category, amount, receipt_url, payee_id, source, source_ref)
-     VALUES ($1, $2, $3, $4, $5::double precision, $6, $7::int, 'asset_payout', $8) RETURNING id`,
+    `INSERT INTO rev_expenses (date_incurred, month, description, category, amount, receipt_url, payee_id, source, source_ref, cost_share_person_ids)
+     VALUES ($1, $2, $3, $4, $5::double precision, $6, $7::int, 'asset_payout', $8, $9) RETURNING id`,
     date, `${date.slice(0, 8)}01`, String(payout.description || 'Asset payout').slice(0, 500), CATEGORY(), Number(payout.amount),
-    payout.requestUrl || null, payee.id, payout.id);
+    payout.requestUrl || null, payee.id, payout.id, await audienceJson(prisma, payout.costSharePersonIds));
   return { expenseId: row.id, payee: payee.display_name };
 }
 
@@ -139,4 +161,4 @@ async function paymentsTo(prisma, { name, text, limit = 15 } = {}) {
   };
 }
 
-module.exports = { enabled, robloxUserId, findPayee, robloxFor, recentPayments, logAssetPayout, unlogAssetPayout, paymentsTo, looksLikeDollars };
+module.exports = { enabled, audienceOptions, robloxUserId, findPayee, robloxFor, recentPayments, logAssetPayout, unlogAssetPayout, paymentsTo, looksLikeDollars };

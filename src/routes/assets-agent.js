@@ -101,7 +101,13 @@ module.exports = function registerAgentRoutes(router, h) {
   }));
   router.post('/payouts/:id/resolve', h(req => {
     if (!req.access.isManager) throw forbidden();
-    return payouts.resolve(req.prisma, req.params.id, { decision: req.body.decision, actorName: req.user.name, reason: req.body.reason, via: 'web' });
+    return payouts.resolve(req.prisma, req.params.id, {
+      decision: req.body.decision, actorName: req.user.name, reason: req.body.reason, via: 'web', costSharePersonIds: req.body.costSharePersonIds,
+    });
+  }));
+  router.get('/payout-audience', h(async req => {
+    if (!req.access.isManager) throw forbidden();
+    return { people: await require('../revenue/sync').audienceOptions(req.prisma) };
   }));
   router.get('/agent/payouts', h(req => {
     requireAdmin(req);
