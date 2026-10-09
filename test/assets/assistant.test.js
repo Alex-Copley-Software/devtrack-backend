@@ -169,3 +169,43 @@ test('status questions read the tracker', async () => {
   assert.deepEqual([item.item, item.tasks.length, item.tasks.find(t => t.status === 'Blocked').blocked_on], ['Aizen', 3, 'waiting on the rig']);
   assert.deepEqual([dev.dev, dev.free_to_task, dev.open_tasks.length], ['Ani', false, 1]);
 });
+
+test('an explicit instruction proposes a task change that waits for approval; nothing changes until it is accepted', async () => {
+  const { prisma, aizen, ani } = await setup();
+  const q = require('../../src/assets/queries');
+  const suggestions = require('../../src/assets/agent/suggestions');
+  const [task] = (await q.listTasksDetailed(prisma, { contentItemId: aizen.id })).filter(t => t.discipline === 'Animation');
+
+  const client = scripted([
+    [call('propose_task_change', { task_ref: `#${task.ref}`, status: 'Done', assignee: 'ani' })],
+    params => `Proposed: ${JSON.stringify(lastResult(params))}`,
+  ]);
+  const result = await assistant.respond(prisma, { message: msg(ADMIN, "set aizen's attack animations to done and assign it to ani", { authorName: 'Alex' }) }, { client });
+
+  assert.deepEqual(result.proposals.map(p => [p.type, p.status]), [['update_task_status', 'pending'], ['assign_task', 'pending']]);
+  assert.equal(result.proposals[0].summary, 'Aizen · Attack animations: Not Started → Done');
+  assert.match(result.proposals[0].reason, /Asked for by Alex in Discord/);
+  assert.match(result.proposals[0].evidence[0].url, /^https:\/\/discord\.com\/channels\/900\//);
+  const told = lastResult(client.seen[1]);
+  assert.equal(told.awaiting_approval.length, 2);
+  assert.match(told.note, /Nothing has changed yet/);
+
+  // Not changed yet, and not queued for the review channel as well.
+  let [now] = await q.listTasks(prisma, { ids: [task.id] });
+  assert.deepEqual([now.status, now.assigneeDevId], ['Not Started', null]);
+  assert.equal((await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM "AssetAgentSuggestion" WHERE "needsDiscordPost"`))[0].n, 0);
+
+  for (const p of result.proposals) await suggestions.resolveSuggestion(prisma, p.id, { decision: 'accept', via: 'discord', actor: { userId: null, name: 'Alex' } });
+  [now] = await q.listTasks(prisma, { ids: [task.id] });
+  assert.deepEqual([now.status, now.assigneeDevId], ['Done', ani.id]);
+
+  // Asking again for what is already true proposes nothing, and a block needs its reason.
+  const again = scripted([
+    [call('propose_task_change', { task_ref: String(task.ref), status: 'Done' }), call('propose_task_change', { task_ref: String(task.ref), status: 'Blocked' }, 'tu_2'), call('propose_task_change', { task_ref: '99999', status: 'Done' }, 'tu_3')],
+    'ok',
+  ]);
+  const second = await assistant.respond(prisma, { message: msg(ADMIN, 'mark it done') }, { client: again });
+  const [same, blocked, missing] = again.seen[1].messages.at(-1).content.map(c => JSON.parse(c.content));
+  assert.deepEqual([second.proposals.length, same.not_proposed, missing.not_proposed], [0, ['status is already that'], ['unknown task ref "99999"']]);
+  assert.match(blocked.error, /needs a reason/);
+});

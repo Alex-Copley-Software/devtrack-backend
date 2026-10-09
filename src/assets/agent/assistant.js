@@ -7,7 +7,9 @@
 // It is separate from the suggestion pipeline. That one reads everybody and
 // only ever proposes; this one answers a short list of approved Discord
 // accounts directly. It can read the tracker, files and notes, and it can
-// write notes and mark a file as the current one. It cannot change tasks.
+// write notes and mark a file as the current one. It cannot change tasks
+// itself: when a person explicitly tells it to, it proposes the change and
+// a confirmation card with Accept / Reject is posted for them to approve.
 //
 // Three stores back it:
 //   AssetFile   every attachment or file link posted where the agent reads,
@@ -303,6 +305,22 @@ const TOOLS = [
     },
   },
   {
+    name: 'propose_task_change',
+    description: 'Propose a change to ONE tracker task. Nothing is changed by this call: a confirmation card is posted and a person must press Accept. Only call it when the person has explicitly told you to make the change (see the rules). Find the task ref first with get_item or get_dev.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        task_ref: str('The task ref number, without the #.'),
+        status: { type: 'string', enum: ['Not Started', 'In Progress', 'Review', 'Done', 'Blocked', 'N/A'], description: 'New status. Optional.' },
+        blocked_reason: str('What it is waiting on. Required when status is Blocked.'),
+        assignee: str('Roster name of the dev to assign it to. Optional.'),
+        due_date: str('Due date as YYYY-MM-DD. Optional.'),
+        note: str('A note to add to the task (asset id, link, decision). Optional.'),
+      },
+      required: ['task_ref'],
+    },
+  },
+  {
     name: 'get_notes',
     description: 'Read notes saved earlier, newest first.',
     input_schema: { type: 'object', properties: { item: str('Content item name. Optional.'), dev: str('Roster name. Optional.'), text: str('Words to search for. Optional.') } },
@@ -341,6 +359,42 @@ async function runTool(prisma, name, input, ctx, state) {
     }, ctx);
     if (result.saved) state.notes.push(result);
     return result;
+  }
+  if (name === 'propose_task_change') {
+    const ref = String(input.task_ref || '').replace(/^#/, '');
+    const common = { task_ref: ref, confidence: 1, reason: `Asked for by ${state.author.name || 'an admin'} in Discord`, evidence: ['m1'] };
+    const actions = [];
+    if (input.status === 'Blocked') {
+      if (!String(input.blocked_reason || '').trim()) return { error: 'A blocked task needs a reason. Ask what it is waiting on.' };
+      actions.push({ ...common, type: 'mark_blocked', blocker_reason: input.blocked_reason });
+    } else if (input.status) actions.push({ ...common, type: 'update_task_status', status: input.status });
+    if (input.assignee) actions.push({ ...common, type: 'assign_task', assignee: findDev(ctx.devs, input.assignee)?.name || input.assignee });
+    if (input.due_date) actions.push({ ...common, type: 'set_due_date', due_date: input.due_date });
+    if (input.note) actions.push({ ...common, type: 'add_task_note', note: input.note });
+    if (!actions.length) return { error: 'Say what to change: a status, an assignee, a due date or a note.' };
+
+    const { validateActions } = require('./validate');
+    const suggestions = require('./suggestions');
+    state.snapshot = state.snapshot || await require('./context').buildSnapshot(prisma);
+    const { accepted, dropped } = validateActions(actions, { snapshot: state.snapshot, labels: new Map([['m1', state.message]]) });
+    const { stored, skipped } = await suggestions.storeSuggestions(prisma, accepted, {
+      batchId: null,
+      evidenceFor: () => [{
+        messageId: state.message.id, channelId: state.message.channelId, url: state.sourceUrl, authorName: state.author.name,
+        authorDiscordId: state.author.discordId, postedAt: new Date(state.message.postedAt || Date.now()).toISOString(),
+        excerpt: String(state.message.content || '').slice(0, 240),
+      }],
+    });
+    if (stored.length) {
+      // The card goes where the person asked, not to the review channel as well.
+      await prisma.$executeRawUnsafe(`UPDATE "AssetAgentSuggestion" SET "needsDiscordPost" = false WHERE id = ANY($1::text[])`, stored.map(s => s.id));
+      state.proposals.push(...stored);
+    }
+    return {
+      awaiting_approval: stored.map(s => s.summary),
+      not_proposed: [...dropped.map(d => d.why), ...skipped.map(s => `${s.action.summary}: ${s.why}`)],
+      note: stored.length ? 'A confirmation card with Accept and Reject is posted under your reply. Nothing has changed yet.' : 'Nothing was proposed.',
+    };
   }
   if (name === 'get_notes') {
     const item = input.item ? findItem(ctx.items, input.item) : null;
@@ -414,6 +468,8 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
     author: { discordId: String(message.authorDiscordId), name: message.authorName || null },
     sourceUrl: message.guildId ? `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}` : null,
     notes: [],
+    proposals: [],
+    message,
   };
   const api = client || getClient();
   const model = MODEL();
@@ -441,7 +497,7 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
     if (turn === MAX_TURNS - 1) reply = text || 'I ran out of steps before I could finish that. Try asking for one thing at a time.';
   }
   await settingsStore.logUsage(prisma, { batchId: null, pass: 'assistant', model, usage });
-  return { reply: (reply || 'I have nothing to add.').slice(0, 1900), notes: state.notes, costUsd: settingsStore.costOf(model, usage) };
+  return { reply: (reply || 'I have nothing to add.').slice(0, 1900), notes: state.notes, proposals: state.proposals, costUsd: settingsStore.costOf(model, usage) };
 }
 
 module.exports = {

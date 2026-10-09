@@ -282,7 +282,7 @@ processed when it resumes. Raw messages are deleted after 30 days
 
 Approved people can talk to the bot in Discord and get an answer. It is
 separate from the suggestions above: it answers a short list of accounts
-directly, and it never changes tasks.
+directly, and it never changes a task without a person approving the change.
 
 - "Get me the most recent files for Starrk" lists the files posted for that
   item, newest first, each linking to the Discord message it was posted in.
@@ -290,6 +290,12 @@ directly, and it never changes tasks.
   current" saves a note against the item and the dev, attaches that image,
   and marks it as the current file for the item.
 - "Where is Aizen at?", "Is Kuro free?" are answered from the tracker.
+- "Set Ruku's Aizen mesh task to Done", "assign the Starrk rig to Axen",
+  "mark task 214 blocked, waiting on concept art" post a confirmation card
+  with Accept and Reject under the reply. The task changes only when someone
+  presses Accept (approved accounts can, as can leads and managers). It has
+  to be an instruction: a statement such as "Ruku finished the Aizen mesh"
+  proposes nothing, though the assistant may ask whether to update the task.
 
 **Setting it up.** Agent settings, Assistant card:
 

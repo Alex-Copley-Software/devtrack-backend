@@ -134,6 +134,13 @@ router.post('/suggestions/:id/resolve', h(async req => {
   const decision = req.body.decision === 'reject' ? 'reject' : 'accept';
   const suggestion = await suggestions.getSuggestion(req.prisma, req.params.id);
   if (!suggestion) throw new AssetError(404, 'Suggestion not found');
+  // An approved assistant account can approve without being on the roster.
+  const approved = (await assistant.getSettings(req.prisma)).admins.find(a => a.id === String(req.body.discordUserId));
+  if (approved) {
+    return suggestions.resolveSuggestion(req.prisma, suggestion.id, {
+      decision, via: 'discord', actor: { userId: null, name: approved.label || req.body.discordUserName || 'Admin' },
+    });
+  }
   const { dev, access } = await discordIdentity(req.prisma, req.body.discordUserId);
   if (!dev) throw new AssetError(403, 'You are not on the asset roster, so you cannot review suggestions.');
   if (!perms.canResolveSuggestion(access, suggestion.updateId)) throw new AssetError(403, 'Only leads and managers can accept or reject suggestions.');
