@@ -80,7 +80,7 @@ test('closing records how, with the transcript, and stops offering it', async ()
   assert.deepEqual((await tickets.pendingClose(prisma, { delayMs: 0 })).map(t => t.reportId), [other]);
   const last = history.at(-1);
   assert.equal(last.action, 'ticket_closed');
-  assert.match(last.detail, /live-game-0007: closed, transcribed and deleted by Ticket Tool\. Transcript: https:\/\/discord\.com\/channels\/1\/2\/3/);
+  assert.match(last.detail, /live-game-0007: deleted by Ticket Tool\. Transcript: https:\/\/discord\.com\/channels\/1\/2\/3/);
 
   // Closing twice changes nothing and logs nothing.
   const count = history.length;

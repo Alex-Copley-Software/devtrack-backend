@@ -96,8 +96,8 @@ async function pendingClose(prisma, { delayMs = 0, statuses = CLOSE_STATUSES } =
 }
 
 const METHOD_TEXT = {
-  ticket_tool: 'closed, transcribed and deleted by Ticket Tool',
-  devtrack: 'transcribed and deleted by DevTrack (Ticket Tool did not act on the commands)',
+  ticket_tool: 'deleted by Ticket Tool',
+  devtrack: 'transcribed and deleted by DevTrack (Ticket Tool did not act on $delete)',
   manual: 'deleted in Discord',
   already_deleted: 'already gone from Discord',
 };

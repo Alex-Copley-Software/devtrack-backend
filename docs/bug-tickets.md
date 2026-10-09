@@ -30,18 +30,18 @@ pinged when reports resume.
 ## Closing
 
 Five minutes after a ticket's report becomes **resolved** or **declined**,
-the bot sends, in the ticket:
+the bot sends `$delete` in the ticket and waits for Ticket Tool to remove
+it. Ticket Tool's post in `test-game-transcripts` / `live-game-transcripts`
+is matched to the report by ticket number and linked on it.
 
-    $close      $transcript      $delete
+The bot reads the whole ticket before sending `$delete`. If Ticket Tool
+deletes the ticket but posts no transcript within about 20 seconds, the bot
+posts its own (a text file with every message) to the same transcripts
+channel, so the report always has one.
 
-and waits after each for Ticket Tool to act. Ticket Tool's post in
-`test-game-transcripts` / `live-game-transcripts` is matched to the report by
-ticket number and linked on it.
-
-Ticket Tool may not obey commands sent by another bot. If it does not answer
-`$close`, or the ticket is still there after `$delete`, the bot saves its own
-transcript (a text file with every message) to the same transcripts channel
-and deletes the channel itself. A ticket is never deleted without a
+Ticket Tool may not obey commands sent by another bot. If the ticket is
+still there about a minute after `$delete`, the bot saves its own transcript
+and deletes the channel itself. It never deletes a ticket without a
 transcript: if none can be saved, the close fails, is retried twice, and then
 a note is left in the ticket and on the report for staff.
 
@@ -62,7 +62,8 @@ could not be closed. The report shows a ticket chip and a Transcript link.
 | `TICKET_AUTO_CLOSE` | `true` | `false`: reports are tracked, tickets are never closed by the bot. |
 | `TICKET_CLOSE_ON` | `resolved,declined` | Which outcomes close a ticket. |
 | `TICKET_CLOSE_DELAY_MS` | `300000` | Wait after the outcome before closing. |
-| `TICKET_TOOL_COMMANDS` | `true` | `false`: skip the `$` commands and go straight to the bot's own transcript and delete. |
+| `TICKET_TOOL_SEQUENCE` | `delete` | Ticket Tool commands sent, in order, e.g. `close,transcript,delete`. |
+| `TICKET_TOOL_COMMANDS` | `true` | `false`: send no `$` commands and go straight to the bot's own transcript and delete. |
 | `TICKET_FALLBACK_CLOSE` | `true` | `false`: never delete a ticket Ticket Tool did not delete. |
 | `TICKET_TOOL_PREFIX` | `$` | Ticket Tool's command prefix. |
 | `TICKET_SETTLE_MS` | `45000` | How long to wait for the opener's first messages. |
@@ -76,5 +77,5 @@ could not be closed. The report shows a ticket chip and a Transcript link.
   Tool does not).
 - In both transcripts channels: View Channel, Send Messages, Embed Links,
   Attach Files, Read Message History.
-- For the `$` commands to be accepted, Ticket Tool has to treat the DevTrack
+- For `$delete` to be accepted, Ticket Tool has to treat the DevTrack
   bot as support staff on both panels.
