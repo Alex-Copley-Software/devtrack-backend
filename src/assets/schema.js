@@ -325,6 +325,11 @@ async function ensureAssetSchema(prisma) {
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetDev" ADD COLUMN IF NOT EXISTS "robloxAccount" TEXT`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "robloxAccount" TEXT`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "askedFor" TEXT`);
+      // The link to the Revenue page: the expense a paid payout was logged as (or why it was not),
+      // and what the expense log said this dev had been paid recently when they asked.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "revenueExpenseId" INT`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "revenueNote" TEXT`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "paymentHistory" JSONB`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();

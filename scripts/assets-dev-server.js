@@ -14,6 +14,7 @@ const fs = require('fs');
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'assets-dev-secret';
 process.env.BOT_SECRET = process.env.BOT_SECRET || 'assets-dev-bot-secret';
 process.env.ASSETS_ENABLED = 'true';
+process.env.REVENUE_ENABLED = 'true';
 process.env.ASSET_AGENT_ENABLED = process.env.ASSET_AGENT_ENABLED || 'true';
 
 const args = process.argv.slice(2);
@@ -28,6 +29,7 @@ const { ensureAssetSchema } = require('../src/assets/schema');
 const { seedDemo } = require('../src/assets/seed');
 
 const USERS = {
+  owner: { id: 'dev-owner', name: 'Olive Owner', email: 'owner@dev.local', role: 'owner' },
   admin: { id: 'dev-admin', name: 'Alex Admin', email: 'admin@dev.local', role: 'admin' },
   manager: { id: 'dev-manager', name: 'Morgan Manager', email: 'manager@dev.local', role: 'engineer' },
   dev: { id: 'dev-dev', name: 'Ani Animator', email: 'ani@dev.local', role: 'qa' },
@@ -121,7 +123,7 @@ async function seedDemoPayouts(prisma) {
   const dev = (await q.listDevs(prisma)).find(d => d.id === tasks[0]?.assigneeDevId);
   if (!dev) return;
   const ctx = { prisma, source: 'human', actor: { userId: null, name: 'Demo seed' }, silent: true };
-  await service.updateDev(ctx, dev.id, { discordThreadId: '940000000000000001', discordProfileUrl: dev.discordProfileUrl || 'https://discord.com/users/940000000000000009' });
+  await service.updateDev(ctx, dev.id, { discordThreadId: '940000000000000001', discordProfileUrl: dev.discordProfileUrl || 'https://discord.com/users/940000000000000009', robloxAccount: 'DemoBuilder_1' });
   const mine = tasks.filter(t => t.assigneeDevId === dev.id);
   const me = (await q.listDevs(prisma)).find(d => d.id === dev.id);
   let n = 0;
@@ -178,10 +180,11 @@ async function main() {
   await pg.exec(`SET TIME ZONE 'UTC'`); // match production, where timestamps are stored in UTC
   // Read TIMESTAMP columns (type 1114) as UTC, the way Prisma does. PGlite's default reads them as local time.
   const parsers = { 1114: value => new Date(`${value.replace(' ', 'T')}Z`) };
-  const prisma = {
-    $queryRawUnsafe: async (sql, ...values) => (await pg.query(sql, values, { parsers })).rows,
-    $executeRawUnsafe: async (sql, ...values) => (await pg.query(sql, values, { parsers })).affectedRows ?? 0,
-  };
+  const shim = runner => ({
+    $queryRawUnsafe: async (sql, ...values) => (await runner.query(sql, values, { parsers })).rows,
+    $executeRawUnsafe: async (sql, ...values) => (await runner.query(sql, values, { parsers })).affectedRows ?? 0,
+  });
+  const prisma = { ...shim(pg), $transaction: fn => pg.transaction(tx => fn(shim(tx))) };
   setPrisma(prisma);
 
   await pg.exec(`CREATE TABLE "User" ("id" TEXT PRIMARY KEY, "name" TEXT, "email" TEXT, "role" TEXT, "pageAccess" TEXT[])`);
@@ -211,6 +214,7 @@ async function main() {
   }
 
   const app = express();
+  app.use('/api/revenue/admin/import', express.json({ limit: '25mb' }));
   app.use(express.json());
   app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
   app.get('/api/config', (req, res) => res.json({ assetsEnabled: true, assetAgentEnabled: process.env.ASSET_AGENT_ENABLED === 'true', discordServerId: '900000000000000000' }));
@@ -220,6 +224,18 @@ async function main() {
   await seedDemoPayouts(prisma);
   await seedPayoutsDemo(prisma, pg);
   app.use('/api/payouts', require('../src/routes/payouts'));
+
+  // The Revenue page (/revenue/, sign in with /dev-login?as=owner). Starts
+  // empty; --revenue-dump <file.json> loads a dump, and --revenue-db <file.db>
+  // serves a SQLite backup at /dev-revenue-db for trying the page's own import.
+  if (option('revenue-dump')) {
+    const { ensureRevenueSchema } = require('../src/revenue/schema');
+    await ensureRevenueSchema(prisma);
+    const result = await require('../src/revenue/transfer').importDump(prisma, JSON.parse(fs.readFileSync(option('revenue-dump'), 'utf8')));
+    console.log(`Loaded a revenue dump: ${result.imported.people} people, ${result.imported.expenses} expenses`);
+  }
+  if (option('revenue-db')) app.get('/dev-revenue-db', (req, res) => res.sendFile(path.resolve(option('revenue-db'))));
+  app.use('/api/revenue', require('../src/routes/revenue'));
   try { app.use('/api/bot/assets', require('../src/routes/bot-assets')); } catch { /* added in a later phase */ }
 
   app.get('/dev-login', (req, res) => {
@@ -228,7 +244,7 @@ async function main() {
     res.send(`<script>
       localStorage.setItem('devtrack_token', ${JSON.stringify(token)});
       localStorage.setItem('devtrack_user', ${JSON.stringify(JSON.stringify({ ...user, pageAccess: ['bugs', 'assets'] }))});
-      location.href = '/assets/';
+      location.href = ${JSON.stringify(req.query.to === 'revenue' ? '/revenue/' : '/assets/')};
     </script>`);
   });
 

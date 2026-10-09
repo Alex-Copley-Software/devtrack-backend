@@ -43,9 +43,10 @@ router.use(async (req, res, next) => {
 });
 
 // ── moving the data in and out ───────────────────────────────────────────────
-// Replacing everything is the owner's call alone.
+// Replacing or downloading everything is for the owner, or an admin who has been given the page.
 
-const ownerOnly = (req, res, next) => (req.user.role === 'owner' ? next() : res.status(403).json({ detail: 'Only the owner can do that.' }));
+const canTransfer = user => ['owner', 'admin'].includes(user.role);
+const ownerOnly = (req, res, next) => (canTransfer(req.user) ? next() : res.status(403).json({ detail: 'Only the owner or an admin can do that.' }));
 const wrap = fn => async (req, res) => {
   try { res.json(await fn(req)); } catch (err) {
     if (err instanceof RevenueError) return res.status(err.status).json({ detail: err.detail });
@@ -57,7 +58,7 @@ const wrap = fn => async (req, res) => {
 router.get('/admin/status', wrap(async req => {
   const prisma = getPrisma();
   const settings = Object.fromEntries((await prisma.$queryRawUnsafe(`SELECT key, value FROM rev_settings WHERE key IN ('imported_at', 'imported_by')`)).map(s => [s.key, s.value]));
-  return { counts: await transfer.counts(prisma), imported_at: settings.imported_at || null, imported_by: settings.imported_by || null, is_owner: req.user.role === 'owner' };
+  return { counts: await transfer.counts(prisma), imported_at: settings.imported_at || null, imported_by: settings.imported_by || null, is_owner: canTransfer(req.user) };
 }));
 
 router.get('/admin/export', ownerOnly, wrap(() => transfer.exportDump(getPrisma())));

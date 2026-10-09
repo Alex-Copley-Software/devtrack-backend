@@ -20,6 +20,7 @@ const q = require('./queries');
 const service = require('./service');
 const assistant = require('./agent/assistant');
 const settingsStore = require('./agent/settings');
+const revenue = require('../revenue/sync');
 
 const { AssetError } = service;
 const STATUSES = ['needs_info', 'pending', 'paid', 'declined'];
@@ -51,7 +52,7 @@ async function saveSettings(prisma, patch) {
 
 // ── reading ──────────────────────────────────────────────────────────────────
 
-const FIELDS = `p.id, p."guildId", p."robloxAccount", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
+const FIELDS = `p.id, p."guildId", p."robloxAccount", p."revenueExpenseId", p."revenueNote", p."paymentHistory", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
   p.text, p.amount, p."amountText", p.description, p."contentItemId", ci."internalName" AS "itemName", p.status, p.duplicates,
   p."adminChannelId", p."adminMessageId", p."paidAt", p."resolvedByName", p."declineReason", p."createdAt", p."updatedAt",
   COALESCE((SELECT json_agg(json_build_object('id', t.id, 'ref', t.ref, 'deliverable', tt.deliverable, 'item', tci."internalName") ORDER BY t.ref)
@@ -229,9 +230,11 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
   // Who to pay: given in this request, or the one already on the roster. Asked for once.
   const given = robloxFrom(result.roblox_account) || robloxFrom((text.match(/https?:\/\/(?:www\.)?roblox\.com\/users\/\d+\S*/i) || [])[0])
     || (waiting?.askedFor === 'roblox' && /^@?[A-Za-z0-9_]{3,20}$/.test(body) ? robloxFrom(body) : null);
-  const roblox = given || dev.robloxAccount || null;
-  if (given && given !== dev.robloxAccount) {
-    await service.updateDev({ prisma, source: 'human', actor: { userId: null, name: `${dev.name} (Discord)` } }, dev.id, { robloxAccount: given });
+  // Failing those, the Revenue page's payee directory may already know where this dev is paid.
+  const known = given || dev.robloxAccount ? null : await revenue.robloxFor(prisma, dev).catch(() => null);
+  const roblox = given || dev.robloxAccount || known || null;
+  if ((given || known) && roblox !== dev.robloxAccount) {
+    await service.updateDev({ prisma, source: 'human', actor: { userId: null, name: given ? `${dev.name} (Discord)` : 'Revenue payee directory' } }, dev.id, { robloxAccount: roblox });
   }
   const ready = enough && !!roblox;
   const id = waiting?.id || newId();
@@ -275,7 +278,11 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
     await prisma.$executeRawUnsafe(`INSERT INTO "AssetPayoutTask" ("payoutId", "taskId") VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, t.id);
   }
   const duplicates = await findDuplicates(prisma, { id, devId: dev.id, contentItemId: fields[11], taskIds: tasks.map(t => t.id) });
-  await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET duplicates = $2::jsonb WHERE id = $1`, id, JSON.stringify(duplicates));
+  // What the expense log says this dev was paid lately: the best guard against paying twice
+  // for work that was paid before requests went through the bot.
+  const history = await revenue.recentPayments(prisma, { name: dev.name, roblox }).catch(() => []);
+  await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET duplicates = $2::jsonb, "paymentHistory" = $3::jsonb WHERE id = $1`,
+    id, JSON.stringify(duplicates), JSON.stringify(history));
   const payout = await getPayout(prisma, id);
   await service.logActivity({ prisma, source: 'human', actor: { userId: null, name: `${dev.name} (Discord)` } }, [{
     entityType: 'payout', entityId: id, contentItemId: payout.contentItemId, action: 'requested',
@@ -326,6 +333,7 @@ async function resolve(prisma, id, { decision, actorName, reason, via = 'web' })
     SET status = $2, "paidAt" = CASE WHEN $2 = 'paid' THEN CURRENT_TIMESTAMP ELSE NULL END, "resolvedByName" = $3, "declineReason" = $4,
       "needsDiscordSync" = $5, "updatedAt" = CURRENT_TIMESTAMP
     WHERE id = $1`, id, next, next === 'pending' ? null : actorName || null, next === 'declined' ? why : null, via !== 'discord');
+  await syncRevenue(prisma, id, next, payout.status);
   const updated = await getPayout(prisma, id);
   await service.logActivity({ prisma, source: 'human', actor: { userId: null, name: actorName || 'Admin' } }, [{
     entityType: 'payout', entityId: id, contentItemId: updated.contentItemId, action: next,
@@ -333,6 +341,26 @@ async function resolve(prisma, id, { decision, actorName, reason, via = 'web' })
   }]);
   broadcast();
   return updated;
+}
+
+// Keeps the Revenue page's expense log in step: a paid payout is logged as
+// an expense, and one that stops being paid is taken back out. A failure
+// here is recorded on the payout and never undoes the decision itself.
+async function syncRevenue(prisma, id, status, previous) {
+  if (!revenue.enabled()) return;
+  try {
+    if (status === 'paid') {
+      const result = await revenue.logAssetPayout(prisma, await getPayout(prisma, id));
+      await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET "revenueExpenseId" = $2::int, "revenueNote" = $3 WHERE id = $1`,
+        id, result.expenseId || null, result.skipped ? `Not logged to Revenue: ${result.skipped}` : null);
+    } else if (previous === 'paid') {
+      await revenue.unlogAssetPayout(prisma, id);
+      await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET "revenueExpenseId" = NULL, "revenueNote" = NULL WHERE id = $1`, id);
+    }
+  } catch (err) {
+    console.error('[AssetPayouts] could not sync with Revenue:', err.message);
+    await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET "revenueNote" = $2 WHERE id = $1`, id, 'Not logged to Revenue: something went wrong, log it there by hand').catch(() => {});
+  }
 }
 
 // Payouts changed on the web that Discord has not been told about yet.

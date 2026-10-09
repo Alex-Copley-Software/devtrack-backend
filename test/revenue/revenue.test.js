@@ -211,7 +211,7 @@ test('the page is off by default, needs a sign-in, and only the owner or people 
     assert.equal((await call('GET', '/api/revenue/people', undefined, token('u-owner', 'owner'))).status, 200);
 
     // Replacing everything is the owner's alone; a dry run reports and changes nothing.
-    assert.equal((await call('POST', '/api/revenue/admin/import', { dump }, token('u-fin', 'engineer'))).status, 403);
+    assert.equal((await call('POST', '/api/revenue/admin/import', { dump }, token('u-fin', 'engineer'))).status, 403, 'not for an engineer, even with the page');
     const dry = await call('POST', '/api/revenue/admin/import', { dump, dry_run: true }, token('u-owner', 'owner'));
     assert.deepEqual([dry.body.dry_run, dry.body.tables.people, dry.body.current.people], [true, 7, 0]);
     const done = await call('POST', '/api/revenue/admin/import', { dump }, token('u-owner', 'owner'));

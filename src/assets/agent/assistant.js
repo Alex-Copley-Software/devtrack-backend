@@ -338,6 +338,18 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_payments',
+    description: 'Payments logged on the Revenue page (the expense log): who was paid, how many Robux, what for, and when, newest first, with a total. Use it for "how much have we paid Ruku", "was the Aizen shiny model paid for", "what did we pay for last week".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: str('Who was paid: a dev or payee name. Optional.'),
+        text: str('Words that must appear in what the payment was for, e.g. "Aizen". Optional.'),
+        limit: { type: 'integer', description: 'How many payments to return, 1 to 40. Default 15.' },
+      },
+    },
+  },
+  {
     name: 'get_notes',
     description: 'Read notes saved earlier, newest first.',
     input_schema: { type: 'object', properties: { item: str('Content item name. Optional.'), dev: str('Roster name. Optional.'), text: str('Words to search for. Optional.') } },
@@ -434,6 +446,14 @@ async function runTool(prisma, name, input, ctx, state) {
     if (!actions.length) return { error: 'Say what to change: a status, an assignee, a due date or a note.' };
 
     return propose(actions);
+  }
+  if (name === 'get_payments') {
+    // Roster names and payee names are kept separately; try the name as typed, then the roster's spelling.
+    const revenue = require('../../revenue/sync');
+    let result = await revenue.paymentsTo(prisma, { name: input.name, text: input.text, limit: input.limit });
+    const dev = input.name ? findDev(ctx.devs, input.name) : null;
+    if (result.error && dev && dev.name !== input.name) result = await revenue.paymentsTo(prisma, { name: dev.name, text: input.text, limit: input.limit });
+    return result;
   }
   if (name === 'get_notes') {
     const item = input.item ? findItem(ctx.items, input.item) : null;

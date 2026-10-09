@@ -4,7 +4,7 @@ const auth = require('../middleware/auth');
 const { hasRole } = require('../middleware/roles');
 
 const prisma = new PrismaClient();
-const PAGE_KEYS = ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks', 'reports', 'assets'];
+const PAGE_KEYS = ['bugs', 'suggestions', 'imports', 'expenses', 'admin', 'tasks', 'reports', 'assets', 'revenue'];
 
 async function ensureUserAccessColumn() {
   await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "pageAccess" TEXT[]`);
