@@ -40,6 +40,9 @@ app.use(cors({
 // Roblox game content dumps can be larger than the default 100kb JSON limit.
 app.use('/api/roblox-dump/webhook', express.json({ limit: '10mb' }));
 
+// A revenue backup is a few hundred kilobytes of JSON, over the default limit too.
+app.use('/api/revenue/admin/import', express.json({ limit: '25mb' }));
+
 app.use(express.json());
 if (process.env.PROTECT_UPLOADS === 'true') {
   app.use('/uploads', authMiddleware, express.static(path.join(__dirname, '../uploads')));
@@ -64,6 +67,7 @@ app.use('/api/update-logs', updateLogRoutes);
 app.use('/api/roblox-dump', robloxDumpRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/payouts', require('./routes/payouts'));
+app.use('/api/revenue', require('./routes/revenue'));
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -74,6 +78,7 @@ app.get('/api/config', (req, res) => {
     discordServerId: process.env.DISCORD_SERVER_ID || null,
     assetsEnabled: isEnabled('ASSETS_ENABLED'),
     assetAgentEnabled: isEnabled('ASSET_AGENT_ENABLED'),
+    revenueEnabled: isEnabled('REVENUE_ENABLED'),
   });
 });
 
