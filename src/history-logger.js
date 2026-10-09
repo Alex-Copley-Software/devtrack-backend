@@ -25,6 +25,10 @@ const ACTION_LABELS = {
   tester_qa_requested: 'Tester asked to confirm the fix',
   tester_fixed: 'Tester confirmed the fix',
   tester_not_fixed: 'Tester says it is not fixed',
+  ticket_opened: 'Ticket opened',
+  ticket_transcript: 'Ticket transcript saved',
+  ticket_closed: 'Ticket closed',
+  ticket_close_failed: 'Ticket could not be closed automatically',
 };
 
 async function log({ reportId, action, detail, actorName, actorId }) {

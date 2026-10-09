@@ -9,6 +9,7 @@ const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
 const testerQa = require('../tester-qa');
 const testerPay = require('../tester-pay');
+const reportTickets = require('../report-tickets');
 
 const prisma = new PrismaClient();
 const VALID_STATUSES = ['queued', 'open', 'in_progress', 'reviewing', 'on_hold', 'resolved', 'declined'];
@@ -376,6 +377,39 @@ router.get('/qa-check/:id', botAuth, async (req, res) => {
     res.status(500).json({ error: 'Something went wrong' });
   }
 });
+
+// ── Ticket Tool tickets ──────────────────────────────────────────────────────
+// Bug reports filed as tickets. See report-tickets.js.
+
+const ticketRoute = fn => async (req, res) => {
+  try {
+    res.json(await fn(req));
+  } catch (err) {
+    if (err instanceof reportTickets.TicketError) return res.status(err.status).json({ error: err.message });
+    console.error('[Tickets]', err.message);
+    res.status(500).json({ error: 'Something went wrong' });
+  }
+};
+
+const broadcastTicket = async ticket => {
+  const report = ticket && await testerQa.fetchReport(prisma, ticket.reportId).catch(() => null);
+  if (report) broadcastReport('report.updated', report);
+  return { ticket };
+};
+
+router.post('/ticket', botAuth, ticketRoute(async req => broadcastTicket(await reportTickets.register(prisma, req.body || {}))));
+
+router.get('/tickets/pending-close', botAuth, ticketRoute(async req => ({
+  tickets: await reportTickets.pendingClose(prisma, { delayMs: req.query.delayMs, statuses: req.query.statuses || undefined }),
+})));
+
+router.post('/tickets/transcript', botAuth, ticketRoute(async req => broadcastTicket(await reportTickets.attachTranscript(prisma, req.body || {}))));
+
+router.post('/tickets/:channelId/closed', botAuth, ticketRoute(async req =>
+  broadcastTicket(await reportTickets.markClosed(prisma, req.params.channelId, req.body || {}))));
+
+router.post('/tickets/:channelId/close-failed', botAuth, ticketRoute(async req =>
+  broadcastTicket(await reportTickets.closeFailed(prisma, req.params.channelId, req.body?.error))));
 
 // GET /api/bot/report-by-thread/:threadId
 router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {

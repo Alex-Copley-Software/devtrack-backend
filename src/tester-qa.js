@@ -7,6 +7,7 @@ const pay = require('./tester-pay');
 const notifier = require('./discord-notifier');
 const { log } = require('./history-logger');
 const { broadcast } = require('./events');
+const tickets = require('./report-tickets');
 
 // The newest check on a report, as a column for the report queries.
 const TESTER_CHECK_COLUMN = `(
@@ -17,8 +18,9 @@ const TESTER_CHECK_COLUMN = `(
 
 async function fetchReport(prisma, id) {
   await pay.ensureTables(prisma);
+  await tickets.ensureTables(prisma);
   const rows = await prisma.$queryRawUnsafe(`
-    SELECT r.*, ${TESTER_CHECK_COLUMN},
+    SELECT r.*, ${TESTER_CHECK_COLUMN}, ${tickets.TICKET_COLUMN},
       COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
       COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
     FROM "Report" r

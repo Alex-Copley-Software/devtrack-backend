@@ -11,6 +11,7 @@ const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
 const testerQa = require('../tester-qa');
 const testerPay = require('../tester-pay');
+const reportTickets = require('../report-tickets');
 
 const prisma = new PrismaClient();
 let statusEnumReady = false;
@@ -155,9 +156,10 @@ function authorizeReportPatch(req, res) {
 // Raw SQL helper — bypasses Prisma enum deserialization for 'declined' etc.
 async function fetchReports(whereClauses = [], values = [], extra = '') {
   await testerPay.ensureTables(prisma);
+  await reportTickets.ensureTables(prisma);
   const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
   const sql = `
-    SELECT r.*, ${testerQa.TESTER_CHECK_COLUMN},
+    SELECT r.*, ${testerQa.TESTER_CHECK_COLUMN}, ${reportTickets.TICKET_COLUMN},
       COALESCE(
         json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email))
         FILTER (WHERE u.id IS NOT NULL), '[]'
