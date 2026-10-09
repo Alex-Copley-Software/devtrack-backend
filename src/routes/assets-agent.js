@@ -8,6 +8,7 @@ const { AssetError } = require('../assets/service');
 const suggestions = require('../assets/agent/suggestions');
 const settingsStore = require('../assets/agent/settings');
 const pipeline = require('../assets/agent/pipeline');
+const assistant = require('../assets/agent/assistant');
 
 module.exports = function registerAgentRoutes(router, h) {
   const forbidden = () => new AssetError(403, 'You do not have permission to do that');
@@ -73,6 +74,28 @@ module.exports = function registerAgentRoutes(router, h) {
       models: { filter: require('../assets/agent/model').FILTER_MODEL(), extract: require('../assets/agent/model').EXTRACT_MODEL() },
     };
   }));
+
+  // ── assistant (admin) ──────────────────────────────────────────────────────
+
+  router.get('/agent/assistant', h(req => {
+    requireAdmin(req);
+    return assistant.getSettings(req.prisma);
+  }));
+  router.put('/agent/assistant', h(async req => {
+    requireAdmin(req);
+    const before = await assistant.getSettings(req.prisma);
+    const settings = await assistant.saveSettings(req.prisma, req.body || {});
+    await require('../assets/service').logActivity(req.ctx, [{
+      entityType: 'setting', entityId: 'assistant', action: 'updated', field: 'assistant', before, after: settings, label: 'Assistant access changed',
+    }]);
+    return settings;
+  }));
+
+  // Files and notes, for the item panel and anyone browsing.
+  router.get('/files', h(async req => (await assistant.searchFiles(req.prisma, {
+    contentItemId: req.query.contentItemId, item: req.query.item, dev: req.query.dev, text: req.query.q, kind: req.query.kind, limit: req.query.limit,
+  })).files));
+  router.get('/notes', h(req => assistant.listNotes(req.prisma, { contentItemId: req.query.contentItemId, devId: req.query.devId, text: req.query.q, limit: req.query.limit })));
 
   // Asks the bot to check it can read the allowlisted channels and post to
   // the review channel. The bot picks it up within a couple of minutes.

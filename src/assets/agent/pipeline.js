@@ -40,6 +40,8 @@ async function allowedChannelIds(prisma) {
 // category) is discarded, even if the bot sent it.
 async function ingestMessages(prisma, messages) {
   const allowed = await allowedChannelIds(prisma);
+  const assistant = require('./assistant');
+  let fileContext = null;
   let stored = 0;
   for (const m of Array.isArray(messages) ? messages : []) {
     if (!m || !/^\d{5,25}$/.test(String(m.id || '')) || !m.channelId || !m.authorDiscordId) continue;
@@ -56,6 +58,13 @@ async function ingestMessages(prisma, messages) {
       ON CONFLICT ("id") DO NOTHING
     `, String(m.id), String(m.channelId), m.parentChannelId ? String(m.parentChannelId) : null, m.guildId ? String(m.guildId) : null,
     String(m.authorDiscordId), String(m.authorName || '').slice(0, 100), content, JSON.stringify(attachments), postedAt.toISOString(), m.categoryId ? String(m.categoryId) : null);
+    // Uploads and file links go into the permanent file index (raw messages are pruned).
+    try {
+      fileContext = fileContext || await assistant.indexContext(prisma);
+      await assistant.indexFiles(prisma, { ...m, content, attachments }, fileContext);
+    } catch (err) {
+      console.error('[AssetAgent] could not index files:', err.message);
+    }
   }
   return stored;
 }

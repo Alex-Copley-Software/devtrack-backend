@@ -197,6 +197,39 @@ const TABLES = [
     "costUsd" DOUBLE PRECISION NOT NULL DEFAULT 0,
     "createdAt" ${TS}
   )`,
+  // Every upload or file link posted where the agent reads. Unlike raw
+  // messages these are never pruned: this is the team's file history.
+  `CREATE TABLE IF NOT EXISTS "AssetFile" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "messageId" TEXT NOT NULL,
+    "channelId" TEXT NOT NULL,
+    "channelName" TEXT,
+    "guildId" TEXT,
+    "messageUrl" TEXT,
+    "fileUrl" TEXT,
+    "filename" TEXT NOT NULL,
+    "kind" TEXT NOT NULL DEFAULT 'file',
+    "authorDiscordId" TEXT,
+    "authorName" TEXT,
+    "devId" TEXT REFERENCES "AssetDev"("id") ON DELETE SET NULL,
+    "contentItemId" TEXT REFERENCES "AssetContentItem"("id") ON DELETE SET NULL,
+    "context" TEXT,
+    "isCurrent" BOOLEAN NOT NULL DEFAULT false,
+    "postedAt" TIMESTAMP(3) NOT NULL,
+    "createdAt" ${TS}
+  )`,
+  // Notes written through the assistant.
+  `CREATE TABLE IF NOT EXISTS "AssetNote" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "text" TEXT NOT NULL,
+    "authorDiscordId" TEXT,
+    "authorName" TEXT,
+    "contentItemId" TEXT REFERENCES "AssetContentItem"("id") ON DELETE SET NULL,
+    "devId" TEXT REFERENCES "AssetDev"("id") ON DELETE SET NULL,
+    "fileIds" JSONB NOT NULL DEFAULT '[]'::jsonb,
+    "sourceUrl" TEXT,
+    "createdAt" ${TS}
+  )`,
 ];
 
 const INDEXES = [
@@ -204,6 +237,10 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS "AssetDev_discordUserId_idx" ON "AssetDev"("discordUserId")`,
   `CREATE INDEX IF NOT EXISTS "AssetContentItem_updateId_idx" ON "AssetContentItem"("updateId")`,
   `CREATE INDEX IF NOT EXISTS "AssetTask_contentItemId_idx" ON "AssetTask"("contentItemId")`,
+  `CREATE INDEX IF NOT EXISTS "AssetFile_contentItemId_idx" ON "AssetFile"("contentItemId", "postedAt")`,
+  `CREATE INDEX IF NOT EXISTS "AssetFile_devId_idx" ON "AssetFile"("devId", "postedAt")`,
+  `CREATE INDEX IF NOT EXISTS "AssetFile_postedAt_idx" ON "AssetFile"("postedAt")`,
+  `CREATE INDEX IF NOT EXISTS "AssetNote_contentItemId_idx" ON "AssetNote"("contentItemId", "createdAt")`,
   `CREATE INDEX IF NOT EXISTS "AssetTask_assigneeDevId_idx" ON "AssetTask"("assigneeDevId")`,
   `CREATE INDEX IF NOT EXISTS "AssetTask_status_idx" ON "AssetTask"("status")`,
   `CREATE INDEX IF NOT EXISTS "AssetActivity_taskId_idx" ON "AssetActivity"("taskId")`,

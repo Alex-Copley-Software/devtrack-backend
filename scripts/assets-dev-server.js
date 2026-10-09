@@ -84,6 +84,33 @@ async function seedDemoSuggestions(prisma) {
   console.log(`Demo agent run: ${result.processed.map(b => b.error || `${b.suggestions} suggestions`).join(', ') || result.state}`);
 }
 
+// A few uploads and a note for the first two content items, so the item
+// panel's "Files and notes" tab and the assistant settings have something in them.
+async function seedDemoFiles(prisma) {
+  const assistant = require('../src/assets/agent/assistant');
+  const q = require('../src/assets/queries');
+  const items = (await q.listItems(prisma, {})).slice(0, 2);
+  const dev = (await q.listDevs(prisma)).find(d => d.discordUserId);
+  if (!items.length) return;
+  const ctx = await assistant.indexContext(prisma);
+  let n = 0;
+  for (const item of items) {
+    for (const [name, text, minutes] of [[`${item.internalName}_body.fbx`, `${item.internalName} body mesh, first pass`, 2900], [`${item.internalName}_face_v2.png`, `updated the face on ${item.internalName}`, 180]]) {
+      await assistant.indexFiles(prisma, {
+        id: String(930000000000000000n + BigInt(n++)), channelId: '900000000000000200', channelName: 'modelers / demo post', guildId: '900000000000000000',
+        authorDiscordId: dev?.discordUserId || '900000000000000001', authorName: dev?.name || 'Demo dev', content: text,
+        attachments: [{ name, url: 'https://example.com/file' }], postedAt: new Date(Date.now() - minutes * 60000).toISOString(),
+      }, ctx);
+    }
+  }
+  const [file] = (await assistant.searchFiles(prisma, { item: items[0].internalName, kind: 'image' }, ctx)).files;
+  await assistant.saveNote(prisma, {
+    text: `${dev?.name || 'A dev'} updated the face on ${items[0].internalName}; this image is the current version.`,
+    item: items[0].internalName, dev: dev?.name, fileIds: file ? [file.id] : [], markCurrent: true, author: { name: 'Demo admin' },
+  }, ctx);
+  await assistant.saveSettings(prisma, { admins: [{ id: '900000000000000001', label: 'Demo admin' }], channels: [] });
+}
+
 // A handful of made-up bug reports and tester checks so /payouts/ has
 // something to add up. The real Report table belongs to Prisma; this is a
 // stand-in with the columns the payout queries read.
@@ -162,6 +189,7 @@ async function main() {
   app.get('/api/config', (req, res) => res.json({ assetsEnabled: true, assetAgentEnabled: process.env.ASSET_AGENT_ENABLED === 'true', discordServerId: '900000000000000000' }));
   app.use('/api/events', require('../src/routes/events'));
   app.use('/api/assets', require('../src/routes/assets'));
+  await seedDemoFiles(prisma);
   await seedPayoutsDemo(prisma, pg);
   app.use('/api/payouts', require('../src/routes/payouts'));
   try { app.use('/api/bot/assets', require('../src/routes/bot-assets')); } catch { /* added in a later phase */ }

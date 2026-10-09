@@ -239,6 +239,42 @@ processed when it resumes. Raw messages are deleted after 30 days
 | `/assets item name:<name>` | An item's checklist and progress. |
 | `/assets task id:<n> status:<status>` | Updates one of your own tasks. |
 
+### The assistant
+
+Approved people can talk to the bot in Discord and get an answer. It is
+separate from the suggestions above: it answers a short list of accounts
+directly, and it never changes tasks.
+
+- "Get me the most recent files for Starrk" lists the files posted for that
+  item, newest first, each linking to the Discord message it was posted in.
+- "Ruku updated Starrk's face model in his most recent image, this is
+  current" saves a note against the item and the dev, attaches that image,
+  and marks it as the current file for the item.
+- "Where is Aizen at?", "Is Kuro free?" are answered from the tracker.
+
+**Setting it up.** Agent settings, Assistant card:
+
+1. Add the Discord user ID of each person it should answer.
+2. Add the channel or forum post where it should answer every message from
+   them (for example an "Asset Management" post). That channel does not need
+   to be on the read allowlist, and nothing said there feeds the suggestions.
+3. Anywhere else the agent reads, those people can mention the bot or reply
+   to it to get an answer.
+
+**Where the files come from.** Every upload and every link to a file host
+(Drive, Dropbox, Figma, Sketchfab and similar) posted in a channel the agent
+reads is added to a file index, with who posted it, when, the message it
+came with and the name of the post. A file is tied to a content item when
+the file name, the message or the post name mentions it. The index is kept
+for good, unlike raw messages. It starts from the day this shipped: older
+uploads are not in it. Files and notes for an item also show in the item's
+side panel under **Files and notes**.
+
+Names are matched loosely ("stark" finds Starrk). Each answer costs a model
+call (logged under Usage as `assistant`); it is not blocked by the daily
+budget, since a person asked for it. `ASSET_AGENT_ASSISTANT_MODEL` overrides
+the model. The wording lives in `src/assets/prompts/assistant.md`.
+
 ### Tuning it
 
 The prompts are plain files: [`src/assets/prompts/filter.md`](../src/assets/prompts/filter.md)

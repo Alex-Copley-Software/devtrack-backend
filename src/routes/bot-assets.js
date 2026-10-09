@@ -10,6 +10,7 @@ const q = require('../assets/queries');
 const service = require('../assets/service');
 const perms = require('../assets/permissions');
 const pipeline = require('../assets/agent/pipeline');
+const assistant = require('../assets/agent/assistant');
 const suggestions = require('../assets/agent/suggestions');
 
 const { AssetError } = service;
@@ -62,7 +63,18 @@ router.get('/agent/config', h(async req => ({
   enabled: C.isEnabled('ASSET_AGENT_ENABLED'),
   channelIds: C.isEnabled('ASSET_AGENT_ENABLED') ? [...await pipeline.allowedChannelIds(req.prisma)] : [],
   selfTestToken: C.isEnabled('ASSET_AGENT_ENABLED') ? await pipeline.selfTestToken(req.prisma) : null,
+  assistant: C.isEnabled('ASSET_AGENT_ENABLED') ? await assistant.getSettings(req.prisma) : { enabled: false, admins: [], channels: [] },
 })));
+
+// The assistant: an approved person said something to the bot. Returns the reply to post.
+router.post('/assistant', h(async req => {
+  requireAgent();
+  const message = req.body.message || {};
+  if (!message.id || !message.channelId || !message.authorDiscordId) throw new AssetError(400, 'Incomplete message');
+  const result = await assistant.respond(req.prisma, { message, history: Array.isArray(req.body.history) ? req.body.history : [] });
+  if (result.denied) throw new AssetError(403, 'Not an approved account');
+  return result;
+}));
 
 // Self-test: what would the agent propose for these messages? Stores nothing.
 router.post('/agent/dry-run', h(async req => {
