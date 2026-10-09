@@ -92,12 +92,25 @@ test('a new request shows what the expense log says they were paid lately', asyn
   assert.deepEqual(p.paymentHistory.map(h => [h.date, h.description, h.amount]), [['2026-10-01', 'Aizen shiny model', 30000], ['2026-09-20', 'Starrk guns', 95000]]);
 });
 
-test('a dev the payee directory already knows is not asked for a Roblox account', async () => {
+test('the account always comes from the dev, whatever Revenue has on file; a difference is pointed out', async () => {
   const { prisma, ani, request } = await setup({ roblox: null });
   await prisma.$executeRawUnsafe(`INSERT INTO rev_payees (display_name, roblox_user_id) VALUES ('ani', '4440003'), ('Ani | other', NULL)`);
-  const out = await request('30k for aizen anims', { amount_text: '30k', amount_number: 30000, description: 'Aizen attack animations' });
-  assert.deepEqual([out.action, out.payout.robloxAccount], ['logged', '4440003']);
-  assert.equal((await q.listDevs(prisma)).find(d => d.id === ani.id).robloxAccount, '4440003', 'and it is saved on the roster');
+  // Revenue knows an id for them, but they have not said where to pay: they are asked.
+  const asked = await request('30k for aizen anims', { amount_text: '30k', amount_number: 30000, description: 'Aizen attack animations' });
+  assert.equal(asked.action, 'ask');
+  assert.match(asked.reply, /what is your Roblox profile link, username or user ID\?/);
+  assert.equal((await q.listDevs(prisma)).find(d => d.id === ani.id).robloxAccount, null, 'nothing is copied from Revenue');
+
+  // They name a different account from the one on file: it is used, and the card says they differ.
+  const out = await payouts.handleRequest(prisma, msg('9990001'), { read: reads({ kind: 'request', item: 'Aizen', amount_text: '30k', amount_number: 30000, description: 'Aizen attack animations', roblox_account: '9990001' }) });
+  assert.deepEqual([out.action, out.payout.robloxAccount], ['logged', '9990001']);
+  assert.match(out.payout.robloxNote, /asked to be paid on Roblox ID 9990001\. Revenue has 4440003 on file for Ani/);
+  assert.equal((await q.listDevs(prisma)).find(d => d.id === ani.id).robloxAccount, '9990001');
+
+  // The same account as on file raises nothing.
+  await service.updateDev(ctxFor(prisma), ani.id, { robloxAccount: '4440003' });
+  const same = await request('5k for aizen icon', { amount_text: '5k', amount_number: 5000, description: 'Aizen icon' });
+  assert.deepEqual([same.payout.robloxAccount, same.payout.robloxNote], ['4440003', null]);
 
   // Two different payees that could be the same name: no guess is made.
   assert.equal(await revenue.findPayee(prisma, { name: 'Nobody' }), null);

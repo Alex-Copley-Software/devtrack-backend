@@ -46,8 +46,9 @@ async function findPayee(prisma, { name, roblox }) {
   return rows.length === 1 || (rows[0] && rows[0].display_name.toLowerCase() === n.toLowerCase()) ? rows[0] : null;
 }
 
-// A Roblox account for a dev who has never given one, when the payee
-// directory already knows it.
+// The Roblox user id the payee directory has on file under a dev's name, if
+// any. Only ever used to point out a difference from what the dev asked for:
+// the account a payout goes to always comes from the dev.
 async function robloxFor(prisma, dev) {
   if (!enabled()) return null;
   await ensureRevenueSchema(prisma);

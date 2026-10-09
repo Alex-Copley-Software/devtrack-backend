@@ -52,7 +52,7 @@ async function saveSettings(prisma, patch) {
 
 // ── reading ──────────────────────────────────────────────────────────────────
 
-const FIELDS = `p.id, p."guildId", p."robloxAccount", p."revenueExpenseId", p."revenueNote", p."paymentHistory", p."costSharePersonIds", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
+const FIELDS = `p.id, p."guildId", p."robloxAccount", p."revenueExpenseId", p."revenueNote", p."paymentHistory", p."costSharePersonIds", p."robloxNote", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
   p.text, p.amount, p."amountText", p.description, p."contentItemId", ci."internalName" AS "itemName", p.status, p.duplicates,
   p."adminChannelId", p."adminMessageId", p."paidAt", p."resolvedByName", p."declineReason", p."createdAt", p."updatedAt",
   COALESCE((SELECT json_agg(json_build_object('id', t.id, 'ref', t.ref, 'deliverable', tt.deliverable, 'item', tci."internalName") ORDER BY t.ref)
@@ -230,11 +230,12 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
   // Who to pay: given in this request, or the one already on the roster. Asked for once.
   const given = robloxFrom(result.roblox_account) || robloxFrom((text.match(/https?:\/\/(?:www\.)?roblox\.com\/users\/\d+\S*/i) || [])[0])
     || (waiting?.askedFor === 'roblox' && /^@?[A-Za-z0-9_]{3,20}$/.test(body) ? robloxFrom(body) : null);
-  // Failing those, the Revenue page's payee directory may already know where this dev is paid.
-  const known = given || dev.robloxAccount ? null : await revenue.robloxFor(prisma, dev).catch(() => null);
-  const roblox = given || dev.robloxAccount || known || null;
-  if ((given || known) && roblox !== dev.robloxAccount) {
-    await service.updateDev({ prisma, source: 'human', actor: { userId: null, name: given ? `${dev.name} (Discord)` : 'Revenue payee directory' } }, dev.id, { robloxAccount: roblox });
+  // The account always comes from the dev: what they say in this request, or
+  // what they told us before. It is never taken from the Revenue page's payee
+  // directory, whatever id that has on file for them.
+  const roblox = given || dev.robloxAccount || null;
+  if (given && given !== dev.robloxAccount) {
+    await service.updateDev({ prisma, source: 'human', actor: { userId: null, name: `${dev.name} (Discord)` } }, dev.id, { robloxAccount: given });
   }
   const ready = enough && !!roblox;
   const id = waiting?.id || newId();
@@ -281,8 +282,15 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
   // What the expense log says this dev was paid lately: the best guard against paying twice
   // for work that was paid before requests went through the bot.
   const history = await revenue.recentPayments(prisma, { name: dev.name, roblox }).catch(() => []);
-  await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET duplicates = $2::jsonb, "paymentHistory" = $3::jsonb WHERE id = $1`,
-    id, JSON.stringify(duplicates), JSON.stringify(history));
+  // Pay the account the dev named. If Revenue has a different one on file under their name, say so
+  // on the card: it may be a new account, or someone asking to be paid somewhere they should not be.
+  const onFile = await revenue.robloxFor(prisma, dev).catch(() => null);
+  const stated = revenue.robloxUserId(roblox);
+  const robloxNote = onFile && stated && onFile !== stated
+    ? `They asked to be paid on Roblox ID ${stated}. Revenue has ${onFile} on file for ${dev.name}. Pay the one they asked for, and check with them if this is unexpected.`
+    : null;
+  await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET duplicates = $2::jsonb, "paymentHistory" = $3::jsonb, "robloxNote" = $4 WHERE id = $1`,
+    id, JSON.stringify(duplicates), JSON.stringify(history), robloxNote);
   const payout = await getPayout(prisma, id);
   await service.logActivity({ prisma, source: 'human', actor: { userId: null, name: `${dev.name} (Discord)` } }, [{
     entityType: 'payout', entityId: id, contentItemId: payout.contentItemId, action: 'requested',

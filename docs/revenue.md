@@ -105,9 +105,11 @@ expenses already logged for that dev, on the admin card and the Payouts
 page. This is the check against paying twice for work paid before requests
 went through the bot.
 
-**Devs already in the directory are not asked for a Roblox account.** If the
-payee directory has a Roblox user id under the dev's name, the bot uses it
-and saves it on the roster.
+**The dev says where to be paid.** The Roblox account on a payout is always
+the one the dev gave (in the request, or earlier). It is never filled in from
+the payee directory. If the directory has a different Roblox user id on file
+under their name, the request card says so, so a change of account is seen
+before anything is sent.
 
 **The assistant can read payments.** "How much have we paid Ruku", "was
 Aizen's shiny model paid for" are answered from the expense log. It reads
