@@ -32,13 +32,32 @@ async function fetchReport(prisma, id) {
   return rows[0] || null;
 }
 
+// A report "failed QA" when it goes from QA Review straight back to In
+// Progress, whoever sent it (staff, or the tester pressing Not fixed). The
+// mark stays while it is In Progress and is dropped the moment it moves on.
+// Returns true when the mark changed.
+async function markQaFail(prisma, reportId, previousStatus, status, actorName) {
+  await pay.ensureTables(prisma);
+  if (previousStatus === 'reviewing' && status === 'in_progress') {
+    await prisma.$executeRawUnsafe(`UPDATE "Report" SET "qaFailedAt" = CURRENT_TIMESTAMP, "qaFailedBy" = $2 WHERE id = $1`, reportId, actorName || null);
+    return true;
+  }
+  return (await prisma.$executeRawUnsafe(
+    `UPDATE "Report" SET "qaFailedAt" = NULL, "qaFailedBy" = NULL WHERE id = $1 AND "qaFailedAt" IS NOT NULL`, reportId)) > 0;
+}
+
 // Call after a report's status has been changed. Never throws: a Discord or
 // bookkeeping problem here must not fail the status change itself.
 async function afterStatusChange(prisma, report, previousStatus, actorName) {
   try {
     if (!report || report.status === previousStatus) return null;
+    const marked = await markQaFail(prisma, report.id, previousStatus, report.status, actorName);
+    if (marked && report.status === 'in_progress') {
+      await log({ reportId: report.id, action: 'qa_failed', detail: null, actorName: actorName || 'System', actorId: '' });
+    }
     const result = await pay.onStatusChange(prisma, report, previousStatus, actorName);
-    if (!result) return null;
+    // Truthy either way, so the caller re-reads the report and sends the mark to the dashboard.
+    if (!result) return marked ? { kind: 'qa_mark' } : null;
     if (result.kind === 'ask') {
       await log({ reportId: report.id, action: 'tester_qa_requested', detail: report.discordUser || null, actorName: actorName || 'System', actorId: '' });
       notifier.qaCheck({
@@ -77,9 +96,10 @@ async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, ve
       }
     }
   } else {
-    await prisma.$executeRawUnsafe(`
+    const sentBack = await prisma.$executeRawUnsafe(`
       UPDATE "Report" SET status = 'in_progress'::"Status", "updatedAt" = NOW()
       WHERE id = $1 AND status::text = 'reviewing'`, check.reportId);
+    if (sentBack) await markQaFail(prisma, check.reportId, 'reviewing', 'in_progress', actorName);
     await log({ reportId: check.reportId, action: 'tester_not_fixed', detail: check.note || null, actorName, actorId: '' });
   }
 
@@ -97,4 +117,4 @@ async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, ve
   return { check, autoResolved, reportTitle: report?.title || null };
 }
 
-module.exports = { TESTER_CHECK_COLUMN, fetchReport, afterStatusChange, applyAnswer };
+module.exports = { TESTER_CHECK_COLUMN, fetchReport, afterStatusChange, applyAnswer, markQaFail };

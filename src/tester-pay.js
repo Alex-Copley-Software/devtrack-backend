@@ -34,6 +34,9 @@ const DEFAULTS = {
 const ready = new WeakSet();
 async function ensureTables(prisma) {
   if (ready.has(prisma)) return;
+  // Set while a report sits in In Progress because it came back from QA Review (see tester-qa.js).
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "qaFailedAt" TIMESTAMP(3)`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "qaFailedBy" TEXT`);
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "TesterPaySetting" (
       "key" TEXT NOT NULL PRIMARY KEY,

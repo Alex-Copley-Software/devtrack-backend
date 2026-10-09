@@ -184,3 +184,24 @@ test('the report query carries the latest tester check, and an answer moves the 
   fresh = await testerQa.fetchReport(prisma, other.id);
   assert.deepEqual([done.autoResolved, fresh.status, fresh.publishStatus], [true, 'resolved', 'published']);
 });
+
+test('a report sent from QA Review back to In Progress is marked as a QA fail until it moves on', async () => {
+  const { prisma, report } = await createDb();
+  const qa = require('../src/tester-qa');
+  const r = await report({ status: 'in_progress' });
+  const mark = async () => (await prisma.$queryRawUnsafe(`SELECT "qaFailedAt", "qaFailedBy" FROM "Report" WHERE id = $1`, r.id))[0];
+
+  assert.equal(await qa.markQaFail(prisma, r.id, 'open', 'in_progress', 'Dev'), false, 'an ordinary move into In Progress is not a fail');
+  assert.equal((await mark()).qaFailedAt, null);
+  assert.equal(await qa.markQaFail(prisma, r.id, 'in_progress', 'reviewing', 'Dev'), false);
+
+  assert.equal(await qa.markQaFail(prisma, r.id, 'reviewing', 'in_progress', 'Quinn'), true);
+  const failed = await mark();
+  assert.equal(failed.qaFailedBy, 'Quinn');
+  assert.ok(failed.qaFailedAt instanceof Date);
+
+  // Sent to QA again: the mark is gone, and stays gone when it is resolved.
+  assert.equal(await qa.markQaFail(prisma, r.id, 'in_progress', 'reviewing', 'Dev'), true);
+  assert.deepEqual(await mark(), { qaFailedAt: null, qaFailedBy: null });
+  assert.equal(await qa.markQaFail(prisma, r.id, 'reviewing', 'resolved', 'Quinn'), false);
+});
