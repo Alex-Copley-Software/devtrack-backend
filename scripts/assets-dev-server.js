@@ -111,6 +111,33 @@ async function seedDemoFiles(prisma) {
   await assistant.saveSettings(prisma, { admins: [{ id: '900000000000000001', label: 'Demo admin' }], channels: [] });
 }
 
+// Three payout requests from one dev's Payments post: one waiting, one a
+// repeat of it (so the duplicate warning shows), one already paid.
+async function seedDemoPayouts(prisma) {
+  const payouts = require('../src/assets/payouts');
+  const service = require('../src/assets/service');
+  const q = require('../src/assets/queries');
+  const tasks = (await q.listTasksDetailed(prisma, {})).filter(t => t.assigneeDevId);
+  const dev = (await q.listDevs(prisma)).find(d => d.id === tasks[0]?.assigneeDevId);
+  if (!dev) return;
+  const ctx = { prisma, source: 'human', actor: { userId: null, name: 'Demo seed' }, silent: true };
+  await service.updateDev(ctx, dev.id, { discordThreadId: '940000000000000001', discordProfileUrl: dev.discordProfileUrl || 'https://discord.com/users/940000000000000009' });
+  const mine = tasks.filter(t => t.assigneeDevId === dev.id);
+  const me = (await q.listDevs(prisma)).find(d => d.id === dev.id);
+  let n = 0;
+  const ask = (text, task, amount) => payouts.handleRequest(prisma, {
+    id: String(941000000000000000n + BigInt(n++)), channelId: '940000000000000002', parentChannelId: '940000000000000001', guildId: '900000000000000000',
+    authorDiscordId: me.discordUserId, authorName: me.name, content: text, attachments: [], postedAt: new Date().toISOString(),
+  }, { read: async () => ({ result: { kind: 'request', amount_text: amount, amount_number: 0, description: `${task.internalName} ${task.deliverable.toLowerCase()}`, item: task.internalName, task_refs: [String(task.ref)], question: '' } }) });
+  const first = await ask(`${mine[0].internalName} ${mine[0].deliverable} is done, 30k payout please`, mine[0], '30k');
+  await ask(`payout for ${mine[0].internalName} ${mine[0].deliverable}`, mine[0], '30k');
+  if (mine[1]) {
+    const paid = await ask(`20k for the ${mine[1].internalName} ${mine[1].deliverable}`, mine[1], '20k');
+    await payouts.resolve(prisma, paid.payout.id, { decision: 'paid', actorName: 'Demo admin', via: 'discord' });
+  }
+  console.log(`Seeded payout requests for ${me.name} (${first.action})`);
+}
+
 // A handful of made-up bug reports and tester checks so /payouts/ has
 // something to add up. The real Report table belongs to Prisma; this is a
 // stand-in with the columns the payout queries read.
@@ -190,6 +217,7 @@ async function main() {
   app.use('/api/events', require('../src/routes/events'));
   app.use('/api/assets', require('../src/routes/assets'));
   await seedDemoFiles(prisma);
+  await seedDemoPayouts(prisma);
   await seedPayoutsDemo(prisma, pg);
   app.use('/api/payouts', require('../src/routes/payouts'));
   try { app.use('/api/bot/assets', require('../src/routes/bot-assets')); } catch { /* added in a later phase */ }

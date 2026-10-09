@@ -218,6 +218,37 @@ const TABLES = [
     "postedAt" TIMESTAMP(3) NOT NULL,
     "createdAt" ${TS}
   )`,
+  // Dev payout requests from Discord, and the tasks each one covers.
+  `CREATE TABLE IF NOT EXISTS "AssetPayout" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "devId" TEXT REFERENCES "AssetDev"("id") ON DELETE SET NULL,
+    "devName" TEXT,
+    "discordUserId" TEXT,
+    "channelId" TEXT,
+    "messageId" TEXT,
+    "guildId" TEXT,
+    "requestUrl" TEXT,
+    "text" TEXT,
+    "amount" DOUBLE PRECISION,
+    "amountText" TEXT,
+    "description" TEXT,
+    "contentItemId" TEXT REFERENCES "AssetContentItem"("id") ON DELETE SET NULL,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "duplicates" JSONB NOT NULL DEFAULT '[]'::jsonb,
+    "adminChannelId" TEXT,
+    "adminMessageId" TEXT,
+    "paidAt" TIMESTAMP(3),
+    "resolvedByName" TEXT,
+    "declineReason" TEXT,
+    "needsDiscordSync" BOOLEAN NOT NULL DEFAULT false,
+    "createdAt" ${TS},
+    "updatedAt" ${TS}
+  )`,
+  `CREATE TABLE IF NOT EXISTS "AssetPayoutTask" (
+    "payoutId" TEXT NOT NULL REFERENCES "AssetPayout"("id") ON DELETE CASCADE,
+    "taskId" TEXT NOT NULL REFERENCES "AssetTask"("id") ON DELETE CASCADE,
+    PRIMARY KEY ("payoutId", "taskId")
+  )`,
   // Notes written through the assistant.
   `CREATE TABLE IF NOT EXISTS "AssetNote" (
     "id" TEXT NOT NULL PRIMARY KEY,
@@ -240,6 +271,8 @@ const INDEXES = [
   `CREATE INDEX IF NOT EXISTS "AssetFile_contentItemId_idx" ON "AssetFile"("contentItemId", "postedAt")`,
   `CREATE INDEX IF NOT EXISTS "AssetFile_devId_idx" ON "AssetFile"("devId", "postedAt")`,
   `CREATE INDEX IF NOT EXISTS "AssetFile_postedAt_idx" ON "AssetFile"("postedAt")`,
+  `CREATE INDEX IF NOT EXISTS "AssetPayoutTask_taskId_idx" ON "AssetPayoutTask"("taskId")`,
+  `CREATE INDEX IF NOT EXISTS "AssetPayout_status_idx" ON "AssetPayout"("status", "createdAt")`,
   `CREATE INDEX IF NOT EXISTS "AssetNote_contentItemId_idx" ON "AssetNote"("contentItemId", "createdAt")`,
   `CREATE INDEX IF NOT EXISTS "AssetTask_assigneeDevId_idx" ON "AssetTask"("assigneeDevId")`,
   `CREATE INDEX IF NOT EXISTS "AssetTask_status_idx" ON "AssetTask"("status")`,

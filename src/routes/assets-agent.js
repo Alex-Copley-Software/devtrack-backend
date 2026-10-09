@@ -9,6 +9,7 @@ const suggestions = require('../assets/agent/suggestions');
 const settingsStore = require('../assets/agent/settings');
 const pipeline = require('../assets/agent/pipeline');
 const assistant = require('../assets/agent/assistant');
+const payouts = require('../assets/payouts');
 
 module.exports = function registerAgentRoutes(router, h) {
   const forbidden = () => new AssetError(403, 'You do not have permission to do that');
@@ -89,6 +90,26 @@ module.exports = function registerAgentRoutes(router, h) {
       entityType: 'setting', entityId: 'assistant', action: 'updated', field: 'assistant', before, after: settings, label: 'Assistant access changed',
     }]);
     return settings;
+  }));
+
+  // ── payout requests ────────────────────────────────────────────────────────
+  // Leads and managers see them and can mark them; where they are forwarded is an admin setting.
+
+  router.get('/payouts', h(req => {
+    if (!req.access.isManager) throw forbidden();
+    return payouts.listPayouts(req.prisma, { status: req.query.status, devId: req.query.devId });
+  }));
+  router.post('/payouts/:id/resolve', h(req => {
+    if (!req.access.isManager) throw forbidden();
+    return payouts.resolve(req.prisma, req.params.id, { decision: req.body.decision, actorName: req.user.name, reason: req.body.reason, via: 'web' });
+  }));
+  router.get('/agent/payouts', h(req => {
+    requireAdmin(req);
+    return payouts.getSettings(req.prisma);
+  }));
+  router.put('/agent/payouts', h(req => {
+    requireAdmin(req);
+    return payouts.saveSettings(req.prisma, req.body || {});
   }));
 
   // Files and notes, for the item panel and anyone browsing.

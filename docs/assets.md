@@ -159,6 +159,38 @@ waiting on, on the page, in `/assets task` (the `reason` option) and for
 agent suggestions. The reason shows next to the task and is cleared when the
 task leaves Blocked. Tasks blocked before this rule show "No reason given".
 
+## Dev payout requests
+
+A dev asks to be paid by posting in the **Payments** post of their own forum
+(the forum set as their Status channel on the Team view), for example
+"30k payout for Aizen's shiny model", or a link to the file with "payout for
+this".
+
+1. The bot reads the message. Chat ("thanks!") is ignored. If it is a request
+   but does not say what for, the bot replies asking, and the dev's answer
+   completes the same request.
+2. A clear request is tied to the content item and the tracker tasks it
+   covers, checked against earlier requests, logged, and forwarded to the
+   admins' payouts channel as a card with **Paid out** and **Decline**.
+3. **Paid out** puts a tick on the dev's message and replies mentioning them.
+   **Decline** asks for a reason and tells the dev.
+
+Nothing is paid twice by accident: a request that covers a task with an
+earlier pending or paid request (or, with no task matched, the same dev and
+item) is flagged in red on the card and on the Payouts page.
+
+On the Assets page, **Payouts** lists every request with its tasks and the
+link to the Discord message, and leads can mark them there too (the bot
+updates Discord within a minute). Each task shows **Paid** or **Payout
+requested** with a link to the request, and the Tasks filter (More) can show
+paid, requested or not-paid tasks.
+
+Settings are under Agent settings, Payout requests: the admin channel ID
+(empty uses a text channel named `payouts`) and an optional manager role to
+mention when a dev needs help. Approved assistant accounts and server
+administrators can press the buttons. A post counts as a Payments post when
+it is named Payments, Payment, Payouts or Payout.
+
 ## Audit log
 
 **Audit log** in the left rail, for leads, managers and admins. Every change

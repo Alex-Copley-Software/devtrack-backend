@@ -129,7 +129,11 @@ async function getItem(prisma, id) {
 // the client joins on templateId using the templates from /bootstrap.
 const TASK_FIELDS = `
   t.id, t.ref, t."contentItemId", t."templateId", t.status, t."assigneeDevId",
-  ${DATE('t."dueDate"')} AS "dueDate", t.notes, t."blockedReason", t."updatedAt"`;
+  ${DATE('t."dueDate"')} AS "dueDate", t.notes, t."blockedReason", t."updatedAt",
+  (SELECT json_build_object('id', p.id, 'status', p.status, 'amount', p."amountText", 'url', p."requestUrl")
+   FROM "AssetPayoutTask" pt JOIN "AssetPayout" p ON p.id = pt."payoutId"
+   WHERE pt."taskId" = t.id AND p.status IN ('pending', 'paid')
+   ORDER BY (p.status = 'paid') DESC, p."createdAt" DESC LIMIT 1) AS payout`;
 
 async function listTasks(prisma, { updateId, contentItemId, ids } = {}) {
   const where = [`t.active`];

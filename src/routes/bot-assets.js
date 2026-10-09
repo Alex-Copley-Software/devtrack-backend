@@ -11,6 +11,7 @@ const service = require('../assets/service');
 const perms = require('../assets/permissions');
 const pipeline = require('../assets/agent/pipeline');
 const assistant = require('../assets/agent/assistant');
+const payouts = require('../assets/payouts');
 const suggestions = require('../assets/agent/suggestions');
 
 const { AssetError } = service;
@@ -64,7 +65,32 @@ router.get('/agent/config', h(async req => ({
   channelIds: C.isEnabled('ASSET_AGENT_ENABLED') ? [...await pipeline.allowedChannelIds(req.prisma)] : [],
   selfTestToken: C.isEnabled('ASSET_AGENT_ENABLED') ? await pipeline.selfTestToken(req.prisma) : null,
   assistant: C.isEnabled('ASSET_AGENT_ENABLED') ? await assistant.getSettings(req.prisma) : { enabled: false, admins: [], channels: [] },
+  payouts: C.isEnabled('ASSET_AGENT_ENABLED') ? await payouts.getSettings(req.prisma) : { enabled: false, adminChannelId: '', managerRoleId: '' },
 })));
+
+// ── payout requests ──────────────────────────────────────────────────────────
+
+// A message in a dev's Payments post. Says what the bot should do with it.
+router.post('/payout-request', h(async req => {
+  requireAgent();
+  const message = req.body.message || {};
+  if (!message.id || !message.channelId || !message.authorDiscordId) throw new AssetError(400, 'Incomplete message');
+  return payouts.handleRequest(req.prisma, message);
+}));
+
+router.post('/payouts/:id/posted', h(async req => {
+  await payouts.markPosted(req.prisma, req.params.id, req.body || {});
+}));
+
+// Paid out / Decline in the admins' channel. Approved accounts and server administrators only.
+router.post('/payouts/:id/resolve', h(async req => {
+  requireAgent();
+  const approved = (await assistant.getSettings(req.prisma)).admins.some(a => a.id === String(req.body.discordUserId));
+  if (!approved && req.body.isAdministrator !== true) throw new AssetError(403, 'Only approved admins can mark payouts.');
+  return payouts.resolve(req.prisma, req.params.id, {
+    decision: req.body.decision, actorName: req.body.actorName, reason: req.body.reason, via: 'discord',
+  });
+}));
 
 // The assistant: an approved person said something to the bot. Returns the reply to post.
 router.post('/assistant', h(async req => {

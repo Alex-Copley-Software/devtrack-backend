@@ -240,7 +240,7 @@ async function tick(prisma, { model = require('./model'), maxBatches = 3 } = {})
       if (settings.dailyBudgetUsd > 0 && await settingsStore.spentToday(prisma) >= settings.dailyBudgetUsd) { state = 'over_budget'; break; }
     }
   }
-  return { state, processed, toPost: await claimDiscordPosts(prisma) };
+  return { state, processed, toPost: await claimDiscordPosts(prisma), payoutSync: await require('../payouts').claimDiscordSync(prisma) };
 }
 
 module.exports = { listChannels, allowedChannelIds, ingestMessages, pruneOldMessages, claimBatches, processBatch, claimDiscordPosts, tick, dryRun, selfTestToken, requestSelfTest };
