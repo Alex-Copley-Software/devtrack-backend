@@ -175,6 +175,13 @@ this".
 3. **Paid out** puts a tick on the dev's message and replies mentioning them.
    **Decline** asks for a reason and tells the dev.
 
+A request is only forwarded once we know which **Roblox account** to pay.
+The first time a dev asks, the bot replies asking for their Roblox profile
+link, username or user ID, holds the request, and forwards it when they
+answer. The account is saved on their roster entry (Team, Edit) and shown on
+every card, so they are not asked again. Giving a different account in a
+later request replaces the saved one, and that change is in the audit log.
+
 Nothing is paid twice by accident: a request that covers a task with an
 earlier pending or paid request (or, with no task matched, the same dev and
 item) is flagged in red on the card and on the Payouts page.

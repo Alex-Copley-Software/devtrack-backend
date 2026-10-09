@@ -51,7 +51,7 @@ async function saveSettings(prisma, patch) {
 
 // ── reading ──────────────────────────────────────────────────────────────────
 
-const FIELDS = `p.id, p."guildId", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
+const FIELDS = `p.id, p."guildId", p."robloxAccount", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
   p.text, p.amount, p."amountText", p.description, p."contentItemId", ci."internalName" AS "itemName", p.status, p.duplicates,
   p."adminChannelId", p."adminMessageId", p."paidAt", p."resolvedByName", p."declineReason", p."createdAt", p."updatedAt",
   COALESCE((SELECT json_agg(json_build_object('id', t.id, 'ref', t.ref, 'deliverable', tt.deliverable, 'item', tci."internalName") ORDER BY t.ref)
@@ -101,7 +101,7 @@ const TOOL = {
   input_schema: {
     type: 'object',
     additionalProperties: false,
-    required: ['kind', 'amount_text', 'amount_number', 'description', 'item', 'task_refs', 'question'],
+    required: ['kind', 'amount_text', 'amount_number', 'description', 'item', 'task_refs', 'roblox_account', 'question'],
     properties: {
       kind: { type: 'string', enum: ['request', 'needs_info', 'not_a_request'] },
       amount_text: str('The amount exactly as written, e.g. "30k" or "$45". Empty if none was given.'),
@@ -109,6 +109,7 @@ const TOOL = {
       description: str('One line saying what the payout is for, e.g. "Aizen shiny model". Empty for not_a_request.'),
       item: str('The content item it is for, from the list. Empty if none can be told.'),
       task_refs: { type: 'array', items: { type: 'string' }, description: 'Task ref numbers (without #) from the task list that this payout covers. Empty if none match.' },
+      roblox_account: str('Their Roblox profile link, username or user ID, exactly as written, if any line gives one. Otherwise empty.'),
       question: str('For needs_info only: one short, friendly question asking for exactly what is missing. Otherwise empty.'),
     },
   },
@@ -197,7 +198,7 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
 
   // A reply to "what is this for?" continues the request that was waiting on it.
   const [waiting] = await prisma.$queryRawUnsafe(`
-    SELECT id, text FROM "AssetPayout"
+    SELECT id, text, "askedFor" FROM "AssetPayout"
     WHERE "channelId" = $1 AND "devId" = $2 AND status = 'needs_info' AND "createdAt" > NOW() - INTERVAL '3 days'
     ORDER BY "createdAt" DESC LIMIT 1`, String(message.channelId), dev.id);
   const text = [waiting?.text, body].filter(Boolean).join('\n');
@@ -207,6 +208,7 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
     context: await buildContext(prisma, dev, ctx),
     text: [
       `${dev.name} wrote in their Payments post:`, '', text,
+      waiting?.askedFor === 'roblox' ? '\n(The bot had asked for their Roblox profile link, username or user ID; the last line is their answer.)' : '',
       attachments.length ? `\n(Attached: ${attachments.join(', ')})` : '',
       files.length ? `\n(The link points at: ${files.map(f => `${f.filename}${f.itemName ? ` for ${f.itemName}` : ''}${f.context ? `, posted with "${f.context}"` : ''}`).join('; ')})` : '',
     ].filter(l => l !== '').join('\n'),
@@ -224,28 +226,48 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
   const requestUrl = message.guildId ? `https://discord.com/channels/${message.guildId}/${message.channelId}/${message.id}` : null;
   // Enough to pay on: we know what it is for. An amount is wanted but not required.
   const enough = result.kind === 'request' && !!description && (!!item || tasks.length > 0 || description.length >= 12);
+  // Who to pay: given in this request, or the one already on the roster. Asked for once.
+  const given = robloxFrom(result.roblox_account) || robloxFrom((text.match(/https?:\/\/(?:www\.)?roblox\.com\/users\/\d+\S*/i) || [])[0])
+    || (waiting?.askedFor === 'roblox' && /^@?[A-Za-z0-9_]{3,20}$/.test(body) ? robloxFrom(body) : null);
+  const roblox = given || dev.robloxAccount || null;
+  if (given && given !== dev.robloxAccount) {
+    await service.updateDev({ prisma, source: 'human', actor: { userId: null, name: `${dev.name} (Discord)` } }, dev.id, { robloxAccount: given });
+  }
+  const ready = enough && !!roblox;
   const id = waiting?.id || newId();
   const fields = [
     dev.id, dev.name, String(message.authorDiscordId), String(message.channelId), String(message.id), message.guildId ? String(message.guildId) : null,
     requestUrl, text, Number.isFinite(amountNumber) && amountNumber > 0 ? amountNumber : null, String(result.amount_text || '').trim().slice(0, 40) || null,
-    description || null, item?.id || tasks[0]?.contentItemId || null, enough ? 'pending' : 'needs_info',
+    description || null, item?.id || tasks[0]?.contentItemId || null, ready ? 'pending' : 'needs_info',
+    roblox, ready ? null : enough ? 'roblox' : 'details',
   ];
   if (waiting) {
     await prisma.$executeRawUnsafe(`
       UPDATE "AssetPayout" SET "devId" = $2, "devName" = $3, "discordUserId" = $4, "channelId" = $5, "messageId" = $6, "guildId" = $7,
-        "requestUrl" = $8, text = $9, amount = $10, "amountText" = $11, description = $12, "contentItemId" = $13, status = $14, "updatedAt" = CURRENT_TIMESTAMP
+        "requestUrl" = $8, text = $9, amount = $10, "amountText" = $11, description = $12, "contentItemId" = $13, status = $14,
+        "robloxAccount" = $15, "askedFor" = $16, "updatedAt" = CURRENT_TIMESTAMP
       WHERE id = $1`, id, ...fields);
   } else {
     await prisma.$executeRawUnsafe(`
       INSERT INTO "AssetPayout" ("id", "devId", "devName", "discordUserId", "channelId", "messageId", "guildId", "requestUrl", "text",
-        "amount", "amountText", "description", "contentItemId", "status")
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`, id, ...fields);
+        "amount", "amountText", "description", "contentItemId", "status", "robloxAccount", "askedFor")
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`, id, ...fields);
   }
 
   if (!enough) {
     const question = String(result.question || '').trim().slice(0, 400)
       || 'What is this payout for? Name the item and what you made, for example "30k payout for Aizen\'s shiny model", or paste a link to the file.';
-    return { action: 'ask', reply: question, managerRoleId: settings.managerRoleId || null, payoutId: id };
+    return {
+      action: 'ask', managerRoleId: settings.managerRoleId || null, payoutId: id,
+      reply: roblox ? question : `${question}\nPlease also include your Roblox profile link, username or user ID, so we know where to send it.`,
+    };
+  }
+  if (!roblox) {
+    // Clear about the work, but nowhere to send the money yet. It is not forwarded until we know.
+    return {
+      action: 'ask', managerRoleId: null, payoutId: id,
+      reply: `Got it: ${fields[9] ? `**${fields[9]}** ` : ''}for **${description}**. Before I pass this to the admins, what is your Roblox profile link, username or user ID? You only need to give it once.`,
+    };
   }
 
   await prisma.$executeRawUnsafe(`DELETE FROM "AssetPayoutTask" WHERE "payoutId" = $1`, id);
@@ -264,6 +286,22 @@ async function handleRequest(prisma, message, { read = readWithModel } = {}) {
     action: 'logged', payout, adminChannelId: settings.adminChannelId || null,
     reply: `Logged${payout.amountText ? ` **${payout.amountText}**` : ''} for **${payout.description}**${payout.amountText ? '' : ' (no amount given, an admin will confirm it)'}. I have passed it to the admins and will let you know here when it is paid.`,
   };
+}
+
+// A Roblox account as the dev gave it: a profile link, a username or a user id.
+function robloxFrom(value) {
+  const v = String(value || '').trim().replace(/^@/, '').replace(/[.,;)\]]+$/, '');
+  if (!v) return null;
+  if (/^https?:\/\/(?:www\.)?roblox\.com\/users\/\d+/i.test(v)) return v.slice(0, 200);
+  if (/^\d{3,15}$/.test(v) || /^[A-Za-z0-9_]{3,20}$/.test(v)) return v;
+  return null;
+}
+// Where an admin can open that account.
+function robloxUrl(account) {
+  const v = String(account || '');
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^\d+$/.test(v)) return `https://www.roblox.com/users/${v}/profile`;
+  return v ? `https://www.roblox.com/search/users?keyword=${encodeURIComponent(v)}` : null;
 }
 
 function broadcast() {
@@ -320,5 +358,5 @@ async function markPosted(prisma, id, { adminChannelId, adminMessageId }) {
 
 module.exports = {
   STATUSES, TOOL, getSettings, saveSettings, getPayout, listPayouts, findDuplicates,
-  handleRequest, resolve, claimDiscordSync, markPosted,
+  handleRequest, resolve, claimDiscordSync, markPosted, robloxFrom, robloxUrl,
 };

@@ -321,6 +321,10 @@ async function ensureAssetSchema(prisma) {
       // Why a task is blocked (required when it is), and the forum post that shows a dev's availability.
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetTask" ADD COLUMN IF NOT EXISTS "blockedReason" TEXT`);
       await prisma.$executeRawUnsafe(`ALTER TABLE "AssetDev" ADD COLUMN IF NOT EXISTS "discordThreadId" TEXT`);
+      // The Roblox account a dev is paid on: kept on the roster, and copied onto each payout request.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetDev" ADD COLUMN IF NOT EXISTS "robloxAccount" TEXT`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "robloxAccount" TEXT`);
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AssetPayout" ADD COLUMN IF NOT EXISTS "askedFor" TEXT`);
       for (const sql of INDEXES) await prisma.$executeRawUnsafe(sql);
       await seedDefaults(prisma);
     })();

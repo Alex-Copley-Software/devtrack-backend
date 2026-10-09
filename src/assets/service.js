@@ -607,6 +607,7 @@ function normalizeDev(data, { partial }) {
   if (data.discordUserId !== undefined && data.discordProfileUrl === undefined) out.discordUserId = parseDiscordUserId(data.discordUserId);
   if (data.notes !== undefined) out.notes = clean(data.notes);
   if (data.userId !== undefined) out.userId = clean(data.userId);
+  if (data.robloxAccount !== undefined) out.robloxAccount = clean(data.robloxAccount)?.slice(0, 200) || null;
   if (data.discordThreadId !== undefined) {
     // Accepts the bare id or a link to the post.
     const raw = clean(data.discordThreadId);
@@ -628,6 +629,7 @@ async function createDev(ctx, data) {
   `, id, fields.name, fields.discipline || null, fields.secondaryDiscipline || null, fields.status || 'Active',
   fields.discordProfileUrl || null, fields.discordUserId || null, fields.notes || null, fields.userId || null);
   if (fields.discordThreadId) await setColumns(prisma, 'AssetDev', id, { discordThreadId: fields.discordThreadId });
+  if (fields.robloxAccount) await setColumns(prisma, 'AssetDev', id, { robloxAccount: fields.robloxAccount });
   await setDevDisciplines(prisma, id, [fields.discipline, fields.secondaryDiscipline, ...(data.disciplines || [])]);
   await logActivity(ctx, [{ entityType: 'dev', entityId: id, action: 'created', label: `${fields.name} added to the roster` }]);
   notify(ctx, { kind: 'devs' });
@@ -637,7 +639,7 @@ async function createDev(ctx, data) {
 async function updateDev(ctx, id, data) {
   const { prisma } = ctx;
   const rows = await prisma.$queryRawUnsafe(`
-    SELECT id, name, discipline, "secondaryDiscipline", status, "discordProfileUrl", "discordUserId", notes, "userId", "discordThreadId"
+    SELECT id, name, discipline, "secondaryDiscipline", status, "discordProfileUrl", "discordUserId", notes, "userId", "discordThreadId", "robloxAccount"
     FROM "AssetDev" WHERE id = $1`, id);
   if (!rows.length) throw missing('Dev');
   const patch = normalizeDev(data, { partial: true });

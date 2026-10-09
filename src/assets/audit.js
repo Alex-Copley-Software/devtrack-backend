@@ -16,7 +16,7 @@ const REVERTIBLE = {
   task: { table: 'AssetTask', fields: ['status', 'assigneeDevId', 'dueDate', 'notes', 'blockedReason'] },
   item: { table: 'AssetContentItem', fields: ['displayName', 'internalName', 'ownerDevId', 'ownerName', 'priority', 'notes', 'notionUrl', 'archived'] },
   update: { table: 'AssetUpdate', fields: ['number', 'name', 'status', 'targetRelease', 'leadDevId', 'leadName', 'notes', 'notionUrl'] },
-  dev: { table: 'AssetDev', fields: ['name', 'discipline', 'secondaryDiscipline', 'status', 'discordProfileUrl', 'notes', 'userId', 'discordThreadId', 'disciplines'] },
+  dev: { table: 'AssetDev', fields: ['name', 'discipline', 'secondaryDiscipline', 'status', 'discordProfileUrl', 'notes', 'userId', 'discordThreadId', 'robloxAccount', 'disciplines'] },
   template: { table: 'AssetTaskTemplate', fields: ['discipline', 'deliverable', 'definitionOfDone', 'required', 'taskNumber', 'active'] },
 };
 const DATE_FIELDS = ['dueDate', 'targetRelease'];

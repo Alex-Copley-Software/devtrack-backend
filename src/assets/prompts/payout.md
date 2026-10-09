@@ -16,4 +16,8 @@ For a `request`:
 - `task_refs`: the tasks this payout covers, by ref number. Prefer tasks assigned to this dev; use an unassigned task only when it clearly is the work described. Match on the item and the kind of work ("shiny model" is the shiny mesh task, "textures" the texture task). If several tasks are covered ("mesh and texture for Rukia"), list them all. If nothing matches well, leave it empty rather than guess: a wrong link is worse than none.
 - If a task you would pick is already marked PAID or "payout requested", still pick it. The admins are warned about duplicates separately.
 
+- `roblox_account`: if any line gives their Roblox profile link, username or user ID, copy it exactly. This is how they get paid. A bare word or number sent in answer to "what is your Roblox username?" is the account. Do not guess one from their Discord name.
+
+A message that only gives a Roblox account, in answer to the bot asking for it, is part of the request before it: keep the `kind`, description, item and tasks from the earlier lines and fill in `roblox_account`.
+
 When a message continues an earlier one (the dev answering "what is this for?"), read both lines together as one request.

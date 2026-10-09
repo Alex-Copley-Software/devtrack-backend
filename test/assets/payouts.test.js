@@ -18,12 +18,12 @@ const msg = (content, extra = {}) => ({
 });
 // Stands in for the model: returns whatever the test says it read.
 const reads = result => async input => ({ result: typeof result === 'function' ? result(input) : result, model: 'claude-sonnet-5-5', usage: { input_tokens: 2000, output_tokens: 80 } });
-const blank = { amount_text: '', amount_number: 0, description: '', item: '', task_refs: [], question: '' };
+const blank = { amount_text: '', amount_number: 0, description: '', item: '', task_refs: [], roblox_account: '', question: '' };
 
-async function setup() {
+async function setup({ roblox = 'AniBuilds' } = {}) {
   const prisma = await createTestDb();
   const seeded = await seedBasics(prisma);
-  await service.updateDev(ctxFor(prisma), seeded.ani.id, { discordThreadId: FORUM });
+  await service.updateDev(ctxFor(prisma), seeded.ani.id, { discordThreadId: FORUM, robloxAccount: roblox });
   await assistant.saveSettings(prisma, { admins: [{ id: ADMIN, label: 'Alex' }] });
   const tasks = await q.listTasksDetailed(prisma, { contentItemId: seeded.aizen.id });
   const anim = tasks.find(t => t.discipline === 'Animation');
@@ -132,4 +132,44 @@ test('paying marks the task paid, logs who did it, and queues Discord only when 
   const log = await prisma.$queryRawUnsafe(`SELECT label FROM "AssetActivity" WHERE "entityType" = 'payout' ORDER BY "createdAt"`);
   assert.equal(log[0].label, 'Payout requested: 30k for Aizen attack animations');
   assert.match(log.at(-1).label, /^Payout declined: 30k to Ani for Aizen attack animations \(already covered/);
+});
+
+test('a request is held until we know the Roblox account to pay, and the account is remembered', async () => {
+  const { prisma, anim, ani } = await setup({ roblox: null });
+  const request = { ...blank, kind: 'request', amount_text: '30k', amount_number: 30000, description: 'Aizen attack animations', item: 'Aizen', task_refs: [String(anim.ref)] };
+
+  const held = await payouts.handleRequest(prisma, msg('30k payout for aizens attack anims'), { read: reads(request) });
+  assert.equal(held.action, 'ask');
+  assert.match(held.reply, /^Got it: \*\*30k\*\* for \*\*Aizen attack animations\*\*\. Before I pass this to the admins, what is your Roblox profile link, username or user ID\?/);
+  assert.equal((await payouts.listPayouts(prisma, {})).length, 0, 'nothing reaches the admins yet');
+  assert.equal((await q.listTasks(prisma, { ids: [anim.id] }))[0].payout, null);
+
+  // Their answer is a bare username. The model is told the bot asked; even if it misses it, the answer is taken.
+  let seen;
+  const done = await payouts.handleRequest(prisma, msg('AniRBX_22'), { read: reads(input => { seen = input; return request; }) });
+  assert.match(seen.text, /The bot had asked for their Roblox profile link, username or user ID/);
+  assert.equal(done.action, 'logged');
+  assert.deepEqual([done.payout.id, done.payout.robloxAccount, done.payout.status], [held.payoutId, 'AniRBX_22', 'pending']);
+  assert.equal((await q.listDevs(prisma)).find(d => d.id === ani.id).robloxAccount, 'AniRBX_22', 'saved on the roster');
+
+  // Next time they are not asked again.
+  const next = await payouts.handleRequest(prisma, msg('10k for aizen polish'), { read: reads({ ...request, amount_text: '10k', description: 'Aizen polish', task_refs: [] }) });
+  assert.deepEqual([next.action, next.payout.robloxAccount], ['logged', 'AniRBX_22']);
+});
+
+test('an account given with the request goes straight through; vague requests are asked for both things at once', async () => {
+  const { prisma, ani } = await setup({ roblox: null });
+  const vague = await payouts.handleRequest(prisma, msg('payout pls'), { read: reads({ ...blank, kind: 'needs_info', question: 'Which item is this for?' }) });
+  assert.equal(vague.reply, 'Which item is this for?' + String.fromCharCode(10) + 'Please also include your Roblox profile link, username or user ID, so we know where to send it.');
+
+  const done = await payouts.handleRequest(prisma, msg('30k for aizen attack anims https://www.roblox.com/users/123456789/profile'), {
+    read: reads({ ...blank, kind: 'request', amount_text: '30k', amount_number: 30000, description: 'Aizen attack animations', item: 'Aizen', roblox_account: 'https://www.roblox.com/users/123456789/profile' }),
+  });
+  assert.deepEqual([done.action, done.payout.robloxAccount], ['logged', 'https://www.roblox.com/users/123456789/profile']);
+  assert.equal((await q.listDevs(prisma)).find(d => d.id === ani.id).robloxAccount, 'https://www.roblox.com/users/123456789/profile');
+
+  assert.equal(payouts.robloxFrom('@Builder_Man.'), 'Builder_Man');
+  assert.equal(payouts.robloxFrom('my roblox is cool'), null, 'a sentence is not an account');
+  assert.equal(payouts.robloxUrl('123456'), 'https://www.roblox.com/users/123456/profile');
+  assert.equal(payouts.robloxUrl('Builder_Man'), 'https://www.roblox.com/search/users?keyword=Builder_Man');
 });

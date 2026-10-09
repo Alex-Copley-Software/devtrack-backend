@@ -34,7 +34,7 @@ async function listTemplates(prisma, { includeInactive = true } = {}) {
 async function listDevs(prisma) {
   const rows = await prisma.$queryRawUnsafe(`
     SELECT d.id, d.name, d.discipline, d."secondaryDiscipline", d.status, d."discordProfileUrl", d."discordUserId",
-      d.notes, d."userId", d."discordThreadId",
+      d.notes, d."userId", d."discordThreadId", d."robloxAccount",
       COALESCE((SELECT array_agg(dd.discipline ORDER BY dd.discipline) FROM "AssetDevDiscipline" dd WHERE dd."devId" = d.id), ARRAY[]::text[]) AS disciplines,
       COALESCE(w."openTasks", 0) AS "openTasks",
       COALESCE(w."doneTasks", 0) AS "doneTasks",
