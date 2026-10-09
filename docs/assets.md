@@ -307,7 +307,9 @@ directly, and it never changes a task without a person approving the change.
 2. Add the channel or forum post where it should answer every message from
    them (for example an "Asset Management" post). That channel does not need
    to be on the read allowlist, and nothing said there feeds the suggestions.
-3. Anywhere else the agent reads, those people can mention the bot or reply
+3. Anywhere else the agent reads (a dev's forum, say), those people start a
+   message with the prefix (`--` by default, e.g. `-- where is Aizen at`),
+   mention the bot, or reply
    to it to get an answer.
 
 **Where the files come from.** Every upload and every link to a file host

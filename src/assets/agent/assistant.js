@@ -39,7 +39,10 @@ function normalizeSettings(raw = {}) {
     .map(c => ({ id: String(c?.id || '').trim(), label: String(c?.label || '').trim().slice(0, 60) }))
     .filter(c => isId(c.id));
   const unique = list => [...new Map(list.map(x => [x.id, x])).values()];
-  return { enabled: raw.enabled !== false, admins: unique(people).slice(0, 50), channels: unique(channels).slice(0, 50) };
+  // What an approved person starts a message with to talk to the bot in a
+  // channel the agent reads (a dev's forum, say). Empty turns that off.
+  const prefix = raw.prefix === undefined || raw.prefix === null ? '--' : String(raw.prefix).trim().slice(0, 6);
+  return { enabled: raw.enabled !== false, prefix, admins: unique(people).slice(0, 50), channels: unique(channels).slice(0, 50) };
 }
 
 async function getSettings(prisma) {

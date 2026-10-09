@@ -60,7 +60,7 @@ test('feature flags: everything is 404 until ASSETS_ENABLED, and the agent route
   assert.equal((await t.call('admin', 'GET', '/bootstrap')).status, 200);
 
   process.env.ASSET_AGENT_ENABLED = 'false';
-  assert.deepEqual((await t.call('bot', 'GET', '/agent/config')).body, { enabled: false, channelIds: [], selfTestToken: null, assistant: { enabled: false, admins: [], channels: [] }, payouts: { enabled: false, adminChannelId: '', managerRoleId: '' } });
+  assert.deepEqual((await t.call('bot', 'GET', '/agent/config')).body, { enabled: false, channelIds: [], selfTestToken: null, assistant: { enabled: false, prefix: '--', admins: [], channels: [] }, payouts: { enabled: false, adminChannelId: '', managerRoleId: '' } });
   assert.equal((await t.call('bot', 'POST', '/messages', { messages: [] })).status, 404);
   assert.equal((await t.call('bot', 'POST', '/agent/tick', {})).status, 404);
   assert.equal((await t.call('admin', 'GET', '/bootstrap')).body.flags.agentEnabled, false);
@@ -140,7 +140,7 @@ test('agent over HTTP: allowlist, ingest, tick, then accept from the web and fro
   // Admin allowlists a channel; a bad id is rejected with a helpful message.
   assert.equal((await t.call('admin', 'POST', '/agent/channels', { channelId: 'general' })).status, 400);
   assert.equal((await t.call('admin', 'POST', '/agent/channels', { channelId: '500000000000000001', label: 'dev-chat' })).status, 201);
-  assert.deepEqual((await t.call('bot', 'GET', '/agent/config')).body, { enabled: true, channelIds: ['500000000000000001'], selfTestToken: null, assistant: { enabled: true, admins: [], channels: [] }, payouts: { enabled: true, adminChannelId: '', managerRoleId: '' } });
+  assert.deepEqual((await t.call('bot', 'GET', '/agent/config')).body, { enabled: true, channelIds: ['500000000000000001'], selfTestToken: null, assistant: { enabled: true, prefix: '--', admins: [], channels: [] }, payouts: { enabled: true, adminChannelId: '', managerRoleId: '' } });
 
   const message = (id, channelId) => ({ id, channelId, guildId: '900', authorDiscordId: '222222222222222222', authorName: 'ani', content: 'vfx and anims done', postedAt: new Date(Date.now() - 10 * 60000).toISOString() });
   const ingest = await t.call('bot', 'POST', '/messages', { messages: [message('700000000000000001', '500000000000000001'), message('700000000000000002', '599999999999999999')] });

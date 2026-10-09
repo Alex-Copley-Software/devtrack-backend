@@ -64,7 +64,7 @@ router.get('/agent/config', h(async req => ({
   enabled: C.isEnabled('ASSET_AGENT_ENABLED'),
   channelIds: C.isEnabled('ASSET_AGENT_ENABLED') ? [...await pipeline.allowedChannelIds(req.prisma)] : [],
   selfTestToken: C.isEnabled('ASSET_AGENT_ENABLED') ? await pipeline.selfTestToken(req.prisma) : null,
-  assistant: C.isEnabled('ASSET_AGENT_ENABLED') ? await assistant.getSettings(req.prisma) : { enabled: false, admins: [], channels: [] },
+  assistant: C.isEnabled('ASSET_AGENT_ENABLED') ? await assistant.getSettings(req.prisma) : { enabled: false, prefix: '--', admins: [], channels: [] },
   payouts: C.isEnabled('ASSET_AGENT_ENABLED') ? await payouts.getSettings(req.prisma) : { enabled: false, adminChannelId: '', managerRoleId: '' },
 })));
 

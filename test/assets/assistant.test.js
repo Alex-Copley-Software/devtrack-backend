@@ -48,7 +48,7 @@ const lastResult = params => JSON.parse(params.messages.at(-1).content[0].conten
 test('settings keep only real Discord ids', async () => {
   const { prisma } = await setup();
   const s = await assistant.getSettings(prisma);
-  assert.deepEqual(s, { enabled: true, admins: [{ id: ADMIN, label: 'Alex' }], channels: [{ id: CHANNEL, label: 'Asset Management' }] });
+  assert.deepEqual(s, { enabled: true, prefix: '--', admins: [{ id: ADMIN, label: 'Alex' }], channels: [{ id: CHANNEL, label: 'Asset Management' }] });
 });
 
 test('uploads and file links are indexed as messages arrive, tied to the item and the dev', async () => {
