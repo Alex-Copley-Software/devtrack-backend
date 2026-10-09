@@ -209,3 +209,31 @@ test('an explicit instruction proposes a task change that waits for approval; no
   assert.deepEqual([second.proposals.length, same.not_proposed, missing.not_proposed], [0, ['status is already that'], ['unknown task ref "99999"']]);
   assert.match(blocked.error, /needs a reason/);
 });
+
+test('an instruction to add content proposes a new item; accepting creates it with its checklist', async () => {
+  const { prisma, update } = await setup();
+  const q = require('../../src/assets/queries');
+  const suggestions = require('../../src/assets/agent/suggestions');
+  const client = scripted([
+    [call('propose_new_item', { name: 'Byakuya', content_type: 'unit', update_number: '4', display_name: 'Legendary' }),
+      call('propose_new_item', { name: 'Aizen', content_type: 'Unit', update_number: '4' }, 'tu_2'),
+      call('propose_new_item', { name: 'Car', content_type: 'Vehicle', update_number: '9' }, 'tu_3')],
+    'ok',
+  ]);
+  const result = await assistant.respond(prisma, { message: msg(ADMIN, 'add Byakuya as a legendary unit to update 4', { authorName: 'Alex' }) }, { client });
+  assert.match(client.seen[0].system[1].text, /UPDATES: 4 Bleach \(In Development\)/);
+  assert.match(client.seen[0].system[1].text, /CONTENT TYPES: .*Unit/);
+
+  assert.deepEqual(result.proposals.map(p => [p.type, p.summary]), [['create_content_item', 'New Unit "Byakuya" in update #4 Bleach']]);
+  const [added, exists, unknown] = client.seen[1].messages.at(-1).content.map(c => JSON.parse(c.content));
+  assert.equal(added.awaiting_approval.length, 1);
+  assert.match(exists.not_proposed[0], /already exists/);
+  assert.match(unknown.not_proposed[0], /unknown content type "Vehicle"/);
+  assert.ok(unknown.content_types.includes('Unit') && unknown.open_updates[0].startsWith('4 Bleach'), 'told what does exist, so it can ask');
+
+  assert.equal((await q.listItems(prisma, { updateId: update.id })).some(i => i.internalName === 'Byakuya'), false, 'not created yet');
+  await suggestions.resolveSuggestion(prisma, result.proposals[0].id, { decision: 'accept', via: 'discord', actor: { userId: null, name: 'Alex' } });
+  const item = (await q.listItems(prisma, { updateId: update.id })).find(i => i.internalName === 'Byakuya');
+  assert.deepEqual([item.displayName, item.contentType], ['Legendary', 'Unit']);
+  assert.equal((await q.listTasks(prisma, { contentItemId: item.id })).length, 3, 'created with the Unit checklist');
+});

@@ -321,6 +321,20 @@ const TOOLS = [
     },
   },
   {
+    name: 'propose_new_item',
+    description: 'Propose adding ONE new content item (a unit, map, boss, skin and so on) to an update. Nothing is created by this call: a confirmation card is posted and a person must press Accept. On Accept the item is created with the full task checklist for its content type. Only call it when the person has explicitly told you to add it.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: str('The item\'s internal name, e.g. "Byakuya".'),
+        content_type: str('One of the content types you were given, e.g. "Unit".'),
+        update_number: str('The update number it goes in, e.g. "4" or "3.5". Use the update in development if they did not say and there is exactly one.'),
+        display_name: str('Display name or rarity if they gave one, e.g. "Mythic". Optional.'),
+      },
+      required: ['name', 'content_type', 'update_number'],
+    },
+  },
+  {
     name: 'get_notes',
     description: 'Read notes saved earlier, newest first.',
     input_schema: { type: 'object', properties: { item: str('Content item name. Optional.'), dev: str('Roster name. Optional.'), text: str('Words to search for. Optional.') } },
@@ -360,19 +374,9 @@ async function runTool(prisma, name, input, ctx, state) {
     if (result.saved) state.notes.push(result);
     return result;
   }
-  if (name === 'propose_task_change') {
-    const ref = String(input.task_ref || '').replace(/^#/, '');
-    const common = { task_ref: ref, confidence: 1, reason: `Asked for by ${state.author.name || 'an admin'} in Discord`, evidence: ['m1'] };
-    const actions = [];
-    if (input.status === 'Blocked') {
-      if (!String(input.blocked_reason || '').trim()) return { error: 'A blocked task needs a reason. Ask what it is waiting on.' };
-      actions.push({ ...common, type: 'mark_blocked', blocker_reason: input.blocked_reason });
-    } else if (input.status) actions.push({ ...common, type: 'update_task_status', status: input.status });
-    if (input.assignee) actions.push({ ...common, type: 'assign_task', assignee: findDev(ctx.devs, input.assignee)?.name || input.assignee });
-    if (input.due_date) actions.push({ ...common, type: 'set_due_date', due_date: input.due_date });
-    if (input.note) actions.push({ ...common, type: 'add_task_note', note: input.note });
-    if (!actions.length) return { error: 'Say what to change: a status, an assignee, a due date or a note.' };
-
+  // Both kinds of proposal go through the suggestion checks the agent uses,
+  // and wait on a card posted where the person asked.
+  const propose = async actions => {
     const { validateActions } = require('./validate');
     const suggestions = require('./suggestions');
     state.snapshot = state.snapshot || await require('./context').buildSnapshot(prisma);
@@ -395,6 +399,38 @@ async function runTool(prisma, name, input, ctx, state) {
       not_proposed: [...dropped.map(d => d.why), ...skipped.map(s => `${s.action.summary}: ${s.why}`)],
       note: stored.length ? 'A confirmation card with Accept and Reject is posted under your reply. Nothing has changed yet.' : 'Nothing was proposed.',
     };
+  };
+  const asked = { confidence: 1, reason: `Asked for by ${state.author.name || 'an admin'} in Discord`, evidence: ['m1'] };
+
+  if (name === 'propose_new_item') {
+    state.snapshot = state.snapshot || await require('./context').buildSnapshot(prisma);
+    const types = state.snapshot.contentTypes;
+    const type = findByName(types, input.content_type, t => [t.name]);
+    const result = await propose([{
+      ...asked, type: 'create_content_item', task_ref: '',
+      item_internal_name: String(input.name || '').trim(), display_name: String(input.display_name || '').trim(),
+      content_type: type?.name || String(input.content_type || ''), update_number: String(input.update_number || ''),
+    }]);
+    if (!result.awaiting_approval.length) {
+      result.content_types = types.map(t => t.name);
+      result.open_updates = state.snapshot.openUpdates.map(u => `${u.number} ${u.name} (${u.status})`);
+    }
+    return result;
+  }
+  if (name === 'propose_task_change') {
+    const ref = String(input.task_ref || '').replace(/^#/, '');
+    const common = { ...asked, task_ref: ref };
+    const actions = [];
+    if (input.status === 'Blocked') {
+      if (!String(input.blocked_reason || '').trim()) return { error: 'A blocked task needs a reason. Ask what it is waiting on.' };
+      actions.push({ ...common, type: 'mark_blocked', blocker_reason: input.blocked_reason });
+    } else if (input.status) actions.push({ ...common, type: 'update_task_status', status: input.status });
+    if (input.assignee) actions.push({ ...common, type: 'assign_task', assignee: findDev(ctx.devs, input.assignee)?.name || input.assignee });
+    if (input.due_date) actions.push({ ...common, type: 'set_due_date', due_date: input.due_date });
+    if (input.note) actions.push({ ...common, type: 'add_task_note', note: input.note });
+    if (!actions.length) return { error: 'Say what to change: a status, an assignee, a due date or a note.' };
+
+    return propose(actions);
   }
   if (name === 'get_notes') {
     const item = input.item ? findItem(ctx.items, input.item) : null;
@@ -444,10 +480,13 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
 
   const roster = ctx.devs.filter(d => d.status !== 'Inactive').map(d => d.name).join(', ');
   const itemNames = ctx.items.filter(i => !i.archived).map(i => i.internalName).join(', ');
+  const [allUpdates, allTypes] = await Promise.all([q.listUpdates(prisma), q.listContentTypes(prisma)]);
+  const updates = allUpdates.filter(u => !['Released', 'Cancelled'].includes(u.status)).map(u => `${u.number} ${u.name} (${u.status})`).join(', ');
+  const typeNames = allTypes.filter(t => t.active).map(t => t.name).join(', ');
   const place = ctx.devs.find(d => d.discordThreadId && [message.channelId, message.parentChannelId].map(String).includes(d.discordThreadId));
   const system = [
     { type: 'text', text: systemPrompt() },
-    { type: 'text', text: `CONTENT ITEMS: ${itemNames || 'none yet'}\n\nROSTER: ${roster || 'nobody yet'}` },
+    { type: 'text', text: `CONTENT ITEMS: ${itemNames || 'none yet'}\n\nROSTER: ${roster || 'nobody yet'}\n\nUPDATES: ${updates || 'none yet'}\n\nCONTENT TYPES: ${typeNames || 'none yet'}` },
   ];
   const turns = history.slice(-10).map(h => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: `${h.role === 'assistant' ? '' : `${h.name || 'someone'}: `}${String(h.content || '').slice(0, 1500)}` }))
     // The API wants the conversation to start with the person and alternate.

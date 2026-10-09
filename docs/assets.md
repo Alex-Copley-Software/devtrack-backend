@@ -296,6 +296,10 @@ directly, and it never changes a task without a person approving the change.
   presses Accept (approved accounts can, as can leads and managers). It has
   to be an instruction: a statement such as "Ruku finished the Aizen mesh"
   proposes nothing, though the assistant may ask whether to update the task.
+- "Add Byakuya as a unit to update 4", "create a boss called Yhwach for 5.0"
+  work the same way: a confirmation card, and on Accept the item is created
+  in that update with the full task checklist for its content type. It asks
+  if the type or the update is not clear.
 
 **Setting it up.** Agent settings, Assistant card:
 
