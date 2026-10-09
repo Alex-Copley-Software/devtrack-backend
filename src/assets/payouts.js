@@ -51,7 +51,7 @@ async function saveSettings(prisma, patch) {
 
 // ── reading ──────────────────────────────────────────────────────────────────
 
-const FIELDS = `p.id, p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
+const FIELDS = `p.id, p."guildId", p."devId", COALESCE(d.name, p."devName") AS "devName", p."discordUserId", p."channelId", p."messageId", p."requestUrl",
   p.text, p.amount, p."amountText", p.description, p."contentItemId", ci."internalName" AS "itemName", p.status, p.duplicates,
   p."adminChannelId", p."adminMessageId", p."paidAt", p."resolvedByName", p."declineReason", p."createdAt", p."updatedAt",
   COALESCE((SELECT json_agg(json_build_object('id', t.id, 'ref', t.ref, 'deliverable', tt.deliverable, 'item', tci."internalName") ORDER BY t.ref)
@@ -301,7 +301,12 @@ async function resolve(prisma, id, { decision, actorName, reason, via = 'web' })
 async function claimDiscordSync(prisma, limit = 10) {
   const rows = await prisma.$queryRawUnsafe(`
     UPDATE "AssetPayout" SET "needsDiscordSync" = false
-    WHERE id IN (SELECT id FROM "AssetPayout" WHERE "needsDiscordSync" ORDER BY "updatedAt" LIMIT $1)
+    WHERE id IN (
+      SELECT id FROM "AssetPayout"
+      WHERE "needsDiscordSync"
+        -- logged but never forwarded to the admins (their channel was not reachable): keep offering it
+        OR (status = 'pending' AND "adminMessageId" IS NULL AND "createdAt" > NOW() - INTERVAL '14 days' AND "createdAt" < NOW() - INTERVAL '1 minute')
+      ORDER BY "updatedAt" LIMIT $1)
     RETURNING id`, limit);
   const out = [];
   for (const r of rows) out.push(await getPayout(prisma, r.id));
