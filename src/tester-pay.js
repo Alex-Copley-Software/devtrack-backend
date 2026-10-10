@@ -373,10 +373,13 @@ async function respond(prisma, checkId, { discordUserId, verdict, note, videoUrl
   const settings = await getSettings(prisma);
   const video = String(videoUrl || '').trim().slice(0, 1000) || null;
   const text = String(note || '').trim().slice(0, 1000) || null;
-  if (verdict === 'fixed' && settings.requireVideo && !video) {
-    throw new PayError(400, 'Post a video showing the fix in this thread first, then press Fixed.');
-  }
   if (verdict === 'not_fixed' && !text) throw new PayError(400, 'Say what is still happening.');
+  // Either answer needs proof posted here first: a video or a photo (the setting keeps its old name).
+  if (settings.requireVideo && !video) {
+    throw new PayError(400, verdict === 'fixed'
+      ? 'Post a video or photo showing the fix here first, then press Fixed.'
+      : 'Post a video or photo showing it still happening here first, then press Not fixed.');
+  }
   const claimed = await prisma.$executeRawUnsafe(`
     UPDATE "ReportQaCheck" SET status = $2, note = $3, "videoUrl" = $4, "respondedAt" = CURRENT_TIMESTAMP
     WHERE id = $1 AND status = 'pending'`, checkId, verdict, text, video);

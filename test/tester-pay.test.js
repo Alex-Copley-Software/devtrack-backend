@@ -83,12 +83,14 @@ test('tester QA: asked in review, only the reporter can answer, a video is requi
   assert.equal(await pay.onStatusChange(prisma, { ...r, discordThreadId: null, status: 'reviewing' }, 'open'), null);
 
   await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Only the tester/);
-  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'fixed' }), /Post a video/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'fixed' }), /Post a video or photo showing the fix/);
   await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed' }), /still happening/);
 
   // Not fixed: back to the dev, then asked again on the next pass.
-  const no = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed', note: 'still clips through the floor' });
-  assert.deepEqual([no.check.status, no.check.note], ['not_fixed', 'still clips through the floor']);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed', note: 'still clips through the floor' }),
+    /Post a video or photo showing it still happening/, 'Not fixed needs proof too');
+  const no = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed', note: 'still clips through the floor', videoUrl: 'https://x/shot.png' });
+  assert.deepEqual([no.check.status, no.check.note, no.check.videoUrl], ['not_fixed', 'still clips through the floor', 'https://x/shot.png']);
   await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /already reported as not fixed/);
   assert.equal(await pay.onStatusChange(prisma, { ...r, status: 'in_progress' }, 'reviewing', 'Ana'), null, 'nothing pending to close');
 
@@ -166,7 +168,7 @@ test('the report query carries the latest tester check, and an answer moves the 
   assert.equal((await testerQa.fetchReport(prisma, r.id)).testerCheck.status, 'pending');
 
   // Not fixed sends it back to the dev.
-  await testerQa.applyAnswer(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed', note: 'still broken' });
+  await testerQa.applyAnswer(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed', note: 'still broken', videoUrl: 'https://x/shot.png' });
   let fresh = await testerQa.fetchReport(prisma, r.id);
   assert.deepEqual([fresh.status, fresh.testerCheck.status, fresh.testerCheck.note], ['in_progress', 'not_fixed', 'still broken']);
 

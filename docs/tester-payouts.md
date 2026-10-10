@@ -61,7 +61,7 @@ What counts:
 | Rule | Default |
 |------|---------|
 | Ask testers to confirm fixes | on |
-| Fixed needs a video (an upload or a video link in the thread since the request) | on |
+| Fixed and Not fixed need a video or photo (an upload or a link posted in the thread or ticket since the request) | on |
 | A tester's Fixed resolves the report | off |
 | Pay credited co-finders | on |
 

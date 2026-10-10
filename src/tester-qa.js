@@ -100,7 +100,7 @@ async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, ve
       UPDATE "Report" SET status = 'in_progress'::"Status", "updatedAt" = NOW()
       WHERE id = $1 AND status::text = 'reviewing'`, check.reportId);
     if (sentBack) await markQaFail(prisma, check.reportId, 'reviewing', 'in_progress', actorName);
-    await log({ reportId: check.reportId, action: 'tester_not_fixed', detail: check.note || null, actorName, actorId: '' });
+    await log({ reportId: check.reportId, action: 'tester_not_fixed', detail: [check.note, check.videoUrl].filter(Boolean).join(' · ') || null, actorName, actorId: '' });
   }
 
   const report = await fetchReport(prisma, check.reportId);
