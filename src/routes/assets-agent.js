@@ -22,16 +22,24 @@ module.exports = function registerAgentRoutes(router, h) {
     const status = ['pending', 'resolved'].includes(req.query.status) ? req.query.status : 'pending';
     const list = await suggestions.listSuggestions(req.prisma, { status });
     return {
-      suggestions: list.map(s => ({ ...s, canResolve: perms.canResolveSuggestion(req.access, s.updateId) })),
+      suggestions: await Promise.all(list.map(async s => ({ ...s, canResolve: s.type === 'log_expenses' ? await canLogExpenses(req) : perms.canResolveSuggestion(req.access, s.updateId) }))),
       pending: await suggestions.countPending(req.prisma),
       agentEnabled: C.isEnabled('ASSET_AGENT_ENABLED'),
     };
   }));
 
+  // Logging expenses is a Revenue action: the owner, or someone with the Revenue page.
+  async function canLogExpenses(req) {
+    if (req.user?.role === 'owner') return true;
+    if (!req.user?.id) return false;
+    const rows = await req.prisma.$queryRawUnsafe(`SELECT "pageAccess" FROM "User" WHERE id = $1`, req.user.id).catch(() => []);
+    return (rows[0]?.pageAccess || []).includes('revenue');
+  }
+
   async function resolve(req, id, decision, edits) {
     const suggestion = await suggestions.getSuggestion(req.prisma, id);
     if (!suggestion) throw new AssetError(404, 'Suggestion not found');
-    if (!perms.canResolveSuggestion(req.access, suggestion.updateId)) throw forbidden();
+    if (suggestion.type === 'log_expenses' ? !(await canLogExpenses(req)) : !perms.canResolveSuggestion(req.access, suggestion.updateId)) throw forbidden();
     return suggestions.resolveSuggestion(req.prisma, id, {
       decision, via: 'web', actor: actorOf(req),
       edits: decision === 'accept' ? suggestions.pickEdits(suggestion.type, edits) : undefined,

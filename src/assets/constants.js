@@ -21,7 +21,9 @@ const SUGGESTION_TYPES = [
 ];
 const SUGGESTION_STATUSES = ['pending', 'accepted', 'rejected', 'edited'];
 // Never auto-applied, whatever the settings say.
-const NEVER_AUTO_APPLY = ['create_content_item', 'flag_unknown'];
+// log_expenses is not in SUGGESTION_TYPES on purpose: the agent reading chat can never emit it. Only the
+// assistant proposes it, on a manager's instruction, and it writes to the Revenue page once accepted.
+const NEVER_AUTO_APPLY = ['create_content_item', 'flag_unknown', 'log_expenses'];
 
 function isEnabled(name) {
   return String(process.env[name] || '').toLowerCase() === 'true';

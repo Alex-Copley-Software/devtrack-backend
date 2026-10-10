@@ -105,6 +105,14 @@ async function applyChange(prisma, suggestion, { actor, edits }) {
         internalName: payload.internalName, displayName: payload.displayName || null,
       });
       break;
+    case 'log_expenses': {
+      const result = await require('../../revenue/sync').logExpenses(prisma, payload, suggestion.id, (suggestion.evidence || [])[0]?.url || null);
+      await service.logActivity(ctx, [{
+        entityType: 'suggestion', entityId: suggestion.id, action: 'accepted',
+        label: `Logged ${result.expenseIds.length} expense${result.expenseIds.length === 1 ? '' : 's'} on the Revenue page (${Number(payload.total).toLocaleString('en-US')} Robux): ${String(payload.description).slice(0, 200)}`,
+      }]);
+      return { ...payload, expenseIds: result.expenseIds };
+    }
     case 'flag_unknown': break; // accepting just acknowledges it
     default: throw new AssetError(400, `Unknown suggestion type "${suggestion.type}"`);
   }

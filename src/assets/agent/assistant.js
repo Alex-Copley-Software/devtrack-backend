@@ -338,6 +338,33 @@ const TOOLS = [
     },
   },
   {
+    name: 'propose_expenses',
+    description: 'Propose logging payments as expenses on the Revenue page, one expense per person, all with the same description, category and date. Nothing is logged by this call: one confirmation card is posted listing every payment, and an approved admin must press Accept. Only call it when the person has explicitly told you to log the payments. Amounts are Robux.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        description: str('What the payments are for, as it should read on each expense, e.g. "3.5 Tester payout".'),
+        category: str('Expense category. One of the categories in use (the tool lists them if this is wrong). Tester and contractor pay has been logged as "Contractor", asset work as "Art/Assets".'),
+        date: str('Date paid as YYYY-MM-DD. Leave empty for today.'),
+        payments: {
+          type: 'array',
+          description: 'One entry per person paid.',
+          items: {
+            type: 'object',
+            properties: {
+              name: str('Who was paid: their username or name exactly as written.'),
+              roblox_id: str('Their Roblox user id if one was given, else empty.'),
+              amount: str('The amount exactly as written, e.g. "100k" or "45000".'),
+            },
+            required: ['name', 'amount'],
+          },
+        },
+        split_between: { type: 'array', items: { type: 'string' }, description: 'Names of the people who split the cost, when the person named specific people. Leave empty when it is split across everyone on the roster (the default).' },
+      },
+      required: ['description', 'category', 'payments'],
+    },
+  },
+  {
     name: 'get_payments',
     description: 'Payments logged on the Revenue page (the expense log): who was paid, how many Robux, what for, and when, newest first, with a total. Use it for "how much have we paid Ruku", "was the Aizen shiny model paid for", "what did we pay for last week".',
     input_schema: {
@@ -416,6 +443,38 @@ async function runTool(prisma, name, input, ctx, state) {
     };
   };
   const asked = { confidence: 1, reason: `Asked for by ${state.author.name || 'an admin'} in Discord`, evidence: ['m1'] };
+
+  if (name === 'propose_expenses') {
+    const revenue = require('../../revenue/sync');
+    const prepared = await revenue.prepareExpenses(prisma, {
+      description: input.description, category: input.category, date: input.date, entries: input.payments, splitBetween: input.split_between,
+    });
+    if (prepared.error) return prepared;
+    // Not a tracker change, so it skips the tracker checks; the same list asked for twice is still caught as already pending.
+    const key = `log_expenses:${require('crypto').createHash('sha1').update(JSON.stringify([prepared.payload.description, prepared.payload.date, prepared.payload.entries.map(e => [e.name.toLowerCase(), e.amount])])).digest('hex').slice(0, 24)}`;
+    const { stored, skipped } = await require('./suggestions').storeSuggestions(prisma, [{
+      type: 'log_expenses', confidence: 1, reason: asked.reason, evidence: ['m1'],
+      payload: prepared.payload, before: null, after: prepared.after, summary: prepared.summary, dedupeKey: key,
+    }], {
+      batchId: null,
+      evidenceFor: () => [{
+        messageId: state.message.id, channelId: state.message.channelId, url: state.sourceUrl, authorName: state.author.name,
+        authorDiscordId: state.author.discordId, postedAt: new Date(state.message.postedAt || Date.now()).toISOString(),
+        excerpt: String(state.message.content || '').slice(0, 240),
+      }],
+    });
+    if (stored.length) {
+      await prisma.$executeRawUnsafe(`UPDATE "AssetAgentSuggestion" SET "needsDiscordPost" = false WHERE id = ANY($1::text[])`, stored.map(s => s.id));
+      state.proposals.push(...stored);
+    }
+    return {
+      awaiting_approval: stored.map(s => s.summary),
+      not_proposed: skipped.map(s => (s.why === 'already pending' ? 'This exact list is already waiting on a card.' : `This exact list was ${s.why}.`)),
+      payments: prepared.payload.entries.length, total_robux: prepared.payload.total, category: prepared.payload.category,
+      split_between: prepared.payload.audience, things_to_mention: prepared.notes,
+      note: stored.length ? 'One confirmation card listing every payment is posted under your reply. Nothing is logged until an approved admin presses Accept.' : 'Nothing was proposed.',
+    };
+  }
 
   if (name === 'propose_new_item') {
     state.snapshot = state.snapshot || await require('./context').buildSnapshot(prisma);

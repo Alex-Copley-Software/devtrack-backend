@@ -116,7 +116,39 @@ Aizen's shiny model paid for" are answered from the expense log. It reads
 payments only: it has no access to shares, salaries or revenue, and cannot
 log or change a payment.
 
-Tester payouts (the Payouts page for bug reports) are not logged to Revenue.
+**The assistant can log a list of payments, on instruction.** A manager
+tells it in Discord (in Asset Management, or with `--` in a dev channel):
+
+    -- log these payments as individual expenses for 3.5 Tester payout, split across everyone on the roster:
+    SomeTester 1234567890 - 100k
+    AnotherTester 2345678901 - 60k
+
+It reads each line (name, Roblox user id if given, amount in Robux) and posts
+**one** card listing every payment, the total, the category and who splits
+the cost. Nothing is logged until the card is accepted. On Accept, each line
+becomes its own expense with that description, today's date (or the date
+given), and the instruction message as the receipt link.
+
+- **Who can accept:** in Discord, only the accounts approved for the
+  assistant. On the web inbox, the owner or someone with the Revenue page. A
+  lead or manager on the asset roster cannot.
+- **Payees:** matched by Roblox user id first, then by name; a new name is
+  added to the payee directory on Accept. If the id given differs from the
+  one on file for that name, nothing is proposed and it says which line.
+- **Category:** one already in use. Tester and contractor pay goes under
+  Contractor, asset work under Art/Assets; otherwise it asks.
+- **Who pays:** the default even split, unless specific people are named.
+- **Checks:** an amount in dollars, an unreadable amount, a missing name or
+  the same person twice with the same amount stops the whole list. A payment
+  that matches one already logged (same payee, amount and description) is
+  pointed out on the card but not blocked. Up to 20 payments per card.
+- The same list asked for twice while a card is waiting does not make a
+  second card, and accepting a card twice cannot log it twice.
+
+It cannot edit or delete an expense; do that on the Revenue page.
+
+Tester payouts (the Payouts page for bug reports) are not logged to Revenue
+automatically; the list above is how they get there.
 
 ## Local run
 

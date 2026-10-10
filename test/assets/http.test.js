@@ -177,7 +177,7 @@ test('agent over HTTP: allowlist, ingest, tick, then accept from the web and fro
   const settings = await t.call('admin', 'GET', '/agent/settings');
   assert.equal(settings.body.usage.daily[0].extractCalls, 1);
   assert.equal(settings.body.settings.autoApply.update_task_status.enabled, false);
-  assert.deepEqual(settings.body.neverAutoApply, ['create_content_item', 'flag_unknown']);
+  assert.deepEqual(settings.body.neverAutoApply, ['create_content_item', 'flag_unknown', 'log_expenses']);
   const saved = await t.call('admin', 'PUT', '/agent/settings', { dailyBudgetUsd: 5, autoApply: { add_task_note: { enabled: true, threshold: 0.95 } } });
   assert.deepEqual([saved.body.settings.dailyBudgetUsd, saved.body.settings.autoApply.add_task_note], [5, { enabled: true, threshold: 0.95 }]);
 

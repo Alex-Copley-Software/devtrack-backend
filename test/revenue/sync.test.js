@@ -157,3 +157,91 @@ test('whoever marks it paid can say who splits the cost; left alone, it is the d
   await payouts.resolve(prisma, b.id, { decision: 'paid', actorName: 'Olive' });
   assert.equal((await expenses())[1].cost_share_person_ids, null, 'nobody chosen means the default even split');
 });
+
+// ── expenses logged by instruction ──────────────────────────────────────────
+
+test('a list of payments becomes one card, and nothing is logged until it is accepted', async () => {
+  const { prisma, expenses } = await setup();
+  const suggestions = require('../../src/assets/agent/suggestions');
+  const ADMIN = '111111111111111111';
+  await assistant.saveSettings(prisma, { admins: [{ id: ADMIN, label: 'Alex' }], channels: [{ id: '700000000000000001', label: 'Asset Management' }] });
+  await prisma.$executeRawUnsafe(`INSERT INTO rev_payees (display_name, roblox_user_id) VALUES ('Tess | tester', '7000001'), ('Remy', NULL)`);
+  await prisma.$executeRawUnsafe(`INSERT INTO rev_expenses (date_incurred, month, description, category, amount, payee_id) VALUES ('2026-09-01', '2026-09-01', 'old', 'Contractor', 1, 1)`);
+
+  const payments = [
+    { name: 'tessRBLX', roblox_id: '7000001', amount: '100k' },   // known by Roblox id under another name
+    { name: 'Remy', roblox_id: '7000002', amount: '60,000' },     // known by name, id not on file yet
+    { name: 'NewPerson', roblox_id: '7000003', amount: '45k' },   // not in the directory
+  ];
+  let turn = 0;
+  const client = { messages: { create: async params => {
+    const blocks = turn++ === 0
+      ? [{ type: 'tool_use', id: 'tu_1', name: 'propose_expenses', input: { description: '3.5 Tester payout', category: 'contractor', payments } }]
+      : [{ type: 'text', text: params.messages.at(-1).content[0].content }];
+    return { content: blocks, stop_reason: turn === 1 ? 'tool_use' : 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } };
+  } } };
+  const ask = () => assistant.respond(prisma, {
+    message: { id: String(nextId++), channelId: '700000000000000001', guildId: '900', authorDiscordId: ADMIN, authorName: 'Alex', content: '-- log these payments', postedAt: new Date().toISOString(), attachments: [] },
+  }, { client });
+
+  const result = await ask();
+  const told = JSON.parse(result.reply);
+  assert.deepEqual([told.payments, told.total_robux, told.category, told.split_between], [3, 205000, 'Contractor', 'Everyone on the roster (the default split)']);
+  assert.deepEqual(told.things_to_mention, ['tessRBLX: on file as Tess | tester', 'NewPerson: new payee']);
+  assert.equal(result.proposals.length, 1, 'one card for the whole list');
+  const [card] = result.proposals;
+  assert.deepEqual([card.type, card.status, card.summary], ['log_expenses', 'pending', 'Log 3 expenses, 205,000 Robux in all: 3.5 Tester payout']);
+  assert.match(card.after.payments, /Tess \| tester \(7000001\): 100,000 \[on file as Tess \| tester\]\nRemy \(7000002\): 60,000\nNewPerson \(7000003\): 45,000 \[new payee\]/);
+  assert.equal((await expenses()).length, 1, 'nothing logged yet');
+
+  // Asking again while it waits does not make a second card.
+  turn = 0;
+  const again = await ask();
+  assert.equal(again.proposals.length, 0);
+  assert.match(JSON.parse(again.reply).not_proposed[0], /already waiting/);
+
+  // Never applied automatically, whatever the settings say.
+  assert.equal(suggestions.shouldAutoApply({ autoApply: { log_expenses: { enabled: true, threshold: 0 } } }, card), false);
+
+  await suggestions.resolveSuggestion(prisma, card.id, { decision: 'accept', via: 'discord', actor: { userId: null, name: 'Alex' } });
+  const logged = (await expenses()).slice(1);
+  assert.deepEqual(logged.map(e => [e.display_name, e.roblox_user_id, e.amount, e.description, e.category, e.source, e.cost_share_person_ids]), [
+    ['Tess | tester', '7000001', 100000, '3.5 Tester payout', 'Contractor', 'assistant', null],
+    ['Remy', '7000002', 60000, '3.5 Tester payout', 'Contractor', 'assistant', null],
+    ['NewPerson', '7000003', 45000, '3.5 Tester payout', 'Contractor', 'assistant', null],
+  ]);
+  assert.match(logged[0].receipt_url, /^https:\/\/discord\.com\/channels\/900\//, 'the instruction is the receipt');
+  assert.equal(logged[0].month, `${logged[0].date_incurred.slice(0, 8)}01`);
+
+  // Applying the same card again adds nothing.
+  await revenue.logExpenses(prisma, card.payload, card.id, null);
+  assert.equal((await expenses()).length, 4);
+
+  // The same list again is now pointed out as already logged.
+  const repeat = await revenue.prepareExpenses(prisma, { description: '3.5 tester payout', category: 'Contractor', entries: [payments[1]] });
+  assert.match(repeat.notes[0], /Remy: same payment already logged/);
+});
+
+test('a list that cannot be read exactly is not proposed at all', async () => {
+  const { prisma } = await setup();
+  await prisma.$executeRawUnsafe(`INSERT INTO rev_payees (display_name, roblox_user_id) VALUES ('Remy', '7000002')`);
+  await prisma.$executeRawUnsafe(`INSERT INTO rev_expenses (date_incurred, month, description, category, amount, payee_id) VALUES ('2026-09-01', '2026-09-01', 'old', 'Contractor', 1, 1)`);
+  const prep = input => revenue.prepareExpenses(prisma, { description: 'Tester payout', category: 'Contractor', ...input });
+
+  assert.deepEqual([100000, 1500000, 100000, 45000, null, null, null].map((want, i) => revenue.parseRobux(['100k', '1.5m', '100,000', 45000, 'lots', '-5', ''][i]) === want), Array(7).fill(true));
+  const bad = await prep({ entries: [
+    { name: 'A', amount: '$50' }, { name: 'B', amount: 'some' }, { name: '', amount: '10k' },
+    { name: 'Remy', roblox_id: '999', amount: '10k' }, { name: 'C', roblox_id: 'c-name', amount: '10k' },
+    { name: 'D', amount: '5k' }, { name: 'd', amount: '5000' },
+  ] });
+  assert.equal(bad.payload, undefined);
+  assert.deepEqual(bad.problems.map(p => p.split(':')[0]), ['A', 'B', 'payment 3', 'Remy', 'C', 'd']);
+  assert.match(bad.problems[3], /directory has Roblox ID 7000002 for Remy, not 999/);
+
+  assert.match((await prep({ category: 'Snacks', entries: [{ name: 'A', amount: '1k' }] })).error, /not a category in use/);
+  assert.deepEqual((await prep({ category: '', entries: [{ name: 'A', amount: '1k' }] })).categories, ['Contractor', 'Other']);
+  assert.match((await prep({ entries: [] })).error, /No payments/);
+  assert.match((await prep({ date: 'yesterday', entries: [{ name: 'A', amount: '1k' }] })).error, /not a date/);
+  assert.match((await prep({ entries: Array.from({ length: 21 }, (_, i) => ({ name: `P${i}`, amount: '1k' })) })).error, /At most 20/);
+  assert.match((await prep({ splitBetween: ['Nobody'], entries: [{ name: 'A', amount: '1k' }] })).error, /not one of the people who can split/);
+});
