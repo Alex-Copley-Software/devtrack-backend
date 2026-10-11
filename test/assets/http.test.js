@@ -195,6 +195,9 @@ test('/assets slash command data: update summary, my tasks, item checklist, and 
   assert.equal(summary.body.update.number, 4, 'defaults to the update in development');
   assert.equal(summary.body.attention.noOwner, 1);
   assert.equal((await t.call('bot', 'GET', '/update?number=99')).status, 404);
+  assert.equal((await t.call('bot', 'GET', '/update?name=bleach')).body.update.number, 4, 'found by name');
+  assert.equal((await t.call('bot', 'GET', '/update?name=update%204')).body.update.number, 4, 'or by number, typed as words');
+  assert.match((await t.call('bot', 'GET', '/update?name=halloween')).body.error, /No update matches "halloween"\. There is: #4 Bleach\./);
 
   const mine = await t.call('bot', 'GET', '/mine?discordUserId=222222222222222222');
   assert.deepEqual(mine.body.tasks.map(x => x.ref), [animation.ref]);

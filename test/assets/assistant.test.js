@@ -237,3 +237,30 @@ test('an instruction to add content proposes a new item; accepting creates it wi
   assert.deepEqual([item.displayName, item.contentType], ['Legendary', 'Unit']);
   assert.equal((await q.listTasks(prisma, { contentItemId: item.id })).length, 3, 'created with the Unit checklist');
 });
+
+test('an update is found by its number or its name, for its items and for its files', async () => {
+  const { prisma, update, unit } = await setup();
+  const halloween = await service.createUpdate(ctxFor(prisma), { number: 5, name: 'Halloween Event', status: 'Planning' });
+  await service.createContentItem(ctxFor(prisma), { updateId: halloween.id, contentTypeId: unit.id, displayName: 'Mythic', internalName: 'Pumpkin King' });
+  await pipeline.ingestMessages(prisma, [
+    msg(ANI, 'pumpkin king mesh', { attachments: [{ name: 'pumpkin_king.fbx', url: 'https://cdn/x/pumpkin_king.fbx' }] }),
+    msg(ANI, 'starrk face', { attachments: [{ name: 'starrk_face.png', url: 'https://cdn/x/starrk_face.png' }] }),
+  ]);
+
+  const updates = await require('../../src/assets/queries').listUpdates(prisma);
+  const found = typed => assistant.findUpdate(updates, typed)?.id || null;
+  assert.deepEqual(['5', 'update 5', '#5', 'halloween', 'the halloween update', 'haloween', 'update 4', 'bleach'].map(found),
+    [halloween.id, halloween.id, halloween.id, halloween.id, halloween.id, halloween.id, update.id, update.id]);
+  assert.deepEqual(['9', 'christmas', ''].map(found), [null, null, null]);
+
+  const client = scripted([
+    [call('get_update', { update: 'halloween' }), call('search_files', { update: 'update 5' }, 'tu_2'), call('get_update', { update: 'christmas' }, 'tu_3')],
+    'ok',
+  ]);
+  await assistant.respond(prisma, { message: msg(ADMIN, 'what is in halloween, and its files') }, { client });
+  const [summary, files, missing] = client.seen[1].messages.at(-1).content.map(c => JSON.parse(c.content));
+  assert.deepEqual([summary.update, summary.status, summary.of, summary.items.map(i => i.item)], ['5 Halloween Event', 'Planning', 3, ['Pumpkin King']]);
+  assert.deepEqual([files.matched_update, files.files.map(f => f.name)], ['5 Halloween Event', ['pumpkin_king.fbx']]);
+  assert.match(missing.error, /No update matches "christmas"/);
+  assert.deepEqual(missing.updates, ['5 Halloween Event (Planning)', '4 Bleach (In Development)']);
+});

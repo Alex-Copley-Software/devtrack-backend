@@ -170,10 +170,16 @@ router.get('/dev-status', h(async req => ({
 
 router.get('/update', h(async req => {
   const updates = await q.listUpdates(req.prisma);
-  const wanted = req.query.number !== undefined && req.query.number !== ''
-    ? updates.find(u => u.number === Number(req.query.number))
+  // name: a number or an update's name, typed loosely ("5", "halloween").
+  const name = String(req.query.name || '').trim();
+  const byNumber = req.query.number !== undefined && req.query.number !== '';
+  const wanted = name ? assistant.findUpdate(updates, name)
+    : byNumber ? updates.find(u => u.number === Number(req.query.number))
     : updates.find(u => u.status === 'In Development') || updates.find(u => u.status === 'Testing') || updates[0];
-  if (!wanted) throw new AssetError(404, req.query.number ? `There is no update #${req.query.number}.` : 'There are no updates yet.');
+  if (!wanted) {
+    throw new AssetError(404, name ? `No update matches "${name}". There ${updates.length === 1 ? 'is' : 'are'}: ${updates.map(u => `#${u.number} ${u.name}`).join(', ') || 'none yet'}.`
+      : byNumber ? `There is no update #${req.query.number}.` : 'There are no updates yet.');
+  }
   const overview = await q.getUpdateOverview(req.prisma, wanted.id);
   return {
     update: overview.update,

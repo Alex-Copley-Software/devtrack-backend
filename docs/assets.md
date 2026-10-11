@@ -273,7 +273,7 @@ processed when it resumes. Raw messages are deleted after 30 days
 
 | Command | Shows |
 |---------|-------|
-| `/assets update [number]` | Update summary. Defaults to the one in development. |
+| `/assets update [number] [name]` | Update summary. Defaults to the one in development. `name` finds it by name, typed loosely (`halloween`). |
 | `/assets mine` | Your open tasks. |
 | `/assets item name:<name>` | An item's checklist and progress. |
 | `/assets task id:<n> status:<status>` | Updates one of your own tasks. |
@@ -290,6 +290,9 @@ directly, and it never changes a task without a person approving the change.
   current" saves a note against the item and the dev, attaches that image,
   and marks it as the current file for the item.
 - "Where is Aizen at?", "Is Kuro free?" are answered from the tracker.
+- "What's in update 5?", "How is halloween going?" give that update's status
+  and progress and the items in it. An update is found by its number or its
+  name. "Latest files for the halloween update" lists files for its items.
 - "Set Ruku's Aizen mesh task to Done", "assign the Starrk rig to Axen",
   "mark task 214 blocked, waiting on concept art" post a confirmation card
   with Accept and Reject under the reply. The task changes only when someone

@@ -129,6 +129,16 @@ function findByName(list, typed, names, { tieBreak = true } = {}) {
 // Internal names first: display names are often a rarity ("Mythic") that many items share.
 const findItem = (items, typed) => findByName(items, typed, i => [i.internalName]) || findByName(items, typed, i => [i.displayName], { tieBreak: false });
 const findDev = (devs, typed) => findByName(devs, typed, d => [d.name]);
+// An update by its number or its name: "5", "update 3.5", "#4", "halloween", "the halloween update".
+function findUpdate(updates, typed) {
+  const text = String(typed || '').trim().replace(/^the\s+/i, '');
+  const number = text.match(/^(?:update\s*)?#?\s*(\d+(?:\.\d+)?)$/i);
+  if (number) return updates.find(u => Number(u.number) === Number(number[1])) || null;
+  const name = text.replace(/\bupdate\b/ig, ' ');
+  // The whole name first, then one word of it ("haloween" for "Halloween Event"), when only one update has that word.
+  return findByName(updates, name, u => [u.name])
+    || findByName(updates, name, u => String(u.name || '').split(/\s+/).filter(w => w.length >= 4), { tieBreak: false });
+}
 
 // Called for every message stored by the pipeline, and for assistant
 // messages. Records each upload and file link once.
@@ -188,7 +198,7 @@ async function backfillFiles(prisma) {
 const FILE_FIELDS = `f.id, f.filename, f.kind, f."messageUrl", f."fileUrl", f."channelName", f."authorName", f."devId", f."contentItemId",
   f.context, f."isCurrent", f."postedAt", d.name AS "devName", ci."internalName" AS "itemName"`;
 
-// query: { item, dev, text, kind, limit }. Newest first, files marked current on top.
+// query: { item, dev, text, kind, updateId, limit }. Newest first, files marked current on top.
 async function searchFiles(prisma, query = {}, ctx) {
   const { items, devs } = ctx || await indexContext(prisma);
   const where = [];
@@ -197,6 +207,7 @@ async function searchFiles(prisma, query = {}, ctx) {
   let item = null;
   let dev = null;
   if (query.contentItemId) add(`f."contentItemId" = ?`, String(query.contentItemId));
+  if (query.updateId) add(`ci."updateId" = ?`, String(query.updateId));
   if (query.item) {
     item = findItem(items, query.item);
     // Files the indexer could not tie to an item are still found by name.
@@ -286,6 +297,7 @@ const TOOLS = [
       properties: {
         item: str('Content item name, e.g. "Starrk". Optional.'),
         dev: str('Roster name of the person who posted or made it, e.g. "Ruku". Optional.'),
+        update: str('Only files for content items in this update, by number or name, e.g. "5" or "halloween". Files not tied to an item are left out. Optional.'),
         text: str('Words that must appear in the file name or the message it came with, e.g. "face". Optional.'),
         kind: { type: 'string', enum: ['any', 'image', 'video', 'model', 'audio', 'archive', 'link', 'file'], description: 'Limit to one kind of file. Optional.' },
         limit: { type: 'integer', description: 'How many to return, 1 to 25. Default 8.' },
@@ -387,6 +399,11 @@ const TOOLS = [
     input_schema: { type: 'object', properties: { item: str('Content item name.') }, required: ['item'] },
   },
   {
+    name: 'get_update',
+    description: 'An update by its number or its name ("5", "3.5", "halloween"): its status, lead, target release and progress, and every content item in it with its type, owner and progress. Released updates can be looked up too. Use it for "what is in update 5", "how is the halloween update going", "what is left for 3.5".',
+    input_schema: { type: 'object', properties: { update: str('The update number or name, e.g. "5" or "halloween".') }, required: ['update'] },
+  },
+  {
     name: 'get_dev',
     description: "A dev's open tasks, and whether they are free to take work.",
     input_schema: { type: 'object', properties: { dev: str('Roster name.') }, required: ['dev'] },
@@ -404,9 +421,27 @@ const fileLine = f => ({
 });
 
 async function runTool(prisma, name, input, ctx, state) {
+  const updateList = async () => (state.updates ||= await q.listUpdates(prisma));
+  const noUpdate = async typed => ({ error: `No update matches "${typed}".`, updates: (await updateList()).map(u => `${u.number} ${u.name} (${u.status})`) });
   if (name === 'search_files') {
-    const { files, item, dev } = await searchFiles(prisma, input, ctx);
-    return { matched_item: item?.internalName || null, matched_dev: dev?.name || null, count: files.length, files: files.map(fileLine) };
+    const update = input.update ? findUpdate(await updateList(), input.update) : null;
+    if (input.update && !update) return noUpdate(input.update);
+    const { files, item, dev } = await searchFiles(prisma, { ...input, updateId: update?.id }, ctx);
+    return {
+      matched_item: item?.internalName || null, matched_dev: dev?.name || null, ...(update ? { matched_update: `${update.number} ${update.name}` } : {}),
+      count: files.length, files: files.map(fileLine),
+    };
+  }
+  if (name === 'get_update') {
+    const update = findUpdate(await updateList(), input.update);
+    if (!update) return noUpdate(input.update);
+    const items = ctx.items.filter(i => i.updateId === update.id && !i.archived);
+    return {
+      update: `${update.number} ${update.name}`, status: update.status, lead: update.leadName || null, target_release: update.targetRelease || null,
+      done: update.done, of: update.countable, blocked: update.blocked,
+      items: items.slice(0, 80).map(i => ({ item: i.internalName, display_name: i.displayName, type: i.contentType, owner: i.ownerName || null, done: i.done, of: i.countable, blocked: i.blocked || undefined })),
+      ...(items.length > 80 ? { more_items: items.length - 80 } : {}),
+    };
   }
   if (name === 'save_note') {
     const result = await saveNote(prisma, {
@@ -623,6 +658,6 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
 
 module.exports = {
   getSettings, saveSettings, normalizeSettings,
-  indexFiles, indexContext, backfillFiles, searchFiles, matchItem, findItem, findDev, kindOf,
+  indexFiles, indexContext, backfillFiles, searchFiles, matchItem, findItem, findDev, findUpdate, kindOf,
   listNotes, saveNote, respond, TOOLS,
 };
