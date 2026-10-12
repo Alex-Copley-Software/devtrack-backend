@@ -3,6 +3,7 @@
 // the agent endpoints additionally need ASSET_AGENT_ENABLED.
 
 const router = require('express').Router();
+const personal = require('../personal');
 const { getPrisma } = require('../assets/db');
 const { ensureAssetSchema } = require('../assets/schema');
 const C = require('../assets/constants');
@@ -101,10 +102,29 @@ router.post('/assistant', h(async req => {
   requireAgent();
   const message = req.body.message || {};
   if (!message.id || !message.channelId || !message.authorDiscordId) throw new AssetError(400, 'Incomplete message');
-  const result = await assistant.respond(req.prisma, { message, history: Array.isArray(req.body.history) ? req.body.history : [] });
+  const result = await assistant.respond(req.prisma, {
+    message, history: Array.isArray(req.body.history) ? req.body.history : [], private: req.body.private === true,
+  });
   if (result.denied) throw new AssetError(403, 'Not an approved account');
   return result;
 }));
+
+// ── the owner's private notes and reminders (see src/personal.js) ───────────
+
+// /note saves straight away, without a model call.
+router.post('/personal/note', h(async req => {
+  if (!personal.isOwner(req.body.discordUserId)) throw new AssetError(403, 'Not the owner');
+  try {
+    const note = await personal.saveNote(req.prisma, req.body.discordUserId, req.body.text);
+    return { saved: true, ref: note.ref };
+  } catch (err) {
+    if (err instanceof personal.PersonalError) throw new AssetError(err.status, err.message);
+    throw err;
+  }
+}));
+
+// Reminders that are due now. Each comes back once; the bot sends it as a DM.
+router.post('/personal/reminders/claim', h(async req => ({ ownerId: personal.ownerId() || null, reminders: await personal.claimDue(req.prisma) })));
 
 // Self-test: what would the agent propose for these messages? Stores nothing.
 router.post('/agent/dry-run', h(async req => {
@@ -139,7 +159,8 @@ router.post('/suggestions/:id/resolve', h(async req => {
   const suggestion = await suggestions.getSuggestion(req.prisma, req.params.id);
   if (!suggestion) throw new AssetError(404, 'Suggestion not found');
   // An approved assistant account can approve without being on the roster.
-  const approved = (await assistant.getSettings(req.prisma)).admins.find(a => a.id === String(req.body.discordUserId));
+  const approved = (await assistant.getSettings(req.prisma)).admins.find(a => a.id === String(req.body.discordUserId))
+    || (personal.isOwner(req.body.discordUserId) ? { label: req.body.discordUserName || 'Owner' } : null);
   if (approved) {
     return suggestions.resolveSuggestion(req.prisma, suggestion.id, {
       decision, via: 'discord', actor: { userId: null, name: approved.label || req.body.discordUserName || 'Admin' },

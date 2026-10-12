@@ -19,6 +19,7 @@
 //   AssetSetting 'assistant'   who may use it, and where it answers unprompted
 
 const fs = require('fs');
+const personal = require('../../personal');
 const path = require('path');
 const { newId } = require('../db');
 const q = require('../queries');
@@ -421,6 +422,11 @@ const fileLine = f => ({
 });
 
 async function runTool(prisma, name, input, ctx, state) {
+  // The owner's private notes and reminders: only offered, and only answered, in private mode.
+  if (personal.TOOL_NAMES.has(name)) {
+    if (!state.personal) return { error: 'That is only available to the owner in private.' };
+    return personal.runTool(prisma, state.author.discordId, name, input);
+  }
   const updateList = async () => (state.updates ||= await q.listUpdates(prisma));
   const noUpdate = async typed => ({ error: `No update matches "${typed}".`, updates: (await updateList()).map(u => `${u.number} ${u.name} (${u.status})`) });
   if (name === 'search_files') {
@@ -585,15 +591,19 @@ function getClient() {
 
 // message: { id, channelId, parentChannelId, guildId, channelName, authorDiscordId, authorName, content, attachments, postedAt }
 // history: earlier turns in the same channel, oldest first: [{ role: 'user' | 'assistant', name, content }]
-async function respond(prisma, { message, history = [] }, { client } = {}) {
+// private: the caller says this is the owner alone (a DM, or one of their personal commands). It only
+// counts when the author really is the owner, and it adds their private notes and reminders.
+async function respond(prisma, { message, history = [], private: asPrivate = false }, { client } = {}) {
   const settings = await getSettings(prisma);
-  if (!settings.enabled || !settings.admins.some(a => a.id === String(message.authorDiscordId))) {
+  const isPrivate = asPrivate === true && personal.isOwner(message.authorDiscordId);
+  if (!isPrivate && (!settings.enabled || !settings.admins.some(a => a.id === String(message.authorDiscordId)))) {
     return { reply: null, denied: true };
   }
   await backfillFiles(prisma).catch(err => console.error('[AssetAssistant] backfill failed:', err.message));
   const ctx = await indexContext(prisma);
   // Files the person attached to this very message are indexed first, so "this file" can be found.
-  await indexFiles(prisma, message, ctx);
+  // Not in private: what the owner sends the bot privately stays out of the team's file index.
+  if (!isPrivate) await indexFiles(prisma, message, ctx);
 
   const roster = ctx.devs.filter(d => d.status !== 'Inactive').map(d => d.name).join(', ');
   const itemNames = ctx.items.filter(i => !i.archived).map(i => i.internalName).join(', ');
@@ -604,7 +614,9 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
   const system = [
     { type: 'text', text: systemPrompt() },
     { type: 'text', text: `CONTENT ITEMS: ${itemNames || 'none yet'}\n\nROSTER: ${roster || 'nobody yet'}\n\nUPDATES: ${updates || 'none yet'}\n\nCONTENT TYPES: ${typeNames || 'none yet'}` },
+    ...(isPrivate ? [{ type: 'text', text: personal.PROMPT }] : []),
   ];
+  const tools = isPrivate ? [...TOOLS, ...personal.TOOLS] : TOOLS;
   const turns = history.slice(-10).map(h => ({ role: h.role === 'assistant' ? 'assistant' : 'user', content: `${h.role === 'assistant' ? '' : `${h.name || 'someone'}: `}${String(h.content || '').slice(0, 1500)}` }))
     // The API wants the conversation to start with the person and alternate.
     .reduce((list, t) => { const last = list[list.length - 1]; if (last && last.role === t.role) last.content += `\n${t.content}`; else list.push(t); return list; }, []);
@@ -614,7 +626,9 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
   const messages = [...turns, {
     role: 'user',
     content: [
-      `Today is ${new Date().toISOString().slice(0, 10)}. ${message.authorName || 'An admin'} says, in ${message.channelName ? `"${message.channelName}"` : 'Discord'}${place ? ` (${place.name}'s work channel)` : ''}:`,
+      isPrivate
+        ? `It is now ${personal.localText(new Date())} US Eastern (local time for ${message.authorName || 'the owner'}). They say, in private:`
+        : `Today is ${new Date().toISOString().slice(0, 10)}. ${message.authorName || 'An admin'} says, in ${message.channelName ? `"${message.channelName}"` : 'Discord'}${place ? ` (${place.name}'s work channel)` : ''}:`,
       '', String(message.content || '').slice(0, 3000),
       attached.length ? `\n(They attached: ${attached.join(', ')})` : '',
     ].filter(l => l !== '').join('\n'),
@@ -626,13 +640,14 @@ async function respond(prisma, { message, history = [] }, { client } = {}) {
     notes: [],
     proposals: [],
     message,
+    personal: isPrivate,
   };
   const api = client || getClient();
   const model = MODEL();
   const usage = {};
   let reply = '';
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const params = { model, max_tokens: 2000, system, tools: TOOLS, messages };
+    const params = { model, max_tokens: 2000, system, tools, messages };
     const effort = process.env.ASSET_AGENT_ASSISTANT_EFFORT || 'low';
     if (effort !== 'off') params.output_config = { effort };
     const response = await api.messages.create(params, { timeout: 120000 });
