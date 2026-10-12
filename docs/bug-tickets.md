@@ -4,8 +4,7 @@ Bug reports are filed as Ticket Tool tickets: text channels named
 `test-game-0001` / `live-game-0001` under the categories **Test Game
 Reports** and **Live Game Reports**. Each ticket becomes one DevTrack report.
 Everything that worked on a forum-thread report works on a ticket: status
-messages, the leaderboard, `/credit`, `/requestcredit`, `/track`, `/reopen`,
-`/syncreport`, report pause, tester QA (the opener is pinged in the ticket
+messages, `/credit`, `/requestcredit`, `/syncreport`, report pause, tester QA (the opener is pinged in the ticket
 with Fixed / Not fixed) and tester payouts. Forum channels that were already
 watched keep working.
 
