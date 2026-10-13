@@ -4,6 +4,7 @@
 
 const router = require('express').Router();
 const personal = require('../personal');
+const teams = require('../assets/teams');
 const { getPrisma } = require('../assets/db');
 const { ensureAssetSchema } = require('../assets/schema');
 const C = require('../assets/constants');
@@ -67,7 +68,11 @@ router.get('/agent/config', h(async req => ({
   selfTestToken: C.isEnabled('ASSET_AGENT_ENABLED') ? await pipeline.selfTestToken(req.prisma) : null,
   assistant: C.isEnabled('ASSET_AGENT_ENABLED') ? await assistant.getSettings(req.prisma) : { enabled: false, prefix: '--', admins: [], channels: [] },
   payouts: C.isEnabled('ASSET_AGENT_ENABLED') ? await payouts.getSettings(req.prisma) : { enabled: false, adminChannelId: '', managerRoleId: '' },
+  // Team categories: the bot reports the forums inside them so each can be matched to its dev.
+  teamCategoryIds: (await teams.listTeams(req.prisma)).map(t => t.discordCategoryId).filter(Boolean),
 })));
+
+router.post('/team-channels', h(req => teams.syncChannels(req.prisma, req.body.channels)));
 
 // ── payout requests ──────────────────────────────────────────────────────────
 

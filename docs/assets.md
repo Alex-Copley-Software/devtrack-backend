@@ -395,3 +395,47 @@ and the HTTP routes end to end.
   script with the same key to reproduce it.
 - **Suggestions are not posted in Discord.** `ASSET_AGENT_REVIEW_CHANNEL_ID`
   is unset or the bot cannot post there. They are still in the web inbox.
+
+## Teams
+
+A team is a named group of disciplines with its own Discord category. The
+four that exist from the start:
+
+| Team | Disciplines |
+|------|-------------|
+| Modelers | Unit Mesh, Unit Texture |
+| Artists | Art |
+| Animators | Animation, Rigging |
+| VFX | VFX, VFX Scripting |
+
+Nothing is stored per dev or per task. A dev is on a team when they have one
+of its disciplines; a task belongs to the team its discipline is on. A
+discipline can be on one team only. Teams are edited on the Team page
+(**Teams**, admins): name, Discord category ID, disciplines. More can be
+added (Sound for SFX, Builders, Engineers) the same way.
+
+**On the pages.** Overview has *Progress by team* (each team's share of the
+update, how many are blocked, how many devs are free). Tasks and Kanban have
+a team filter; the Team page and Payouts do too.
+
+**In Discord.** Giving a team its category ID does three things:
+
+- The agent reads everything in that category. It does not need adding to
+  the channel allowlist as well.
+- Each forum in the category is matched to the roster by name and becomes
+  that dev's status channel, which is what gives it the green or yellow dot,
+  payout requests from its Payments post, and `--` replies. The name must
+  match a dev who has no channel yet: exactly (ignoring case, emoji and
+  punctuation) anywhere on the roster, or nearly (`drnken` for Drunken) for
+  a dev on that team, and only when one dev is that close.
+- A forum that matches nobody is listed on the Team page under *Discord
+  forums with no dev*, with three choices: link it to a dev, add it as a new
+  dev, or ignore it (an admin forum, say). The bot reports forums when the
+  list changes and every half hour, so a new forum is picked up within a
+  couple of minutes.
+
+**The assistant** knows the teams: "who in VFX is free", "how are the
+animators doing on update 5", "what is left for the artists".
+
+Managers and leads are the same for every team; there are no per-team
+permissions.

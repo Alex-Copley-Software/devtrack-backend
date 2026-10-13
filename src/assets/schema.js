@@ -50,6 +50,18 @@ const TABLES = [
     "discipline" TEXT NOT NULL,
     PRIMARY KEY ("devId", "discipline")
   )`,
+  // Teams: a named group of disciplines with its own Discord category (see teams.js).
+  `CREATE TABLE IF NOT EXISTS "AssetTeam" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "name" TEXT NOT NULL UNIQUE,
+    "discordCategoryId" TEXT,
+    "sortOrder" INT NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS "AssetTeamDiscipline" (
+    "teamId" TEXT NOT NULL REFERENCES "AssetTeam"("id") ON DELETE CASCADE,
+    "discipline" TEXT NOT NULL,
+    PRIMARY KEY ("teamId", "discipline")
+  )`,
   `CREATE TABLE IF NOT EXISTS "AssetUpdate" (
     "id" TEXT NOT NULL PRIMARY KEY,
     "number" DOUBLE PRECISION NOT NULL UNIQUE,

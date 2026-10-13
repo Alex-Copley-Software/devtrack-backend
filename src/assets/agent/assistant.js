@@ -20,6 +20,7 @@
 
 const fs = require('fs');
 const personal = require('../../personal');
+const teams = require('../teams');
 const path = require('path');
 const { newId } = require('../db');
 const q = require('../queries');
@@ -405,6 +406,11 @@ const TOOLS = [
     input_schema: { type: 'object', properties: { update: str('The update number or name, e.g. "5" or "halloween".') }, required: ['update'] },
   },
   {
+    name: 'get_team',
+    description: 'A team (Modelers, Artists, Animators, VFX and so on): its disciplines, who is on it and whether each is free to take work, and how its tasks stand, in one update if you name it or across the live ones. Use it for "who in VFX is free", "how are the animators doing on update 5", "what is left for the artists".',
+    input_schema: { type: 'object', properties: { team: str('Team name, e.g. "VFX".'), update: str('An update number or name, to count only its tasks. Optional.') }, required: ['team'] },
+  },
+  {
     name: 'get_dev',
     description: "A dev's open tasks, and whether they are free to take work.",
     input_schema: { type: 'object', properties: { dev: str('Roster name.') }, required: ['dev'] },
@@ -570,6 +576,25 @@ async function runTool(prisma, name, input, ctx, state) {
       tasks: tasks.map(t => ({ ref: t.ref, discipline: t.discipline, task: t.deliverable, status: t.status, assignee: t.assigneeName || null, due: t.dueDate || null, blocked_on: t.blockedReason || undefined })),
     };
   }
+  if (name === 'get_team') {
+    const all = await teams.listTeams(prisma);
+    const team = findByName(all, String(input.team || '').replace(/\bteam\b/ig, ' '), t => [t.name, t.name.replace(/s$/i, '')]);
+    if (!team) return { error: `There is no team called "${input.team}".`, teams: all.map(t => `${t.name} (${t.disciplines.join(', ')})`) };
+    const update = input.update ? findUpdate(await updateList(), input.update) : null;
+    if (input.update && !update) return noUpdate(input.update);
+    const live = (await updateList()).filter(u => !['Released', 'Cancelled'].includes(u.status)).map(u => u.id);
+    const tasks = (await q.listTasksDetailed(prisma, update ? { updateId: update.id } : {}))
+      .filter(t => team.disciplines.includes(t.discipline) && (update || live.includes(t.updateId)));
+    const count = status => tasks.filter(t => t.status === status).length;
+    const members = ctx.devs.filter(d => d.status !== 'Inactive' && team.disciplines.some(x => d.disciplines.includes(x)));
+    return {
+      team: team.name, disciplines: team.disciplines, scope: update ? `update ${update.number} ${update.name}` : 'all live updates',
+      tasks: { total: tasks.length, done: count('Done'), in_progress: count('In Progress'), review: count('Review'), blocked: count('Blocked'), not_started: count('Not Started') },
+      unassigned_open: tasks.filter(t => !t.assigneeName && ['Not Started', 'In Progress', 'Blocked'].includes(t.status)).length,
+      members: members.map(d => ({ dev: d.name, status: d.status, open_tasks: d.openTasks, free_to_task: d.status === 'Active' && !d.openTasks })),
+      blocked: tasks.filter(t => t.status === 'Blocked').slice(0, 15).map(t => ({ ref: t.ref, item: t.internalName, task: t.deliverable, assignee: t.assigneeName || null, blocked_on: t.blockedReason || null })),
+    };
+  }
   if (name === 'get_dev') {
     const dev = findDev(ctx.devs, input.dev);
     if (!dev) return { error: `Nobody on the roster is called "${input.dev}".` };
@@ -610,10 +635,11 @@ async function respond(prisma, { message, history = [], private: asPrivate = fal
   const [allUpdates, allTypes] = await Promise.all([q.listUpdates(prisma), q.listContentTypes(prisma)]);
   const updates = allUpdates.filter(u => !['Released', 'Cancelled'].includes(u.status)).map(u => `${u.number} ${u.name} (${u.status})`).join(', ');
   const typeNames = allTypes.filter(t => t.active).map(t => t.name).join(', ');
+  const teamNames = (await teams.listTeams(prisma)).map(t => `${t.name} (${t.disciplines.join(', ') || 'no disciplines'})`).join('; ');
   const place = ctx.devs.find(d => d.discordThreadId && [message.channelId, message.parentChannelId].map(String).includes(d.discordThreadId));
   const system = [
     { type: 'text', text: systemPrompt() },
-    { type: 'text', text: `CONTENT ITEMS: ${itemNames || 'none yet'}\n\nROSTER: ${roster || 'nobody yet'}\n\nUPDATES: ${updates || 'none yet'}\n\nCONTENT TYPES: ${typeNames || 'none yet'}` },
+    { type: 'text', text: `CONTENT ITEMS: ${itemNames || 'none yet'}\n\nROSTER: ${roster || 'nobody yet'}\n\nUPDATES: ${updates || 'none yet'}\n\nCONTENT TYPES: ${typeNames || 'none yet'}\n\nTEAMS: ${teamNames || 'none yet'}` },
     ...(isPrivate ? [{ type: 'text', text: personal.PROMPT }] : []),
   ];
   const tools = isPrivate ? [...TOOLS, ...personal.TOOLS] : TOOLS;

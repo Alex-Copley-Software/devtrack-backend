@@ -8,6 +8,7 @@ const C = require('../assets/constants');
 const q = require('../assets/queries');
 const service = require('../assets/service');
 const perms = require('../assets/permissions');
+const teams = require('../assets/teams');
 
 const { AssetError } = service;
 const forbidden = () => new AssetError(403, 'You do not have permission to do that');
@@ -64,9 +65,10 @@ const requireAdmin = req => { if (!req.access.isAdmin) throw forbidden(); };
 
 router.get('/bootstrap', h(async req => {
   const { prisma } = req;
-  const [disciplines, contentTypes, templates, devs, updates, views] = await Promise.all([
+  const [disciplines, contentTypes, templates, devs, updates, views, teamList, teamUnlinked] = await Promise.all([
     q.listDisciplines(prisma), q.listContentTypes(prisma), q.listTemplates(prisma),
     q.listDevs(prisma), q.listUpdates(prisma), q.listSavedViews(prisma, req.user.id),
+    teams.listTeams(prisma), teams.unlinkedChannels(prisma),
   ]);
   return {
     enums: {
@@ -74,6 +76,7 @@ router.get('/bootstrap', h(async req => {
       devStatuses: C.DEV_STATUSES, suggestionTypes: C.SUGGESTION_TYPES,
     },
     disciplines, contentTypes, templates, devs, updates, views,
+    teams: teamList, teamUnlinked: perms.canEditRoster(req.access) ? teamUnlinked : [],
     access: req.access,
     me: { id: req.user.id, name: req.user.name, role: req.user.role },
     flags: { agentEnabled: C.isEnabled('ASSET_AGENT_ENABLED') },
@@ -225,6 +228,17 @@ router.patch('/devs/:id', h(req => {
 router.delete('/devs/:id', h(req => {
   if (!perms.canEditRoster(req.access)) throw forbidden();
   return service.deleteDev(req.ctx, req.params.id);
+}));
+
+// ── teams (admin) ────────────────────────────────────────────────────────────
+
+router.post('/teams', h(async (req, res) => { requireAdmin(req); res.status(201); return teams.saveTeam(req.prisma, null, req.body); }));
+router.patch('/teams/:id', h(req => { requireAdmin(req); return teams.saveTeam(req.prisma, req.params.id, req.body); }));
+router.delete('/teams/:id', h(req => { requireAdmin(req); return teams.deleteTeam(req.prisma, req.params.id); }));
+// A forum in a team's category that could not be matched to a dev by name: say whose it is, or that it is nobody's.
+router.post('/teams/channels/:channelId', h(req => {
+  if (!perms.canEditRoster(req.access)) throw forbidden();
+  return teams.resolveChannel(req.prisma, req.params.channelId, { devId: req.body.devId, ignore: req.body.ignore === true }, req.ctx);
 }));
 
 // ── templates (admin) ────────────────────────────────────────────────────────
