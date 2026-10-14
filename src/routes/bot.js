@@ -444,6 +444,17 @@ router.get('/report-by-message/:messageId', botAuth, async (req, res) => {
   }
 });
 
+// GET /api/bot/bug-search?q=&where=test|live — /bugs search in Discord: active
+// bug reports matching the words, anonymous (see bug-search.js).
+router.get('/bug-search', botAuth, async (req, res) => {
+  try {
+    res.json(await require('../bug-search').search(prisma, { query: req.query.q, where: req.query.where }));
+  } catch (err) {
+    console.error('[Bot bug-search]', err.message);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
 // GET /api/bot/reports — bot fetches all reports for leaderboard
 router.get('/reports', botAuth, async (req, res) => {
   try {

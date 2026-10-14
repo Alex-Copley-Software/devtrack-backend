@@ -78,3 +78,22 @@ could not be closed. The report shows a ticket chip and a Transcript link.
   Attach Files, Read Message History.
 - For `$delete` to be accepted, Ticket Tool has to treat the DevTrack
   bot as support staff on both panels.
+
+## Checking for an existing report: /bugs search
+
+Tickets are private, so testers cannot browse each other's reports. Instead,
+in the server, `/bugs search words:<what happens> [game:Test game|Live game]`
+lists active reports matching those words. The reply is visible only to the
+person who ran it.
+
+- **Shown:** reports waiting for review, accepted, in progress, in QA and on
+  hold for QA. Bugs and crashes only; no suggestions, nothing resolved,
+  declined or archived.
+- **Each result:** its title, a one-line summary, status, severity, test or
+  live game, and how long ago it was reported. Up to ten, best match first.
+- **Never shown:** who reported it or who was credited, clips, images, any
+  link, the ticket, Discord mentions, long numbers (user and Roblox ids).
+  The reporter's and co-finder's names are taken out of the text as well.
+
+It is read-only: nobody can reach the ticket from it, so it does not bring
+back the problem of people piling into other people's reports.
