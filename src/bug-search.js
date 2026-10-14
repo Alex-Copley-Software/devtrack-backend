@@ -64,7 +64,8 @@ async function search(prisma, { query, where } = {}) {
     LIMIT 60`, SEARCHABLE, ...terms);
   // Most of the words, not just one of them, unless that is all there is.
   const best = rows.length ? Math.max(...rows.map(r => Number(r.matched))) : 0;
-  const floor = terms.length >= 3 ? Math.max(1, Math.min(best, Math.ceil(terms.length / 2))) : 1;
+  // Two words: both, when anything has both. More: most of them.
+  const floor = Math.max(1, Math.min(best, Math.ceil(terms.length * 0.6)));
   const wanted = ['test', 'live'].includes(where) ? where : null;
   const kept = rows.filter(r => Number(r.matched) >= floor && (!wanted || kindOf(r) === wanted || kindOf(r) === null));
   return {
@@ -72,7 +73,7 @@ async function search(prisma, { query, where } = {}) {
     total: kept.length,
     results: kept.slice(0, MAX_RESULTS).map(r => ({
       title: scrub(r.title, 100, [r.discordUser, r.creditedDiscordUser]) || 'Untitled report',
-      summary: scrub(r.description, 160, [r.discordUser, r.creditedDiscordUser]),
+      summary: scrub(String(r.description || '').replace(/^\s*(?:description|desc|details)\s*[:\-]\s*/i, ''), 160, [r.discordUser, r.creditedDiscordUser]),
       status: STATUS_LABEL[r.status] || r.status,
       severity: r.bugLevel || null,
       where: kindOf(r),
