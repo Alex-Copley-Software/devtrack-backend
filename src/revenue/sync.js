@@ -89,9 +89,28 @@ async function audienceJson(prisma, ids) {
   return real.length ? JSON.stringify(real) : null;
 }
 
-// An amount the dev wrote in dollars is not a Robux figure, and expenses are
-// kept in Robux, so it is not logged on its own.
-const looksLikeDollars = text => /\$|usd|dollar/i.test(String(text || ''));
+// ── US dollars ──────────────────────────────────────────────────────────────
+// Expenses are kept in Robux. An amount given in US dollars is turned into
+// Robux at the DevEx rate (US$0.0038 per Robux, so $114 is 30,000 Robux),
+// and the dollar figure is kept in the description so nothing is lost.
+const USD_PER_ROBUX = () => {
+  const rate = Number(process.env.REVENUE_USD_PER_ROBUX);
+  return Number.isFinite(rate) && rate > 0 ? rate : 0.0038;
+};
+const robuxFromUsd = usd => Math.round(Number(usd) / USD_PER_ROBUX());
+const usdText = usd => `$${Number(usd).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD`;
+
+// The dollar amount in some text ("$114", "114 usd", "50 dollars", "$1.2k"), or null when it is
+// not a dollar amount. Text that also names Robux ("30k robux ($114)", "R$ 500") is Robux.
+function usdIn(text) {
+  const t = String(text || '').trim();
+  if (!t || /robux|\br\$/i.test(t)) return null;
+  const m = /\$\s*([\d,]*\.?\d+)\s*(k)?\b/i.exec(t) || /([\d,]*\.?\d+)\s*(k)?\s*(?:usd|us\s*dollars?|dollars?|bucks)\b/i.exec(t);
+  if (!m) return null;
+  const n = Number(m[1].replace(/,/g, '')) * (m[2] ? 1000 : 1);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+const looksLikeDollars = text => usdIn(text) !== null;
 
 // Logs a paid payout as an expense. Returns { expenseId } or { skipped: why }.
 async function logAssetPayout(prisma, payout) {
@@ -103,8 +122,11 @@ async function logAssetPayout(prisma, payout) {
   // anything logged here would only be wiped by that first import.
   const [{ n: months }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM rev_monthly_revenue`);
   if (!months) return { skipped: 'the Revenue page has no data yet (import your backup first), so log this one there by hand afterwards' };
-  if (!(payout.amount > 0)) return { skipped: 'no amount was given, so log this one on the Revenue page by hand' };
-  if (looksLikeDollars(payout.amountText)) return { skipped: `the amount was written in dollars (${payout.amountText}), and expenses are kept in Robux: log it on the Revenue page by hand` };
+  // Asked for in dollars: logged in Robux at the DevEx rate, with the dollars noted.
+  const usd = usdIn(payout.amountText);
+  if (!(usd || payout.amount > 0)) return { skipped: 'no amount was given, so log this one on the Revenue page by hand' };
+  const robux = usd ? robuxFromUsd(usd) : Number(payout.amount);
+  const description = `${String(payout.description || 'Asset payout').slice(0, 440)}${usd ? ` (${usdText(usd)}, converted at the DevEx rate)` : ''}`;
 
   let payee = await findPayee(prisma, { name: payout.devName, roblox: payout.robloxAccount });
   if (!payee) {
@@ -121,9 +143,9 @@ async function logAssetPayout(prisma, payout) {
   const [row] = await prisma.$queryRawUnsafe(
     `INSERT INTO rev_expenses (date_incurred, month, description, category, amount, receipt_url, payee_id, source, source_ref, cost_share_person_ids)
      VALUES ($1, $2, $3, $4, $5::double precision, $6, $7::int, 'asset_payout', $8, $9) RETURNING id`,
-    date, `${date.slice(0, 8)}01`, String(payout.description || 'Asset payout').slice(0, 500), CATEGORY(), Number(payout.amount),
+    date, `${date.slice(0, 8)}01`, description, CATEGORY(), robux,
     payout.requestUrl || null, payee.id, payout.id, await audienceJson(prisma, payout.costSharePersonIds));
-  return { expenseId: row.id, payee: payee.display_name };
+  return { expenseId: row.id, payee: payee.display_name, robux, usd: usd || null };
 }
 
 // Takes a payout's expense back out (the payout was reopened or declined after being paid).
@@ -228,8 +250,9 @@ async function prepareExpenses(prisma, { description, category, date, entries, s
     const name = String(e?.name || '').trim().slice(0, 120);
     const label = name || `payment ${i + 1}`;
     if (!name) { problems.push(`${label}: no name`); continue; }
-    if (looksLikeDollars(e.amount)) { problems.push(`${label}: ${e.amount} is in dollars, and expenses are kept in Robux`); continue; }
-    const amount = parseRobux(e.amount);
+    // Dollars are converted at the DevEx rate; the dollar figure goes on the card.
+    const usd = usdIn(e.amount);
+    const amount = usd ? robuxFromUsd(usd) : parseRobux(e.amount);
     if (!amount) { problems.push(`${label}: "${e.amount}" is not an amount`); continue; }
     const given = String(e.roblox_id || '').trim();
     const id = given ? robloxUserId(given) : null;
@@ -246,7 +269,8 @@ async function prepareExpenses(prisma, { description, category, date, entries, s
       payee.id, amount, what) : [];
     out.push({
       name, robloxUserId: id, amount, payeeId: payee ? payee.id : null, payeeName: payee ? payee.display_name : name,
-      note: [!payee ? 'new payee' : payee.display_name.toLowerCase() !== name.toLowerCase() ? `on file as ${payee.display_name}` : '',
+      usd: usd || null,
+      note: [usd ? `${usdText(usd)} at the DevEx rate` : '', !payee ? 'new payee' : payee.display_name.toLowerCase() !== name.toLowerCase() ? `on file as ${payee.display_name}` : '',
         repeat ? `same payment already logged ${repeat.date_incurred}` : ''].filter(Boolean).join('; ') || null,
     });
   }
@@ -284,7 +308,8 @@ async function logExpenses(prisma, payload, ref, receiptUrl) {
     const [row] = await prisma.$queryRawUnsafe(
       `INSERT INTO rev_expenses (date_incurred, month, description, category, amount, receipt_url, payee_id, source, source_ref, cost_share_person_ids)
        VALUES ($1, $2, $3, $4, $5::double precision, $6, $7::int, 'assistant', $8, $9) RETURNING id`,
-      payload.date, `${payload.date.slice(0, 8)}01`, payload.description, payload.category, Number(e.amount), receiptUrl || null, payee.id, sourceRef, audience);
+      payload.date, `${payload.date.slice(0, 8)}01`, e.usd ? `${payload.description} (${usdText(e.usd)}, converted at the DevEx rate)`.slice(0, 500) : payload.description,
+      payload.category, Number(e.amount), receiptUrl || null, payee.id, sourceRef, audience);
     expenseIds.push(row.id);
   }
   return { expenseIds, total: payload.total };
@@ -292,5 +317,6 @@ async function logExpenses(prisma, payload, ref, receiptUrl) {
 
 module.exports = {
   enabled, audienceOptions, robloxUserId, findPayee, robloxFor, recentPayments, logAssetPayout, unlogAssetPayout, paymentsTo, looksLikeDollars,
+  USD_PER_ROBUX, robuxFromUsd, usdIn,
   parseRobux, expenseCategories, prepareExpenses, logExpenses, MAX_EXPENSES_PER_CARD,
 };

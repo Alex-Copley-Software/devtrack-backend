@@ -61,7 +61,7 @@ test('a paid payout is logged once as an expense against the right payee, and re
   assert.equal((await expenses()).length, 1, 'paid again, logged again');
 });
 
-test('a payee is created when the directory has nobody, and amounts that are not Robux are left for a person', async () => {
+test('a payee is created when the directory has nobody, and a payout with no amount is left for a person', async () => {
   const { prisma, expenses, request } = await setup({ roblox: 'https://www.roblox.com/users/7770002/profile' });
   const a = (await request('45k for aizen textures', { amount_text: '45k', amount_number: 45000, description: 'Aizen textures' })).payout;
   await payouts.resolve(prisma, a.id, { decision: 'paid', actorName: 'Olive' });
@@ -70,13 +70,15 @@ test('a payee is created when the directory has nobody, and amounts that are not
 
   const dollars = (await request('$200 for the aizen rig', { amount_text: '$200', amount_number: 200, description: 'Aizen rig' })).payout;
   const paidDollars = await payouts.resolve(prisma, dollars.id, { decision: 'paid', actorName: 'Olive' });
-  assert.equal(paidDollars.revenueExpenseId, null);
-  assert.match(paidDollars.revenueNote, /^Not logged to Revenue: the amount was written in dollars \(\$200\)/);
+  // Asked for in dollars: logged in Robux at the DevEx rate ($0.0038 each), with the dollars kept in the description.
+  assert.ok(paidDollars.revenueExpenseId);
+  const [usdRow] = await prisma.$queryRawUnsafe(`SELECT amount, description FROM rev_expenses WHERE id = $1`, paidDollars.revenueExpenseId);
+  assert.deepEqual([usdRow.amount, usdRow.description], [52632, 'Aizen rig ($200.00 USD, converted at the DevEx rate)']);
 
   const noAmount = (await request('payout for aizen icons', { description: 'Aizen icons' })).payout;
   assert.match((await payouts.resolve(prisma, noAmount.id, { decision: 'paid', actorName: 'Olive' })).revenueNote, /no amount was given/);
   rows = await expenses();
-  assert.equal(rows.length, 1, 'only the Robux payout was logged');
+  assert.equal(rows.length, 2, 'the Robux payout and the dollar one were logged; the one with no amount was not');
   assert.equal((await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM rev_payees`))[0].n, 1, 'the same dev is the same payee');
 });
 
@@ -235,8 +237,11 @@ test('a list that cannot be read exactly is not proposed at all', async () => {
     { name: 'D', amount: '5k' }, { name: 'd', amount: '5000' },
   ] });
   assert.equal(bad.payload, undefined);
-  assert.deepEqual(bad.problems.map(p => p.split(':')[0]), ['A', 'B', 'payment 3', 'Remy', 'C', 'd']);
-  assert.match(bad.problems[3], /directory has Roblox ID 7000002 for Remy, not 999/);
+  assert.deepEqual(bad.problems.map(p => p.split(':')[0]), ['B', 'payment 3', 'Remy', 'C', 'd'], 'a dollar amount is no longer a problem');
+  const usd = await prep({ entries: [{ name: 'A', amount: '$114' }] });
+  assert.deepEqual([usd.payload.entries[0].amount, usd.payload.entries[0].usd, usd.payload.total], [30000, 114, 30000]);
+  assert.match(usd.after.payments, /A: 30,000 \[\$114\.00 USD at the DevEx rate; new payee\]/);
+  assert.match(bad.problems[2], /directory has Roblox ID 7000002 for Remy, not 999/);
 
   assert.match((await prep({ category: 'Snacks', entries: [{ name: 'A', amount: '1k' }] })).error, /not a category in use/);
   assert.deepEqual((await prep({ category: '', entries: [{ name: 'A', amount: '1k' }] })).categories, ['Contractor', 'Other']);
@@ -244,4 +249,12 @@ test('a list that cannot be read exactly is not proposed at all', async () => {
   assert.match((await prep({ date: 'yesterday', entries: [{ name: 'A', amount: '1k' }] })).error, /not a date/);
   assert.match((await prep({ entries: Array.from({ length: 21 }, (_, i) => ({ name: `P${i}`, amount: '1k' })) })).error, /At most 20/);
   assert.match((await prep({ splitBetween: ['Nobody'], entries: [{ name: 'A', amount: '1k' }] })).error, /not one of the people who can split/);
+});
+
+test('dollars become Robux at the DevEx rate', () => {
+  assert.equal(revenue.robuxFromUsd(114), 30000, '$114 is 30,000 Robux');
+  for (const [text, usd] of [['$114', 114], ['114 usd', 114], ['50 dollars', 50], ['$1.2k', 1200], ['$ 1,250.50', 1250.5], ['pay me $40 please', 40],
+    ['30k', null], ['30k robux ($114)', null], ['R$ 500', null], ['500', null], ['', null]]) {
+    assert.equal(revenue.usdIn(text), usd, text);
+  }
 });

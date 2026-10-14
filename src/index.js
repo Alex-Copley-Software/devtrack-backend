@@ -79,6 +79,8 @@ app.get('/api/config', (req, res) => {
     assetsEnabled: isEnabled('ASSETS_ENABLED'),
     assetAgentEnabled: isEnabled('ASSET_AGENT_ENABLED'),
     revenueEnabled: isEnabled('REVENUE_ENABLED'),
+    // Expenses entered in US dollars are stored in Robux at this rate (the DevEx rate).
+    usdPerRobux: require('./revenue/sync').USD_PER_ROBUX(),
   });
 });
 

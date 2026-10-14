@@ -92,7 +92,6 @@ Discord the question is shown only to the person who pressed the button. It
 can be changed afterwards by editing the expense on the Revenue page.
 
 Not logged automatically, and said so on the card: a payout with no amount,
-one whose amount was written in dollars (expenses are kept in Robux), and
 any payout paid before the page has data (import first).
 
 An import replaces the expense log, including expenses logged this way since
@@ -138,7 +137,9 @@ given), and the instruction message as the receipt link.
 - **Category:** one already in use. Tester and contractor pay goes under
   Contractor, asset work under Art/Assets; otherwise it asks.
 - **Who pays:** the default even split, unless specific people are named.
-- **Checks:** an amount in dollars, an unreadable amount, a missing name or
+- **Dollars:** an amount in US dollars ("$114", "114 usd") is logged in Robux
+  at the DevEx rate and the dollars are noted in its description.
+- **Checks:** an unreadable amount, a missing name or
   the same person twice with the same amount stops the whole list. A payment
   that matches one already logged (same payee, amount and description) is
   pointed out on the card but not blocked. Up to 20 payments per card.
@@ -156,3 +157,19 @@ automatically; the list above is how they get there.
 node scripts/assets-dev-server.js --revenue-dump path/to/dump.json   # then /dev-login?as=owner&to=revenue
 node scripts/assets-dev-server.js --revenue-db path/to/backup.db     # serves it at /dev-revenue-db, to try the page's own import
 ```
+
+## US dollars
+
+Expenses are kept in Robux. Anything paid in US dollars is converted at the
+DevEx rate, US$0.0038 per Robux ($114 is 30,000 Robux), and the dollar
+figure stays in the expense's description:
+
+- **Expenses tab:** the amount has a Robux / USD choice. With USD, the Robux
+  figure it will be saved as is shown as you type.
+- **Payout requests:** a dev asking for "$50" gets an expense of 13,158 Robux
+  when it is marked paid, described "... ($50.00 USD, converted at the DevEx
+  rate)".
+- **The assistant's expense lists:** a line in dollars is converted the same
+  way and the card shows both figures.
+
+`REVENUE_USD_PER_ROBUX` on the backend changes the rate (default `0.0038`).
