@@ -103,6 +103,76 @@ test('tester QA: asked in review, only the reporter can answer, a video is requi
   assert.deepEqual((await pay.listChecks(prisma, {})).map(c => c.status).sort(), ['fixed', 'not_fixed']);
 });
 
+test('QA Requests: a check left 30 minutes opens up; one person takes it, answers it and is paid for it', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { rates: RATES });
+  const r = await report({ status: 'in_progress' });
+  const ticketed = await report({ status: 'in_progress' });
+  const ask = await pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
+  const askTicket = await pay.onStatusChange(prisma, { ...ticketed, status: 'reviewing' }, 'in_progress', 'Dev');
+  await require('../src/report-tickets').ensureTables(prisma);
+  await prisma.$executeRawUnsafe(`INSERT INTO "ReportTicket" ("reportId", "channelId", "kind", "number", "name") VALUES ($1, 'c1', 'test', 1, 'test-game-0001')`, ticketed.id);
+  const ago = minutes => prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "messageId" = 'm', "requestedAt" = NOW() - ($1 * INTERVAL '1 minute')`, minutes);
+
+  const due = async () => (await pay.dueForEscalation(prisma)).checks.map(c => [c.id, c.title]);
+  await ago(10);
+  assert.deepEqual(await due(), [], 'not yet');
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-ben' }), /still waiting on the tester/);
+  // The wait is a setting, and a change applies to checks already waiting.
+  await pay.saveSettings(prisma, { qaEscalateMinutes: 5 });
+  assert.deepEqual(await due(), [[ask.check.id, r.title]], 'a ticket report is not opened up');
+  await pay.saveSettings(prisma, { qaEscalateMinutes: 0 });
+  assert.deepEqual(await pay.dueForEscalation(prisma), { minutes: 0, checks: [] }, '0 turns it off');
+  await pay.saveSettings(prisma, { qaEscalateMinutes: 30 });
+  await ago(31);
+  assert.deepEqual(await due(), [[ask.check.id, r.title]]);
+  assert.ok(askTicket.check.id);
+
+  const escalated = await pay.markEscalated(prisma, ask.check.id, { channelId: 'qa', messageId: 'qm' });
+  assert.deepEqual([escalated.escalationChannelId, escalated.escalationMessageId], ['qa', 'qm']);
+  assert.deepEqual(await due(), [], 'posted once');
+
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-ana' }), /your own report/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Take this check in QA Requests first/);
+  const taken = await pay.take(prisma, ask.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  assert.deepEqual([taken.takenByDiscordUserId, taken.takenBy], ['u-ben', 'Ben']);
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy' }), /Ben is already checking this/);
+  // Ben goes quiet: after 30 minutes Cy can take it over, and Ben can no longer answer.
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "takenAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, ask.check.id);
+  await pay.take(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy' });
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Take this check/);
+
+  const yes = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
+  assert.deepEqual([yes.check.status, yes.check.answeredByDiscordUserId, yes.check.answeredBy], ['fixed', 'u-cy', 'Cy']);
+  const s = await pay.summarize(prisma, { from: '2026-01-01', to: '2099-01-01' });
+  const of = name => s.testers.find(t => t.name === name);
+  assert.deepEqual([of('Cy').verifiedFixes, of('Cy').fixesAmount], [1, 1.5], 'the fix is paid to whoever checked it');
+  assert.equal(of('Ana').verifiedFixes, 0, 'the reporter still gets the report, not the check');
+  assert.equal(of('Ana').reports, 2);
+});
+
+test('the QA Requests wait: whole minutes from 0 to a day, 30 by default', async () => {
+  const { prisma } = await createDb();
+  assert.equal((await pay.getSettings(prisma)).qaEscalateMinutes, 30);
+  for (const bad of [-1, 2.5, 'soon', 24 * 60 + 1]) assert.equal((await pay.saveSettings(prisma, { qaEscalateMinutes: bad })).qaEscalateMinutes, 30, String(bad));
+  assert.equal((await pay.saveSettings(prisma, { qaEscalateMinutes: 90 })).qaEscalateMinutes, 90);
+  assert.equal((await pay.saveSettings(prisma, { requireVideo: false })).qaEscalateMinutes, 90, 'other settings leave it alone');
+  const ask = await pay.onStatusChange(prisma, { id: 'x', type: 'bug', status: 'reviewing', discordThreadId: 't', discordUserId: 'u' }, 'in_progress');
+  assert.equal(ask.escalateMinutes, 90, 'the bot is told the wait when it posts a check');
+});
+
+test('the reporter can still answer after the check is opened up, and is paid for it', async () => {
+  const { prisma, report } = await createDb();
+  const r = await report({ status: 'in_progress' });
+  const ask = await pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
+  await pay.markEscalated(prisma, ask.check.id, { channelId: 'qa', messageId: 'qm' });
+  await pay.take(prisma, ask.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  const yes = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
+  assert.deepEqual([yes.check.answeredByDiscordUserId, yes.check.answeredBy], ['u-ana', 'Ana']);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /already confirmed as fixed/);
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy' }), /already been answered/);
+});
+
 test('staff resolving first approves the check without paying; leaving review any other way withdraws it', async () => {
   const { prisma, report } = await createDb();
   await pay.saveSettings(prisma, { rates: RATES, requireVideo: false });

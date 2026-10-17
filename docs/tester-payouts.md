@@ -22,11 +22,40 @@ fixed** buttons.
 - **The report leaves QA Review another way** (on hold, back to in progress,
   declined). The request is withdrawn.
 
-Only the tester who filed the report can answer, and only once per request.
-A report that comes back to QA Review after a "Not fixed" gets a new request.
+Only the tester who filed the report can answer, and only once per request,
+until the request has waited 30 minutes (or whatever `/qadelay` is set to). Then it opens up in QA Requests
+(below). A report that comes back to QA Review after a "Not fixed" gets a new request.
 Reports with no Discord thread or reporter (imports, manual entries) and
 suggestions are skipped. Every request and answer is kept in the **Tester QA
 log** on the payouts page.
+
+### QA Requests
+
+A request still unanswered 30 minutes after it was posted is posted in the
+**QA Requests** channel, found by name (`qa-requests`) or by
+`QA_REQUESTS_CHANNEL_ID` on the bot. The check message in the report's post
+says it has opened up.
+
+The wait is changed in Discord by a server admin with `/qadelay minutes:<n>`
+(0 to 1440; 0 stops sending checks to QA Requests). `/qadelay` on its own
+shows the current wait. It is saved with the other tester QA rules, applies
+straight away to checks already waiting, and needs no restart.
+
+- **Take this check** makes it that person's for 30 minutes. They are sent a
+  link to the check message, and the QA Requests post and the report's post
+  both say who has it. Nobody else can take it in that time; after it,
+  anyone can take it over, and the last person to take it is the one who can
+  answer.
+- They answer in the report's post exactly as the reporter would: their own
+  video or photo posted there, then Fixed or Not fixed. Somebody else's
+  upload never counts as their proof.
+- The reporter can still answer at any point until someone does.
+- When the check ends (answered, approved by staff, withdrawn) the QA
+  Requests post says how and loses its button.
+- The report's history shows it opening up and who took it.
+
+Reports from the old Ticket Tool tickets are never opened up: a ticket is
+private, so nobody else could post proof in it.
 
 ## Payouts
 
@@ -53,8 +82,9 @@ What counts:
   set; it is flagged in the table.
 - A credited co-finder (`/credit`) is paid as well as the reporter, unless
   *Pay credited co-finders* is switched off.
-- A confirmed fix is paid once per report, to the tester who confirmed it, in
-  the period they confirmed it.
+- A confirmed fix is paid once per report, to whoever confirmed it (the
+  reporter, or the person who took it in QA Requests), in the period they
+  confirmed it. The report itself is still paid to the reporter.
 
 ## Rules (Prices and rules tab)
 

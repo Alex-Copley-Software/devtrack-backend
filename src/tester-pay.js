@@ -3,7 +3,9 @@
 //
 //   Tester QA   when a report goes to QA Review, the tester who filed it is
 //               asked in their own thread to confirm the fix (with a video)
-//               and click Fixed or Not fixed. Every check is kept.
+//               and click Fixed or Not fixed. Every check is kept. One left
+//               unanswered is opened up in QA Requests, where anyone can
+//               take it and answer it in that thread instead.
 //   Payouts     pay periods and a price per accepted report (by bug level)
 //               and per fix a tester confirmed, so what each tester is owed
 //               for a period is one query.
@@ -29,7 +31,11 @@ const DEFAULTS = {
   autoResolve: false,
   // A credited co-finder is paid for the report as well as the reporter.
   payCredited: true,
+  // Minutes a check waits on the reporter before it opens up in QA Requests. 0: never.
+  qaEscalateMinutes: 30,
 };
+
+const MAX_ESCALATE_MINUTES = 24 * 60;
 
 const ready = new WeakSet();
 async function ensureTables(prisma) {
@@ -73,6 +79,11 @@ async function ensureTables(prisma) {
     )`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ReportQaCheck_reportId_idx" ON "ReportQaCheck"("reportId", "requestedAt")`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ReportQaCheck_status_idx" ON "ReportQaCheck"("status", "respondedAt")`);
+  // Opened up in QA Requests, who took it there, and who answered (the reporter or whoever took it).
+  for (const column of ['"escalatedAt" TIMESTAMP(3)', '"escalationChannelId" TEXT', '"escalationMessageId" TEXT',
+    '"takenByDiscordUserId" TEXT', '"takenBy" TEXT', '"takenAt" TIMESTAMP(3)', '"answeredByDiscordUserId" TEXT', '"answeredBy" TEXT']) {
+    await prisma.$executeRawUnsafe(`ALTER TABLE "ReportQaCheck" ADD COLUMN IF NOT EXISTS ${column}`);
+  }
   // The summary reads these; they are added elsewhere only when credit is first used.
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUserId" TEXT`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUser" TEXT`);
@@ -96,7 +107,14 @@ function normalize(raw = {}) {
     requireVideo: flag('requireVideo'),
     autoResolve: flag('autoResolve'),
     payCredited: flag('payCredited'),
+    qaEscalateMinutes: escalateMinutes(raw.qaEscalateMinutes),
   };
+}
+
+// Whole minutes from 0 to a day; anything else keeps the default.
+function escalateMinutes(value) {
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 && n <= MAX_ESCALATE_MINUTES ? n : DEFAULTS.qaEscalateMinutes;
 }
 
 async function getSettings(prisma) {
@@ -206,7 +224,8 @@ async function reopenPeriod(prisma, id) {
 // A report counts in the period it was accepted in, not the one it was filed
 // in, and only while it is still accepted: a report declined later drops
 // out. Bugs and crashes only. A confirmed fix counts in the period the
-// tester confirmed it, once per report.
+// tester confirmed it, once per report, and is paid to whoever did the
+// check: the reporter, or the person who took it in QA Requests.
 async function summarize(prisma, { from, to }) {
   if (!isDate(from) || !isDate(to)) throw new PayError(400, 'Give a start and an end date');
   if (to < from) throw new PayError(400, 'The end date is before the start date');
@@ -226,7 +245,8 @@ async function summarize(prisma, { from, to }) {
 
   const fixes = await prisma.$queryRawUnsafe(`
     SELECT * FROM (
-      SELECT DISTINCT ON (c."reportId") c.id, c."reportId", c."discordUserId", c."discordUser", c."videoUrl", c."respondedAt", r.title,
+      SELECT DISTINCT ON (c."reportId") c.id, c."reportId", COALESCE(c."answeredByDiscordUserId", c."discordUserId") AS "discordUserId",
+        COALESCE(c."answeredBy", c."discordUser") AS "discordUser", c."videoUrl", c."respondedAt", r.title,
         r."bugLevel"::text AS "bugLevel"
       FROM "ReportQaCheck" c JOIN "Report" r ON r.id = c."reportId"
       WHERE c.status = 'fixed'
@@ -299,7 +319,11 @@ async function periodSummary(prisma, id) {
 // ── tester QA checks ─────────────────────────────────────────────────────────
 
 const CHECK_FIELDS = `c.id, c."reportId", c."discordUserId", c."discordUser", c."threadId", c."messageId", c.status, c.note,
-  c."videoUrl", c."resolvedByName", c."requestedAt", c."respondedAt"`;
+  c."videoUrl", c."resolvedByName", c."requestedAt", c."respondedAt", c."escalatedAt", c."escalationChannelId", c."escalationMessageId",
+  c."takenByDiscordUserId", c."takenBy", c."takenAt", c."answeredByDiscordUserId", c."answeredBy"`;
+
+// How long a check taken in QA Requests stays with the person who took it.
+const TAKE_MINUTES = 30;
 
 async function getCheck(prisma, id) {
   await ensureTables(prisma);
@@ -348,7 +372,7 @@ async function onStatusChange(prisma, report, previousStatus, actorName) {
     await prisma.$executeRawUnsafe(`
       INSERT INTO "ReportQaCheck" ("id", "reportId", "discordUserId", "discordUser", "threadId")
       VALUES ($1, $2, $3, $4, $5)`, id, report.id, report.discordUserId, report.discordUser || null, report.discordThreadId);
-    return { kind: 'ask', check: await getCheck(prisma, id), requireVideo: settings.requireVideo };
+    return { kind: 'ask', check: await getCheck(prisma, id), requireVideo: settings.requireVideo, escalateMinutes: settings.qaEscalateMinutes };
   }
 
   if (previousStatus === 'reviewing') {
@@ -364,11 +388,69 @@ async function onStatusChange(prisma, report, previousStatus, actorName) {
   return null;
 }
 
-// The tester's answer. Only the person who filed the report can give it, once.
-async function respond(prisma, checkId, { discordUserId, verdict, note, videoUrl }) {
+// ── QA Requests: checks the reporter left unanswered ─────────────────────────
+
+// Checks still waiting on the reporter qaEscalateMinutes after they were
+// asked, not yet opened up. Tickets are left out: they are private, so
+// nobody else could post proof in them. Changing the setting applies to
+// checks already waiting too.
+async function dueForEscalation(prisma) {
+  const minutes = (await getSettings(prisma)).qaEscalateMinutes;
+  if (!minutes) return { minutes, checks: [] };
+  await require('./report-tickets').ensureTables(prisma);
+  const checks = await prisma.$queryRawUnsafe(`
+    SELECT ${CHECK_FIELDS}, r.title, r."bugLevel"::text AS "bugLevel"
+    FROM "ReportQaCheck" c JOIN "Report" r ON r.id = c."reportId"
+    WHERE c.status = 'pending' AND c."messageId" IS NOT NULL AND c."escalatedAt" IS NULL
+      AND c."requestedAt" < NOW() - ($1 * INTERVAL '1 minute')
+      AND NOT EXISTS (SELECT 1 FROM "ReportTicket" t WHERE t."reportId" = c."reportId")
+    ORDER BY c."requestedAt"
+    LIMIT 20`, minutes);
+  return { minutes, checks };
+}
+
+// The bot posted it in QA Requests.
+async function markEscalated(prisma, checkId, { channelId, messageId }) {
+  await ensureTables(prisma);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "ReportQaCheck" SET "escalatedAt" = CURRENT_TIMESTAMP, "escalationChannelId" = $2, "escalationMessageId" = $3
+    WHERE id = $1 AND "escalatedAt" IS NULL`, checkId, String(channelId || ''), String(messageId || ''));
+  return getCheck(prisma, checkId);
+}
+
+// Someone pressed Take this check in QA Requests. It is theirs for
+// TAKE_MINUTES; after that anyone else can take it over, so a check nobody
+// finishes does not stay stuck.
+async function take(prisma, checkId, { discordUserId, discordUserName }) {
   const check = await getCheck(prisma, checkId);
   if (!check) throw new PayError(404, 'That QA check no longer exists.');
-  if (String(discordUserId) !== check.discordUserId) throw new PayError(403, 'Only the tester who filed this report can confirm the fix.');
+  if (check.status !== 'pending') throw new PayError(409, 'This check has already been answered.');
+  if (!check.escalatedAt) throw new PayError(409, 'This check is still waiting on the tester who filed the report.');
+  if (String(discordUserId) === check.discordUserId) throw new PayError(400, 'This is your own report: answer the check in its post.');
+  const taken = await prisma.$executeRawUnsafe(`
+    UPDATE "ReportQaCheck" SET "takenByDiscordUserId" = $2, "takenBy" = $3, "takenAt" = CURRENT_TIMESTAMP
+    WHERE id = $1 AND status = 'pending' AND ("takenByDiscordUserId" IS NULL OR "takenByDiscordUserId" = $2
+      OR "takenAt" < NOW() - ($4 * INTERVAL '1 minute'))`,
+    checkId, String(discordUserId), String(discordUserName || '').slice(0, 100) || null, TAKE_MINUTES);
+  if (!taken) {
+    const now = await getCheck(prisma, checkId);
+    if (now?.status !== 'pending') throw new PayError(409, 'This check has already been answered.');
+    throw new PayError(409, `${now.takenBy || 'Someone'} is already checking this. If they have not answered ${TAKE_MINUTES} minutes after taking it, it opens up again.`);
+  }
+  return getCheck(prisma, checkId);
+}
+
+// The answer. The person who filed the report can give it, or whoever took
+// the check in QA Requests (the latest to take it), once.
+async function respond(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl }) {
+  const check = await getCheck(prisma, checkId);
+  if (!check) throw new PayError(404, 'That QA check no longer exists.');
+  const who = String(discordUserId);
+  if (who !== check.discordUserId && who !== check.takenByDiscordUserId) {
+    throw new PayError(403, check.escalatedAt
+      ? 'Take this check in QA Requests first, then answer it here.'
+      : 'Only the tester who filed this report can confirm the fix.');
+  }
   if (!['fixed', 'not_fixed'].includes(verdict)) throw new PayError(400, 'Unknown answer');
   const settings = await getSettings(prisma);
   const video = String(videoUrl || '').trim().slice(0, 1000) || null;
@@ -381,11 +463,15 @@ async function respond(prisma, checkId, { discordUserId, verdict, note, videoUrl
       : 'Post a video or photo showing it still happening here first, then press Not fixed.');
   }
   const claimed = await prisma.$executeRawUnsafe(`
-    UPDATE "ReportQaCheck" SET status = $2, note = $3, "videoUrl" = $4, "respondedAt" = CURRENT_TIMESTAMP
-    WHERE id = $1 AND status = 'pending'`, checkId, verdict, text, video);
+    UPDATE "ReportQaCheck" SET status = $2, note = $3, "videoUrl" = $4, "respondedAt" = CURRENT_TIMESTAMP,
+      "answeredByDiscordUserId" = $5, "answeredBy" = $6
+    WHERE id = $1 AND status = 'pending' AND ($5 = "discordUserId" OR $5 = "takenByDiscordUserId")`,
+    checkId, verdict, text, video, who, String(discordUserName || '').slice(0, 100) || (who === check.discordUserId ? check.discordUser : check.takenBy));
   if (!claimed) {
+    const now = await getCheck(prisma, checkId);
+    if (now?.status === 'pending') throw new PayError(409, `${now.takenBy || 'Someone else'} has taken this check over in QA Requests.`);
     const said = { fixed: 'already confirmed as fixed', not_fixed: 'already reported as not fixed', staff_approved: 'already approved by staff', cancelled: 'no longer waiting on a check' };
-    throw new PayError(409, `This fix was ${said[check.status] || 'already answered'}.`);
+    throw new PayError(409, `This fix was ${said[now?.status] || 'already answered'}.`);
   }
   return { check: await getCheck(prisma, checkId), settings };
 }
@@ -396,4 +482,5 @@ module.exports = {
   listPeriods, getPeriod, createPeriod, updatePeriod, deletePeriod, markPaid, reopenPeriod,
   summarize, periodSummary,
   getCheck, pendingCheck, listChecks, onStatusChange, respond,
+  TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take,
 };

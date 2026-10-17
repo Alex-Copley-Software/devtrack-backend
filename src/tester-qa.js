@@ -12,7 +12,8 @@ const tickets = require('./report-tickets');
 // The newest check on a report, as a column for the report queries.
 const TESTER_CHECK_COLUMN = `(
   SELECT jsonb_build_object('id', c.id, 'status', c.status, 'note', c.note, 'videoUrl', c."videoUrl",
-    'requestedAt', c."requestedAt", 'respondedAt', c."respondedAt", 'resolvedByName', c."resolvedByName", 'discordUser', c."discordUser")
+    'requestedAt', c."requestedAt", 'respondedAt', c."respondedAt", 'resolvedByName', c."resolvedByName", 'discordUser', c."discordUser",
+    'escalatedAt', c."escalatedAt", 'takenBy', c."takenBy", 'answeredBy', c."answeredBy")
   FROM "ReportQaCheck" c WHERE c."reportId" = r.id ORDER BY c."requestedAt" DESC LIMIT 1
 ) AS "testerCheck"`;
 
@@ -62,12 +63,13 @@ async function afterStatusChange(prisma, report, previousStatus, actorName) {
       await log({ reportId: report.id, action: 'tester_qa_requested', detail: report.discordUser || null, actorName: actorName || 'System', actorId: '' });
       notifier.qaCheck({
         checkId: result.check.id, threadId: result.check.threadId, discordUserId: result.check.discordUserId,
-        title: report.title, requireVideo: result.requireVideo,
+        title: report.title, requireVideo: result.requireVideo, escalateMinutes: result.escalateMinutes,
       });
     } else {
       notifier.qaCheckUpdate({
         threadId: result.check.threadId, messageId: result.check.messageId, discordUserId: result.check.discordUserId,
-        state: result.state, actorName: result.actor,
+        escalationChannelId: result.check.escalationChannelId, escalationMessageId: result.check.escalationMessageId,
+        takenByDiscordUserId: result.check.takenByDiscordUserId, state: result.state, actorName: result.actor,
       });
     }
     return result;
@@ -79,8 +81,9 @@ async function afterStatusChange(prisma, report, previousStatus, actorName) {
 
 // The tester pressed Fixed or Not fixed in Discord.
 async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl }) {
-  const { check, settings } = await pay.respond(prisma, checkId, { discordUserId, verdict, note, videoUrl });
-  const actorName = `${discordUserName || check.discordUser || 'Tester'} (tester)`;
+  const { check, settings } = await pay.respond(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl });
+  const byReporter = check.answeredByDiscordUserId === check.discordUserId;
+  const actorName = `${check.answeredBy || 'Tester'} (${byReporter ? 'tester' : 'QA Requests'})`;
   let autoResolved = false;
 
   if (verdict === 'fixed') {

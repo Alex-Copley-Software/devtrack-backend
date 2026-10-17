@@ -368,6 +368,66 @@ router.post('/qa-check/:id/respond', botAuth, async (req, res) => {
   }
 });
 
+// QA Requests: checks the reporter has left unanswered for the set time, to be posted there.
+router.get('/qa-checks/due-escalation', botAuth, async (req, res) => {
+  try {
+    res.json(await testerPay.dueForEscalation(prisma));
+  } catch (err) {
+    console.error('[QA check due]', err.message);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+// /qadelay in Discord: how long a check waits on the reporter before it opens up in QA Requests.
+router.get('/qa-escalation', botAuth, async (req, res) => {
+  try {
+    res.json({ minutes: (await testerPay.getSettings(prisma)).qaEscalateMinutes });
+  } catch (err) {
+    console.error('[QA escalation]', err.message);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
+router.post('/qa-escalation', botAuth, async (req, res) => {
+  const minutes = Number(req.body?.minutes);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > testerPay.MAX_ESCALATE_MINUTES) {
+    return res.status(400).json({ error: `Give a whole number of minutes from 0 to ${testerPay.MAX_ESCALATE_MINUTES}.` });
+  }
+  try {
+    const before = (await testerPay.getSettings(prisma)).qaEscalateMinutes;
+    const { qaEscalateMinutes } = await testerPay.saveSettings(prisma, { qaEscalateMinutes: minutes });
+    console.log(`[QA escalation] ${before} -> ${qaEscalateMinutes} minutes, by ${req.body?.changedBy || 'unknown'}`);
+    res.json({ minutes: qaEscalateMinutes, before });
+  } catch (err) {
+    console.error('[QA escalation]', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
+});
+
+router.post('/qa-check/:id/escalated', botAuth, async (req, res) => {
+  try {
+    const check = await testerPay.markEscalated(prisma, req.params.id, req.body || {});
+    if (check) await require('../history-logger').log({ reportId: check.reportId, action: 'tester_qa_escalated', detail: null, actorName: 'System', actorId: '' });
+    res.json({ check });
+  } catch (err) {
+    console.error('[QA check escalated]', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
+});
+
+// Someone pressed Take this check in QA Requests.
+router.post('/qa-check/:id/take', botAuth, async (req, res) => {
+  try {
+    const check = await testerPay.take(prisma, req.params.id, req.body || {});
+    await require('../history-logger').log({ reportId: check.reportId, action: 'tester_qa_taken', detail: check.takenBy || null, actorName: `${check.takenBy || 'Someone'} (QA Requests)`, actorId: '' });
+    res.json({ check, takeMinutes: testerPay.TAKE_MINUTES });
+  } catch (err) {
+    if (err instanceof testerPay.PayError) return res.status(err.status).json({ error: err.message });
+    console.error('[QA check take]', err.message);
+    res.status(500).json({ error: 'Something went wrong. Try again in a moment.' });
+  }
+});
+
 router.get('/qa-check/:id', botAuth, async (req, res) => {
   try {
     const check = await testerPay.getCheck(prisma, req.params.id);
@@ -441,17 +501,6 @@ router.get('/report-by-message/:messageId', botAuth, async (req, res) => {
     res.json({ reportId: report.id, report });
   } catch (err) {
     res.status(500).json({ error: 'Lookup failed' });
-  }
-});
-
-// GET /api/bot/bug-search?q=&where=test|live — /bugs search in Discord: active
-// bug reports matching the words, anonymous (see bug-search.js).
-router.get('/bug-search', botAuth, async (req, res) => {
-  try {
-    res.json(await require('../bug-search').search(prisma, { query: req.query.q, where: req.query.where }));
-  } catch (err) {
-    console.error('[Bot bug-search]', err.message);
-    res.status(500).json({ error: 'Search failed' });
   }
 });
 

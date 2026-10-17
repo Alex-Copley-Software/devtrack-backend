@@ -25,6 +25,8 @@ const ACTION_LABELS = {
   tester_qa_requested: 'Tester asked to confirm the fix',
   tester_fixed: 'Tester confirmed the fix',
   tester_not_fixed: 'Tester says it is not fixed',
+  tester_qa_escalated: 'QA check opened up in QA Requests',
+  tester_qa_taken: 'QA check taken in QA Requests',
   qa_failed: 'Failed QA, sent back to In Progress',
   ticket_opened: 'Ticket opened',
   ticket_transcript: 'Ticket transcript saved',
