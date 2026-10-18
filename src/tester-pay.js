@@ -6,9 +6,9 @@
 //               and click Fixed or Not fixed. Every check is kept. One left
 //               unanswered is opened up in QA Requests, where anyone can
 //               take it and answer it in that thread instead.
-//   Payouts     pay periods and a price per accepted report (by bug level)
-//               and per fix a tester confirmed, so what each tester is owed
-//               for a period is one query.
+//   Payouts     pay periods and a price per accepted report (by bug level),
+//               per fix a tester confirmed, and per report QA staff approved
+//               on the dashboard, so what everyone is owed for a period is one query.
 //
 // Tables are created on first use, like the rest of the codebase. Every
 // function takes the Prisma client so tests can run against PGlite.
@@ -19,8 +19,9 @@ const BUG_LEVELS = ['insignificant', 'minor', 'moderate', 'major'];
 const CHECK_STATUSES = ['pending', 'fixed', 'not_fixed', 'staff_approved', 'cancelled'];
 
 const DEFAULTS = {
-  // Price per accepted report, by bug level, and per fix a tester confirmed.
-  rates: { insignificant: 0, minor: 0, moderate: 0, major: 0, verifiedFix: 0 },
+  // Price per accepted report, by bug level, per fix a tester confirmed, and
+  // per report a QA staff member approved (resolved) on the dashboard.
+  rates: { insignificant: 0, minor: 0, moderate: 0, major: 0, verifiedFix: 0, qaApproval: 0 },
   currency: '$',
   // Ask the original reporter to confirm fixes in their thread.
   testerQaEnabled: true,
@@ -36,6 +37,9 @@ const DEFAULTS = {
 };
 
 const MAX_ESCALATE_MINUTES = 24 * 60;
+
+// Dashboard roles paid for QA approvals (the same roles that must attach proof).
+const QA_STAFF_ROLES = ['qa', 'reviewer'];
 
 const ready = new WeakSet();
 async function ensureTables(prisma) {
@@ -255,6 +259,32 @@ async function summarize(prisma, { from, to }) {
     WHERE x."respondedAt" >= $1::date AND x."respondedAt" < ($2::date + 1)
     ORDER BY x."respondedAt"`, from, to);
 
+  // QA staff approvals: the first time a QA or reviewer account resolved each
+  // report on the dashboard. Read from the report history, so approvals made
+  // before this was added count too.
+  const qaApprovals = await prisma.$queryRawUnsafe(`
+    SELECT * FROM (
+      SELECT DISTINCT ON (h."reportId") h."reportId", h."actorId" AS "userId", COALESCE(u.name, h."actorName") AS name,
+        u.role AS role, h."createdAt" AS "approvedAt", r.title, r."bugLevel"::text AS "bugLevel"
+      FROM "ReportHistory" h
+      JOIN "User" u ON u.id = h."actorId"
+      JOIN "Report" r ON r.id = h."reportId"
+      WHERE h.action = 'Marked as Resolved' AND u.role = ANY($3::text[]) AND r.status::text <> 'declined'
+      ORDER BY h."reportId", h."createdAt"
+    ) x
+    WHERE x."approvedAt" >= $1::date AND x."approvedAt" < ($2::date + 1)
+    ORDER BY x."approvedAt"`, from, to, QA_STAFF_ROLES);
+
+  const staff = new Map();
+  for (const a of qaApprovals) {
+    if (!staff.has(a.userId)) staff.set(a.userId, { key: `user:${a.userId}`, userId: a.userId, name: a.name, role: a.role, approvals: 0, amount: 0 });
+    const m = staff.get(a.userId);
+    m.approvals++;
+    m.amount = money(m.amount + rates.qaApproval);
+  }
+  const qaStaff = [...staff.values()].sort((a, b) => b.amount - a.amount || b.approvals - a.approvals || a.name.localeCompare(b.name));
+  const qaAmount = money(qaStaff.reduce((n, m) => n + m.amount, 0));
+
   const testers = new Map();
   const tester = (id, name) => {
     const key = id || `name:${String(name || 'Unknown').toLowerCase()}`;
@@ -291,19 +321,25 @@ async function summarize(prisma, { from, to }) {
 
   const rows = [...testers.values()].map(t => ({ ...t, total: money(t.reportsAmount + t.fixesAmount) }))
     .sort((a, b) => b.total - a.total || b.reports - a.reports || a.name.localeCompare(b.name));
+  const testersTotal = money(rows.reduce((n, t) => n + t.total, 0));
   return {
     from, to, settings,
     testers: rows,
+    qaStaff,
     totals: {
       testers: rows.length,
       reports: reports.length,
       verifiedFixes: fixes.length,
       reportsAmount: money(rows.reduce((n, t) => n + t.reportsAmount, 0)),
       fixesAmount: money(rows.reduce((n, t) => n + t.fixesAmount, 0)),
-      total: money(rows.reduce((n, t) => n + t.total, 0)),
+      qaStaff: qaStaff.length,
+      qaApprovals: qaApprovals.length,
+      qaAmount,
+      total: money(testersTotal + qaAmount),
     },
     reports,
     fixes,
+    qaApprovals,
     generatedAt: new Date().toISOString(),
   };
 }

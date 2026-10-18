@@ -20,6 +20,7 @@ const TESTER_CHECK_COLUMN = `(
 async function fetchReport(prisma, id) {
   await pay.ensureTables(prisma);
   await tickets.ensureTables(prisma);
+  await require('./dev-tags').ensureColumn(prisma);
   const rows = await prisma.$queryRawUnsafe(`
     SELECT r.*, ${TESTER_CHECK_COLUMN}, ${tickets.TICKET_COLUMN},
       COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,

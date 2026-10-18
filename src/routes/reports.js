@@ -12,6 +12,8 @@ const { broadcast } = require('../events');
 const testerQa = require('../tester-qa');
 const testerPay = require('../tester-pay');
 const reportTickets = require('../report-tickets');
+const r2 = require('../r2');
+const devTags = require('../dev-tags');
 
 const prisma = new PrismaClient();
 let statusEnumReady = false;
@@ -106,6 +108,42 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024 } });
 
+// QA proof: photos or videos attached when a fix is verified on the dashboard.
+// QA and reviewers (the people paid for QA approvals) must give proof;
+// engineers, admins and owners may resolve without it.
+const PROOF_ROLES = ['qa', 'reviewer'];
+const needsProof = user => PROOF_ROLES.includes(user?.role);
+const MAX_PROOF_FILES = 5;
+const proofUpload = multer({
+  storage,
+  limits: { fileSize: 50 * 1024 * 1024, files: MAX_PROOF_FILES },
+  fileFilter: (req, file, cb) => cb(null, /^(image|video)\//.test(file.mimetype)),
+});
+
+function acceptProof(req, res, next) {
+  proofUpload.array('proof', MAX_PROOF_FILES)(req, res, err => {
+    if (!err) return next();
+    const tooBig = err.code === 'LIMIT_FILE_SIZE';
+    const tooMany = err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE';
+    res.status(400).json({ error: tooBig ? 'Each file must be 50 MB or smaller' : tooMany ? `Attach up to ${MAX_PROOF_FILES} files` : 'Could not read the upload' });
+  });
+}
+
+function removeLocal(files) {
+  for (const f of files || []) fs.unlink(f.path, () => {});
+}
+
+// Uploads proof files to R2 so Discord and the history log can link to them.
+async function storeProof(reportId, files) {
+  const proof = [];
+  for (const f of files) {
+    const url = await r2.uploadFile(f.path, `qa-proof/${reportId}/${f.filename}`, f.mimetype);
+    if (!url) throw new Error('upload failed');
+    proof.push({ url, filename: f.originalname, type: f.mimetype.startsWith('image/') ? 'image' : 'video', size: f.size });
+  }
+  return proof;
+}
+
 const include = {
   assignees: { select: { id: true, name: true, email: true } },
   attachments: true
@@ -157,6 +195,7 @@ function authorizeReportPatch(req, res) {
 async function fetchReports(whereClauses = [], values = [], extra = '') {
   await testerPay.ensureTables(prisma);
   await reportTickets.ensureTables(prisma);
+  await devTags.ensureColumn(prisma);
   const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
   const sql = `
     SELECT r.*, ${testerQa.TESTER_CHECK_COLUMN}, ${reportTickets.TICKET_COLUMN},
@@ -470,6 +509,9 @@ router.patch('/:id', auth, async (req, res) => {
 
     const [existingReport] = await fetchReports(['r.id = $1'], [id]);
     if (!existingReport) return res.status(404).json({ error: 'Report not found' });
+    if (status === 'resolved' && existingReport.status !== 'resolved' && needsProof(req.user)) {
+      return res.status(400).json({ error: 'Resolve it with Verified on the QA Review page, with notes, a photo or a video', needsProof: true });
+    }
     const stale = assertFreshReport(existingReport, expectedUpdatedAt);
     if (stale) return res.status(stale.status).json({ ...stale.body, report: existingReport });
 
@@ -731,12 +773,29 @@ router.post('/publish-all', auth, requireRole('admin', 'engineer'), async (req, 
 });
 
 // POST /api/reports/:id/publish-resolved — QA approved
-router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer', 'engineer'), async (req, res) => {
+// QA and reviewers need proof of the check: notes, photos or videos (at least one).
+// The notes and proof are posted in the report's forum post with who verified it.
+router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer', 'engineer'), acceptProof, async (req, res) => {
+  const files = req.files || [];
+  const notes = String(req.body?.notes || '').trim().slice(0, 1000);
+  if (needsProof(req.user) && !notes && !files.length) {
+    removeLocal(files);
+    return res.status(400).json({ error: 'Add notes, a photo or a video showing the fix works' });
+  }
   try {
     const [before] = await fetchReports(['r.id = $1'], [req.params.id]);
+    if (!before) return res.status(404).json({ error: 'Report not found' });
+    let proof = [];
+    try {
+      proof = await storeProof(req.params.id, files);
+    } catch (err) {
+      console.error('[publish-resolved] Proof upload failed:', err.message);
+      return res.status(502).json({ error: 'Could not upload the proof. Try again.' });
+    }
+    if (notes) await prisma.$executeRaw`UPDATE "Report" SET "devNotes" = ${notes} WHERE id = ${req.params.id}`;
     await prisma.$executeRaw`UPDATE "Report" SET status = 'resolved', "publishStatus" = 'published' WHERE id = ${req.params.id}`;
     let [report] = await fetchReports(['r.id = $1'], [req.params.id]);
-    if (before && await testerQa.afterStatusChange(prisma, report, before.status, req.user.name)) {
+    if (await testerQa.afterStatusChange(prisma, report, before.status, req.user.name)) {
       [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     }
     notify({
@@ -744,16 +803,21 @@ router.post('/:id/publish-resolved', auth, requireRole('admin', 'qa', 'reviewer'
       reportType:    report.type,
       action:        'resolved',
       bugLevel:      report.bugLevel,
-      devNotes:      report.devNotes,
+      devNotes:      notes || null,
       discordUserId: report.discordUserId,
       notifyOwner:   report.notifyOwner,
+      verifiedBy:    req.user.name,
+      proof,
     });
-    await log({ reportId: req.params.id, action: 'resolved', actorName: req.user.name, actorId: req.user.id });
+    const detail = [notes && `Notes: ${notes}`, ...proof.map(p => `Proof: ${p.url}`)].filter(Boolean).join('\n');
+    await log({ reportId: req.params.id, action: 'resolved', detail, actorName: req.user.name, actorId: req.user.id });
     await log({ reportId: req.params.id, action: 'published', actorName: req.user.name, actorId: req.user.id });
     broadcastReport('report.updated', report, req.user);
     res.json(report);
   } catch (err) {
     res.status(500).json({ error: 'Could not resolve report' });
+  } finally {
+    removeLocal(files);
   }
 });
 

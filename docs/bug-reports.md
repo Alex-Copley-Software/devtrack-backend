@@ -28,6 +28,34 @@ Tester payouts work as before: the report goes to the person who posted it,
 or to whoever it was credited to with `/credit`. A confirmed fix goes to
 whoever did the check.
 
+## Verifying a fix on the dashboard
+
+For QA and Reviewer accounts, pressing **Verified** (or **Resolve** on a
+tester-confirmed report) needs proof: notes, photos or videos, at least one
+of them. Engineers, admins and owners may leave it empty. QA and reviewers
+cannot set a report to Resolved any other way; the report window sends them
+to Verified. Up to 5 files, 50 MB each. The files go to R2, and the resolve message in the report's forum
+post (or ticket) shows the notes, the proof and **Verified by** with the
+staff member's name. Files under about 9 MB in total are attached to the
+message; anything larger is linked, and Discord shows the link as a preview.
+The report's history keeps the notes and the proof links.
+
+## Dev tags and the bug queue
+
+Testers can put a dev-name tag (Ricky, Bryan, Vaayu, Yose) on their forum
+post. The bot reads it by name on every forum (each forum has its own tag
+ids), sends it with the new report, updates it whenever the post's tags
+change, and re-reads every post in the watched forums when it starts.
+`DEV_TAG_NAMES` on the bot (comma separated) changes the list of names.
+
+On the **Bug Queue** page the tags show on each report, and you can:
+
+- filter by a dev tag (or *No dev tag*) and sort by dev tag,
+- tick reports, or **Select all**, which only picks what the filter shows,
+- **Accept selected** with one bug level, assignee, category and notes
+  (the assignee is suggested when every selected report has the same dev
+  tag and a dev's name starts with it), or **Decline selected**.
+
 ## Reports from the old Ticket Tool tickets
 
 Bug reports were Ticket Tool tickets (channels like `test-game-0001` under

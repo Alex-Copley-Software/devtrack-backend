@@ -15,7 +15,8 @@ async function createDb() {
   await pg.exec(`
     CREATE TABLE "Report" ("id" TEXT PRIMARY KEY, "title" TEXT, "type" TEXT, "bugLevel" TEXT, "status" TEXT, "queued" BOOLEAN,
       "discordUserId" TEXT, "discordUser" TEXT, "discordThreadId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL);
-    CREATE TABLE "ReportHistory" ("id" SERIAL PRIMARY KEY, "reportId" TEXT, "action" TEXT, "createdAt" TIMESTAMP(3) NOT NULL);`);
+    CREATE TABLE "ReportHistory" ("id" SERIAL PRIMARY KEY, "reportId" TEXT, "action" TEXT, "actorName" TEXT, "actorId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL);
+    CREATE TABLE "User" ("id" TEXT PRIMARY KEY, "name" TEXT, "role" TEXT);`);
   await pay.ensureTables(prisma);
   let n = 0;
   const report = async (fields = {}) => {
@@ -225,10 +226,10 @@ test('the report query carries the latest tester check, and an answer moves the 
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN "publishStatus" TEXT DEFAULT 'unpublished', ADD COLUMN "updatedAt" TIMESTAMP(3), ADD COLUMN "devNotes" TEXT`);
   await prisma.$executeRawUnsafe(`CREATE TYPE "Status" AS ENUM ('queued','open','in_progress','reviewing','on_hold','resolved','declined')`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ALTER COLUMN status TYPE "Status" USING status::"Status"`);
-  await prisma.$executeRawUnsafe(`CREATE TABLE "User" (id TEXT PRIMARY KEY, name TEXT, email TEXT)`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN email TEXT`);
   await prisma.$executeRawUnsafe(`CREATE TABLE "_AssignedReports" ("A" TEXT, "B" TEXT)`);
   await prisma.$executeRawUnsafe(`CREATE TABLE "Attachment" (id TEXT PRIMARY KEY, "reportId" TEXT, type TEXT, url TEXT, filename TEXT)`);
-  await prisma.$executeRawUnsafe(`ALTER TABLE "ReportHistory" ADD COLUMN detail TEXT, ADD COLUMN "actorName" TEXT, ADD COLUMN "actorId" TEXT`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "ReportHistory" ADD COLUMN detail TEXT`);
   const testerQa = require('../src/tester-qa');
   await pay.saveSettings(prisma, { rates: RATES });
 
@@ -276,4 +277,39 @@ test('a report sent from QA Review back to In Progress is marked as a QA fail un
   assert.equal(await qa.markQaFail(prisma, r.id, 'in_progress', 'reviewing', 'Dev'), true);
   assert.deepEqual(await mark(), { qaFailedAt: null, qaFailedBy: null });
   assert.equal(await qa.markQaFail(prisma, r.id, 'reviewing', 'resolved', 'Quinn'), false);
+});
+
+test('QA staff are paid once per report they approved on the dashboard, from the report history', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { rates: { ...RATES, qaApproval: 3 } });
+  await prisma.$executeRawUnsafe(`INSERT INTO "User" VALUES ('q1','Quinn','qa'), ('v1','Val','reviewer'), ('e1','Eli','engineer')`);
+  const resolved = (r, actorId, at) => prisma.$executeRawUnsafe(
+    `INSERT INTO "ReportHistory" ("reportId","action","actorName","actorId","createdAt") VALUES ($1,'Marked as Resolved','x',$2,$3::timestamp)`, r.id, actorId, at);
+  const a = await report({ status: 'resolved' });
+  const b = await report({ status: 'resolved' });
+  const c = await report({ status: 'resolved' });
+  const d = await report({ status: 'declined' });
+  const e = await report({ status: 'resolved' });
+  await resolved(a, 'q1', '2026-10-03');
+  await resolved(a, 'v1', '2026-10-04');   // resolved again later: only the first QA approval counts
+  await resolved(b, 'v1', '2026-10-05');
+  await resolved(c, 'e1', '2026-10-05');   // an engineer: not QA staff
+  await resolved(d, 'q1', '2026-10-05');   // declined since
+  await resolved(e, 'q1', '2026-09-30');   // before the period
+  await prisma.$executeRawUnsafe(`INSERT INTO "ReportHistory" ("reportId","action","actorName","actorId","createdAt") VALUES ($1,'Marked as Resolved','(tester)','',$2::timestamp)`, c.id, '2026-10-02');
+
+  const s = await pay.summarize(prisma, { from: '2026-10-01', to: '2026-10-07' });
+  assert.deepEqual(s.qaStaff.map(m => [m.name, m.role, m.approvals, m.amount]), [['Quinn', 'qa', 1, 3], ['Val', 'reviewer', 1, 3]]);
+  assert.deepEqual(s.qaApprovals.map(x => x.reportId).sort(), [a.id, b.id].sort());
+  assert.deepEqual([s.totals.qaApprovals, s.totals.qaAmount, s.totals.qaStaff], [2, 6, 2]);
+  // The tester side is unchanged and the grand total includes both.
+  const testersTotal = s.testers.reduce((n, t) => n + t.total, 0);
+  assert.equal(s.totals.total, testersTotal + 6);
+});
+
+test('the QA approval price is a setting and defaults to zero', async () => {
+  const { prisma } = await createDb();
+  assert.equal((await pay.getSettings(prisma)).rates.qaApproval, 0);
+  assert.equal((await pay.saveSettings(prisma, { rates: { qaApproval: 4.25 } })).rates.qaApproval, 4.25);
+  assert.equal((await pay.saveSettings(prisma, { rates: { qaApproval: -1 } })).rates.qaApproval, 0);
 });

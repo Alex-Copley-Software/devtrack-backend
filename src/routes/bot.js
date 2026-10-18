@@ -7,6 +7,7 @@ const { PrismaClient } = require('@prisma/client');
 const { uploadBuffer, uploadFile } = require('../r2');
 const { maybeAlertQueueBacklog, alertQaReview } = require('../server-alerts');
 const { broadcast } = require('../events');
+const devTags = require('../dev-tags');
 const testerQa = require('../tester-qa');
 const testerPay = require('../tester-pay');
 const reportTickets = require('../report-tickets');
@@ -262,6 +263,14 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
 
     // Set publishStatus via raw SQL since Prisma client may not have it generated yet
     await prisma.$executeRaw`UPDATE "Report" SET "publishStatus" = 'unpublished' WHERE id = ${report.id}`.catch(()=>{});
+    // Dev-name tags on the forum post (sent as JSON in the form).
+    if (req.body.devTags && report.discordThreadId) {
+      let tagsIn = [];
+      try { tagsIn = JSON.parse(req.body.devTags); } catch { tagsIn = String(req.body.devTags).split(','); }
+      report.devTags = devTags.clean(tagsIn);
+      await devTags.setForThreads(prisma, [{ threadId: report.discordThreadId, devTags: report.devTags }])
+        .catch(err => console.error('[Bot] Dev tags not saved:', err.message));
+    }
 
     // Log initial queue entry to history
     const { log } = require('../history-logger');
@@ -274,6 +283,21 @@ router.post('/report', botAuth, upload.array('attachments', 10), async (req, res
     if (err.code === 'P2002') return res.status(409).json({ error: 'Already submitted' });
     console.error(err);
     res.status(500).json({ error: 'Could not create report from bot' });
+  }
+});
+
+// POST /api/bot/dev-tags { items: [{ threadId, devTags }] }
+// The bot sends the dev-name tags on forum posts: when a post's tags change,
+// and for every post it can see when it starts.
+router.post('/dev-tags', botAuth, async (req, res) => {
+  const items = Array.isArray(req.body?.items) ? req.body.items.slice(0, 2000) : [];
+  try {
+    const changed = await devTags.setForThreads(prisma, items);
+    for (const id of changed) broadcastReport('report.updated', await testerQa.fetchReport(prisma, id));
+    res.json({ success: true, changed: changed.length });
+  } catch (err) {
+    console.error('[Bot] Dev tags failed:', err.message);
+    res.status(500).json({ error: 'Could not save dev tags' });
   }
 });
 

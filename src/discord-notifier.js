@@ -6,7 +6,7 @@ const axios = require('axios');
 const BOT_WEBHOOK = process.env.BOT_WEBHOOK_URL || 'http://localhost:3002';
 const BOT_SECRET  = process.env.BOT_SECRET;
 
-async function notify({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner }) {
+async function notify({ threadId, reportType, action, bugLevel, devNotes, discordUserId, assigneeName, notifyOwner, verifiedBy, proof }) {
   if (!threadId) {
     console.log('[Notifier] No threadId — skipping Discord notification');
     return;
@@ -23,6 +23,8 @@ async function notify({ threadId, reportType, action, bugLevel, devNotes, discor
       discordUserId,
       assigneeName,
       notifyOwner: !!notifyOwner,
+      verifiedBy,
+      proof,
     }, {
       headers: { 'x-bot-secret': BOT_SECRET },
       timeout: 5000,
