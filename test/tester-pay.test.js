@@ -281,7 +281,7 @@ test('a report sent from QA Review back to In Progress is marked as a QA fail un
 
 test('QA staff are paid once per report they approved on the dashboard, from the report history', async () => {
   const { prisma, report } = await createDb();
-  await pay.saveSettings(prisma, { rates: { ...RATES, qaApproval: 3 } });
+  await pay.saveSettings(prisma, { rates: { ...RATES, verifiedFix: 3 } });   // a QA approval pays the same as a fix
   await prisma.$executeRawUnsafe(`INSERT INTO "User" VALUES ('q1','Quinn','qa'), ('v1','Val','reviewer'), ('e1','Eli','engineer')`);
   const resolved = (r, actorId, at) => prisma.$executeRawUnsafe(
     `INSERT INTO "ReportHistory" ("reportId","action","actorName","actorId","createdAt") VALUES ($1,'Marked as Resolved','x',$2,$3::timestamp)`, r.id, actorId, at);
@@ -307,9 +307,3 @@ test('QA staff are paid once per report they approved on the dashboard, from the
   assert.equal(s.totals.total, testersTotal + 6);
 });
 
-test('the QA approval price is a setting and defaults to zero', async () => {
-  const { prisma } = await createDb();
-  assert.equal((await pay.getSettings(prisma)).rates.qaApproval, 0);
-  assert.equal((await pay.saveSettings(prisma, { rates: { qaApproval: 4.25 } })).rates.qaApproval, 4.25);
-  assert.equal((await pay.saveSettings(prisma, { rates: { qaApproval: -1 } })).rates.qaApproval, 0);
-});

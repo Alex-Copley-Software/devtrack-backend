@@ -19,9 +19,9 @@ const BUG_LEVELS = ['insignificant', 'minor', 'moderate', 'major'];
 const CHECK_STATUSES = ['pending', 'fixed', 'not_fixed', 'staff_approved', 'cancelled'];
 
 const DEFAULTS = {
-  // Price per accepted report, by bug level, per fix a tester confirmed, and
-  // per report a QA staff member approved (resolved) on the dashboard.
-  rates: { insignificant: 0, minor: 0, moderate: 0, major: 0, verifiedFix: 0, qaApproval: 0 },
+  // Price per accepted report, by bug level, and per confirmed fix. A report
+  // QA staff approve (resolve) on the dashboard is paid the same as a fix.
+  rates: { insignificant: 0, minor: 0, moderate: 0, major: 0, verifiedFix: 0 },
   currency: '$',
   // Ask the original reporter to confirm fixes in their thread.
   testerQaEnabled: true,
@@ -280,7 +280,7 @@ async function summarize(prisma, { from, to }) {
     if (!staff.has(a.userId)) staff.set(a.userId, { key: `user:${a.userId}`, userId: a.userId, name: a.name, role: a.role, approvals: 0, amount: 0 });
     const m = staff.get(a.userId);
     m.approvals++;
-    m.amount = money(m.amount + rates.qaApproval);
+    m.amount = money(m.amount + rates.verifiedFix);
   }
   const qaStaff = [...staff.values()].sort((a, b) => b.amount - a.amount || b.approvals - a.approvals || a.name.localeCompare(b.name));
   const qaAmount = money(qaStaff.reduce((n, m) => n + m.amount, 0));

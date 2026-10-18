@@ -64,8 +64,8 @@ private, so nobody else could post proof in it.
 - **Pay periods** are named date ranges of any length; both days are
   included, and periods may overlap. Any dates can also be looked at without
   saving a period.
-- **Prices** are set per bug level (insignificant, minor, moderate, major),
-  per confirmed fix, and per QA approval.
+- **Prices** are set per bug level (insignificant, minor, moderate, major)
+  and per confirmed fix. A QA approval is paid the fix price.
 - A period's table shows, per tester, accepted reports by level, fixes
   confirmed, and the amount owed. Click a tester for the reports behind the
   number. **Export CSV** downloads the table.
@@ -86,10 +86,10 @@ What counts:
   reporter, or the person who took it in QA Requests), in the period they
   confirmed it. The report itself is still paid to the reporter.
 - **QA staff** (dashboard accounts with the QA or Reviewer role) are paid
-  the *QA approval* price once per report, the first time one of them
+  the confirmed-fix price once per report, the first time one of them
   resolves it on the dashboard (Verified on QA Review, or Resolve on a
   tester-confirmed report). This is read from the report history, so
-  approvals from before the price existed count too. A report declined
+  approvals from before this was added count too. A report declined
   afterwards stops counting. Engineers, admins and owners are not paid for
   resolving. QA staff have their own table under the testers, and the total
   owed includes them.
