@@ -51,7 +51,8 @@ straight away to checks already waiting, and needs no restart.
   upload never counts as their proof.
 - The reporter can still answer at any point until someone does.
 - When the check ends (answered, approved by staff, withdrawn) the QA
-  Requests post says how and loses its button.
+  Requests post is deleted, so the channel only shows checks still waiting.
+  The outcome is recorded in the report's post.
 - The report's history shows it opening up and who took it.
 
 Reports from the old Ticket Tool tickets are never opened up: a ticket is
