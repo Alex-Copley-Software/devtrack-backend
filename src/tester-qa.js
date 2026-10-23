@@ -37,11 +37,13 @@ async function fetchReport(prisma, id) {
 // A report "failed QA" when it goes from QA Review straight back to In
 // Progress, whoever sent it (staff, or the tester pressing Not fixed). The
 // mark stays while it is In Progress and is dropped the moment it moves on.
+// A failed report also loses its Ready to Publish flag, so "Send to QA"
+// doesn't push it straight back before anyone has looked at it.
 // Returns true when the mark changed.
 async function markQaFail(prisma, reportId, previousStatus, status, actorName) {
   await pay.ensureTables(prisma);
   if (previousStatus === 'reviewing' && status === 'in_progress') {
-    await prisma.$executeRawUnsafe(`UPDATE "Report" SET "qaFailedAt" = CURRENT_TIMESTAMP, "qaFailedBy" = $2 WHERE id = $1`, reportId, actorName || null);
+    await prisma.$executeRawUnsafe(`UPDATE "Report" SET "qaFailedAt" = CURRENT_TIMESTAMP, "qaFailedBy" = $2, "publishStatus" = 'unpublished' WHERE id = $1`, reportId, actorName || null);
     return true;
   }
   return (await prisma.$executeRawUnsafe(

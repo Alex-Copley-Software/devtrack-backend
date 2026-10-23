@@ -14,7 +14,7 @@ async function createDb() {
   };
   await pg.exec(`
     CREATE TABLE "Report" ("id" TEXT PRIMARY KEY, "title" TEXT, "type" TEXT, "bugLevel" TEXT, "status" TEXT, "queued" BOOLEAN,
-      "discordUserId" TEXT, "discordUser" TEXT, "discordThreadId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL);
+      "discordUserId" TEXT, "discordUser" TEXT, "discordThreadId" TEXT, "publishStatus" TEXT DEFAULT 'unpublished', "createdAt" TIMESTAMP(3) NOT NULL);
     CREATE TABLE "ReportHistory" ("id" SERIAL PRIMARY KEY, "reportId" TEXT, "action" TEXT, "actorName" TEXT, "actorId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL);
     CREATE TABLE "User" ("id" TEXT PRIMARY KEY, "name" TEXT, "role" TEXT);`);
   await pay.ensureTables(prisma);
@@ -223,7 +223,7 @@ test('pay periods: validation, and marking paid freezes the numbers', async () =
 test('the report query carries the latest tester check, and an answer moves the report', async () => {
   const { prisma, report } = await createDb();
   // The rest of what the report query joins, and what the answer handler writes to.
-  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN "publishStatus" TEXT DEFAULT 'unpublished', ADD COLUMN "updatedAt" TIMESTAMP(3), ADD COLUMN "devNotes" TEXT`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN "updatedAt" TIMESTAMP(3), ADD COLUMN "devNotes" TEXT`);
   await prisma.$executeRawUnsafe(`CREATE TYPE "Status" AS ENUM ('queued','open','in_progress','reviewing','on_hold','resolved','declined')`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ALTER COLUMN status TYPE "Status" USING status::"Status"`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "User" ADD COLUMN email TEXT`);
@@ -263,12 +263,15 @@ test('a report sent from QA Review back to In Progress is marked as a QA fail un
   const qa = require('../src/tester-qa');
   const r = await report({ status: 'in_progress' });
   const mark = async () => (await prisma.$queryRawUnsafe(`SELECT "qaFailedAt", "qaFailedBy" FROM "Report" WHERE id = $1`, r.id))[0];
+  const publishStatus = async () => (await prisma.$queryRawUnsafe(`SELECT "publishStatus" FROM "Report" WHERE id = $1`, r.id))[0].publishStatus;
 
   assert.equal(await qa.markQaFail(prisma, r.id, 'open', 'in_progress', 'Dev'), false, 'an ordinary move into In Progress is not a fail');
   assert.equal((await mark()).qaFailedAt, null);
   assert.equal(await qa.markQaFail(prisma, r.id, 'in_progress', 'reviewing', 'Dev'), false);
 
+  await prisma.$executeRawUnsafe(`UPDATE "Report" SET "publishStatus" = 'flagged' WHERE id = $1`, r.id);
   assert.equal(await qa.markQaFail(prisma, r.id, 'reviewing', 'in_progress', 'Quinn'), true);
+  assert.equal(await publishStatus(), 'unpublished', 'a failed report is no longer Ready to Publish');
   const failed = await mark();
   assert.equal(failed.qaFailedBy, 'Quinn');
   assert.ok(failed.qaFailedAt instanceof Date);
