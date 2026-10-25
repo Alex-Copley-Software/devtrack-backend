@@ -277,7 +277,7 @@ function devNotesHistoryDetail(previous, next) {
 
 // GET /api/reports
 router.get('/', auth, async (req, res) => {
-  const { type, status, priority, bugLevel, category, search, assigneeId, queued } = req.query;
+  const { type, status, priority, bugLevel, category, search, assigneeId, queued, tag, devTag } = req.query;
   const where = {};
   if (type) where.type = type;
   if (status) where.status = status;
@@ -308,6 +308,10 @@ router.get('/', auth, async (req, res) => {
       whereClauses.push(`(r.title ILIKE $${idx} OR r.description ILIKE $${idx++})`);
       vals.push('%' + search + '%');
     }
+    // Tag filters ignore case. devTag=none matches reports with no dev tag, like the queue's filter.
+    if (tag) { whereClauses.push(`EXISTS (SELECT 1 FROM unnest(r.tags) t WHERE lower(t) = lower($${idx++}))`); vals.push(tag); }
+    if (devTag === 'none') whereClauses.push(`cardinality(r."devTags") = 0`);
+    else if (devTag) { whereClauses.push(`EXISTS (SELECT 1 FROM unnest(r."devTags") t WHERE lower(t) = lower($${idx++}))`); vals.push(devTag); }
     const reports = await fetchReports(whereClauses, vals, 'ORDER BY r."createdAt" DESC');
     res.json(reports);
   } catch (err) {
