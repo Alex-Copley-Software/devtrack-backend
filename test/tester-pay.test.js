@@ -180,6 +180,7 @@ test('once a check is opened up, the reporter has to take it like anyone else', 
   const yes = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', ...video });
   assert.deepEqual([yes.check.answeredByDiscordUserId, yes.check.answeredBy], ['u-ana', 'Ana']);
   await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', ...video }), /already confirmed as fixed/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed' }), /already confirmed as fixed/, 'not asked for proof first');
   await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy' }), /already been answered/);
 });
 
@@ -389,6 +390,29 @@ test('QA staff are paid once per report they approved on the dashboard, from the
   assert.equal(s.totals.total, testersTotal + 6);
 });
 
+
+test('previewing prices: each period now (frozen once paid) and at trial prices, without saving them', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { rates: RATES });
+  await report({ bugLevel: 'major', acceptedAt: '2026-09-10' });
+  await report({ bugLevel: 'minor', acceptedAt: '2026-10-02' });
+  await report({ bugLevel: 'moderate', acceptedAt: '2026-10-03', discordUserId: 'u-ben', discordUser: 'Ben' });
+  const september = await pay.createPeriod(prisma, { name: 'September', startsOn: '2026-09-01', endsOn: '2026-09-30' });
+  await pay.markPaid(prisma, september.id, 'Admin');
+  const october = await pay.createPeriod(prisma, { name: 'October', startsOn: '2026-10-01', endsOn: '2026-10-31' });
+
+  const p = await pay.previewPrices(prisma, { periodIds: [september.id, october.id], rates: { major: 20, minor: 'lots' }, payCredited: false });
+  assert.deepEqual([p.trial.rates.major, p.trial.rates.minor, p.trial.payCredited], [20, RATES.minor, false], 'a bad price keeps the saved one');
+  const [sep, oct] = p.periods;
+  assert.deepEqual([sep.period.name, sep.frozen, sep.now.total, sep.trial.total], ['September', true, 12.5, 20]);
+  assert.deepEqual([oct.frozen, oct.now.total, oct.trial.total], [false, 7, 7], 'no major in October');
+  assert.deepEqual(sep.trial.testers.map(t => [t.name, t.total]), [['Ana', 20]]);
+  assert.equal((await pay.getSettings(prisma)).rates.major, RATES.major, 'nothing saved');
+  assert.equal((await pay.periodSummary(prisma, september.id)).totals.total, 12.5, 'the paid period is untouched');
+
+  await assert.rejects(pay.previewPrices(prisma, { periodIds: [] }), /Pick at least one/);
+  await assert.rejects(pay.previewPrices(prisma, { periodIds: ['nope'] }), /Pay period not found/);
+});
 
 test('a report with a team is split between the reporter and the teammates, to the cent', async () => {
   const { prisma, report } = await createDb();

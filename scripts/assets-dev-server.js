@@ -148,7 +148,7 @@ async function seedPayoutsDemo(prisma, pg) {
   await pg.exec(`
     CREATE TABLE "Report" ("id" TEXT PRIMARY KEY, "title" TEXT, "type" TEXT, "bugLevel" TEXT, "status" TEXT, "queued" BOOLEAN,
       "discordUserId" TEXT, "discordUser" TEXT, "discordThreadId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE "ReportHistory" ("id" SERIAL PRIMARY KEY, "reportId" TEXT, "action" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
+    CREATE TABLE "ReportHistory" ("id" SERIAL PRIMARY KEY, "reportId" TEXT, "action" TEXT, "actorName" TEXT, "actorId" TEXT, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
   await pay.ensureTables(prisma);
   await pay.saveSettings(prisma, { rates: { insignificant: 0.5, minor: 2, moderate: 5, major: 12 , verifiedFix: 1.5 } });
   const testers = [['u1', 'NovaTester'], ['u2', 'pixel_hunter'], ['u3', 'Kiri'], ['u4', 'a_very_long_tester_display_name_here']];

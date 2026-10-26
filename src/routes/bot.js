@@ -617,7 +617,8 @@ router.post('/thread-deleted', botAuth, async (req, res) => {
         checks.push(await testerPay.cancelUnreachable(prisma, pending.id));
         await log({ reportId: id, action: 'tester_qa_unreachable', detail: null, actorName: 'System', actorId: '' });
       }
-      broadcastReport('report.updated', await testerQa.fetchReport(prisma, id));
+      // Recorded already; a failed refresh must not lose the checks the bot has to withdraw.
+      try { broadcastReport('report.updated', await testerQa.fetchReport(prisma, id)); } catch (err) { console.error('[Thread deleted] refresh', id, err.message); }
     }
     res.json({ reports: rows.map(r => r.id), checks });
   } catch (err) {

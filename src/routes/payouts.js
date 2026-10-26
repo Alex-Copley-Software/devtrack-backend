@@ -9,6 +9,7 @@
 //   POST /periods/:id/paid            freeze the numbers and mark it paid
 //   POST /periods/:id/reopen
 //   GET  /summary?from=&to=           the same totals for any date range
+//   POST /preview                     { periodIds, rates, payCredited } those periods now and at trial prices; saves nothing
 //   GET  /checks?status=&from=&to=    the tester QA log
 
 const router = require('express').Router();
@@ -48,6 +49,7 @@ router.post('/periods/:id/paid', h(req => pay.markPaid(db(), req.params.id, req.
 router.post('/periods/:id/reopen', h(req => pay.reopenPeriod(db(), req.params.id)));
 
 router.get('/summary', h(req => pay.summarize(db(), { from: req.query.from, to: req.query.to })));
+router.post('/preview', h(req => pay.previewPrices(db(), req.body || {})));
 router.get('/checks', h(req => pay.listChecks(db(), req.query)));
 
 module.exports = router;

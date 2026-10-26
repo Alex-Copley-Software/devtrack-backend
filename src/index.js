@@ -1,4 +1,14 @@
 require('dotenv').config();
+// Prisma keeps each query's plan per database connection. When a column is
+// added to a table (features add theirs the first time they need them, and a
+// new deploy does while the old one is still serving), every cached query
+// reading that table with r.* fails with "cached plan must not change result
+// type" until its connection closes. On 2026-10-26 that broke QA answers for
+// a minute after a forum post was deleted for the first time. Without the
+// cache, a query is planned against the table as it is.
+if (process.env.DATABASE_URL && !/[?&]statement_cache_size=/.test(process.env.DATABASE_URL)) {
+  process.env.DATABASE_URL += `${process.env.DATABASE_URL.includes('?') ? '&' : '?'}statement_cache_size=0`;
+}
 const express = require('express');
 const cors = require('cors');
 const path = require('path');

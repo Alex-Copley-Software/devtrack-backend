@@ -115,15 +115,32 @@ async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, ve
     await log({ reportId: check.reportId, action: 'tester_not_fixed', detail: [check.note, check.videoUrl].filter(Boolean).join(' · ') || null, actorName, actorId: '' });
   }
 
-  const report = await fetchReport(prisma, check.reportId);
-  if (report) {
-    broadcast('report.updated', { report, actor: null, timestamp: new Date().toISOString() });
-    broadcast('activity.changed', { reportId: report.id, timestamp: new Date().toISOString() });
-    if (autoResolved) {
-      notifier.notify({
-        threadId: report.discordThreadId, reportType: report.type, action: 'resolved', bugLevel: report.bugLevel,
-        devNotes: report.devNotes, discordUserId: report.discordUserId, notifyOwner: false,
-      });
+  // The answer is saved: from here on a failure must not turn it into an
+  // error, or the bot leaves the buttons up on a check nobody can answer.
+  let report = null;
+  try {
+    report = await fetchReport(prisma, check.reportId);
+    if (report) {
+      broadcast('report.updated', { report, actor: null, timestamp: new Date().toISOString() });
+      broadcast('activity.changed', { reportId: report.id, timestamp: new Date().toISOString() });
+    }
+  } catch (err) {
+    console.error(`[Tester QA] Answer to ${checkId} saved, but the report could not be refreshed:`, err.message);
+  }
+  if (autoResolved) {
+    try {
+      const r = report || (await prisma.$queryRawUnsafe(`
+        SELECT "discordThreadId", type::text AS type, "bugLevel"::text AS "bugLevel", "devNotes", "discordUserId", title
+        FROM "Report" WHERE id = $1`, check.reportId))[0];
+      if (r) {
+        notifier.notify({
+          threadId: r.discordThreadId, reportType: r.type, action: 'resolved', bugLevel: r.bugLevel,
+          devNotes: r.devNotes, discordUserId: r.discordUserId, notifyOwner: false,
+        });
+        report = report || r;
+      }
+    } catch (err) {
+      console.error(`[Tester QA] Report ${check.reportId} resolved, but Discord could not be told:`, err.message);
     }
   }
   return { check, autoResolved, reportTitle: report?.title || null };

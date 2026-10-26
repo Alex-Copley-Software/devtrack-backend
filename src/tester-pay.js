@@ -291,10 +291,11 @@ function splitAmount(amount, n) {
 // tester confirmed it, once per report, and is paid to whoever did the
 // check: the reporter, or the person who took it in QA Requests. A report
 // with a team is split evenly between the reporter and the teammates.
-async function summarize(prisma, { from, to }) {
+// settings, if given, is used instead of the saved prices and rules (a preview).
+async function summarize(prisma, { from, to }, { settings: given } = {}) {
   if (!isDate(from) || !isDate(to)) throw new PayError(400, 'Give a start and an end date');
   if (to < from) throw new PayError(400, 'The end date is before the start date');
-  const settings = await getSettings(prisma);
+  const settings = given || await getSettings(prisma);
   const { rates } = settings;
 
   // The accepted dates in one pass over the history, not one lookup per report.
@@ -435,6 +436,45 @@ async function periodSummary(prisma, id) {
   const { snapshot, ...rest } = period;
   if (period.paidAt && snapshot) return { period: rest, frozen: true, ...snapshot };
   return { period: rest, frozen: false, ...(await summarize(prisma, { from: period.startsOn, to: period.endsOn })) };
+}
+
+// Trial prices, for the Preview prices tab: what each pay period comes to now
+// (what was paid, for a period marked paid) next to what it would come to at
+// these prices. Nothing is saved. A paid period's trial is worked out from the
+// reports as they are today, so a report re-levelled since can differ too.
+const MAX_PREVIEW_PERIODS = 24;
+async function previewPrices(prisma, { periodIds, rates, payCredited } = {}) {
+  const ids = [...new Set((Array.isArray(periodIds) ? periodIds : []).map(String))];
+  if (!ids.length) throw new PayError(400, 'Pick at least one pay period');
+  if (ids.length > MAX_PREVIEW_PERIODS) throw new PayError(400, `Pick up to ${MAX_PREVIEW_PERIODS} pay periods`);
+  const saved = await getSettings(prisma);
+  // A price left empty or not a number keeps the saved one.
+  const tried = Object.entries(rates && typeof rates === 'object' ? rates : {})
+    .filter(([key, v]) => key in saved.rates && v !== '' && v !== null && Number.isFinite(Number(v)) && Number(v) >= 0);
+  const trial = normalize({
+    ...saved,
+    rates: { ...saved.rates, ...Object.fromEntries(tried) },
+    payCredited: typeof payCredited === 'boolean' ? payCredited : saved.payCredited,
+  });
+  const brief = sum => ({
+    total: money(sum.totals?.total),
+    reportsAmount: money(sum.totals?.reportsAmount),
+    fixesAmount: money(sum.totals?.fixesAmount),
+    qaAmount: money(sum.totals?.qaAmount),
+    rates: sum.settings?.rates || null,
+    testers: (sum.testers || []).map(t => ({
+      key: t.key, name: t.name, discordUserId: t.discordUserId || null,
+      reports: t.reports || 0, levels: t.levels || {}, verifiedFixes: t.verifiedFixes || 0, total: money(t.total),
+    })),
+    qaStaff: (sum.qaStaff || []).map(m => ({ key: m.key, name: m.name, approvals: m.approvals || 0, total: money(m.amount) })),
+  });
+  const periods = [];
+  for (const id of ids) {
+    const now = await periodSummary(prisma, id);
+    const atTrial = await summarize(prisma, { from: now.period.startsOn, to: now.period.endsOn }, { settings: trial });
+    periods.push({ period: now.period, frozen: now.frozen, now: brief(now), trial: brief(atTrial) });
+  }
+  return { saved, trial, periods };
 }
 
 // One tester's own numbers, for /leaderboard in Discord (only they see it),
@@ -688,10 +728,10 @@ async function respond(prisma, checkId, { discordUserId, discordUserName, verdic
   const check = await getCheck(prisma, checkId);
   if (!check) throw new PayError(404, 'That QA check no longer exists.');
   const who = String(discordUserId);
-  if (check.status === 'pending') {
-    const refusal = answerRefusal(check, who);
-    if (refusal) throw new PayError(403, refusal);
-  }
+  // Answered already: say so, rather than asking for proof first.
+  if (check.status !== 'pending') throw new PayError(409, alreadyAnswered(check.status));
+  const refusal = answerRefusal(check, who);
+  if (refusal) throw new PayError(403, refusal);
   if (!['fixed', 'not_fixed'].includes(verdict)) throw new PayError(400, 'Unknown answer');
   const settings = await getSettings(prisma);
   const video = String(videoUrl || '').trim().slice(0, 1000) || null;
@@ -712,10 +752,14 @@ async function respond(prisma, checkId, { discordUserId, discordUserName, verdic
   if (!claimed) {
     const now = await getCheck(prisma, checkId);
     if (now?.status === 'pending') throw new PayError(409, answerRefusal(now, who) || 'Someone else has taken this check over in QA Requests.');
-    const said = { fixed: 'already confirmed as fixed', not_fixed: 'already reported as not fixed', staff_approved: 'already approved by staff', cancelled: 'no longer waiting on a check' };
-    throw new PayError(409, `This fix was ${said[now?.status] || 'already answered'}.`);
+    throw new PayError(409, alreadyAnswered(now?.status));
   }
   return { check: await getCheck(prisma, checkId), settings };
+}
+
+function alreadyAnswered(status) {
+  const said = { fixed: 'already confirmed as fixed', not_fixed: 'already reported as not fixed', staff_approved: 'already approved by staff', cancelled: 'no longer waiting on a check' };
+  return `This fix was ${said[status] || 'already answered'}.`;
 }
 
 // The check's message could not be posted because the report's post is gone
@@ -733,7 +777,7 @@ module.exports = {
   MAX_TEAMMATES, listTeam, addTeammate, removeTeammate, splitAmount,
   getSettings, saveSettings,
   listPeriods, getPeriod, createPeriod, updatePeriod, deletePeriod, markPaid, reopenPeriod,
-  summarize, periodSummary, testerStats,
+  summarize, periodSummary, previewPrices, MAX_PREVIEW_PERIODS, testerStats,
   getCheck, pendingCheck, listChecks, onStatusChange, respond, answerRefusal, cancelUnreachable,
   TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take, heldCheck, releaseClaims,
 };
