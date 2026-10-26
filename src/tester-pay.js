@@ -101,6 +101,8 @@ async function ensureTables(prisma) {
       "addedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY ("reportId", "discordUserId")
     )`);
+  // The summary looks reports up in the history by action (accepted, resolved); the table had no index.
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ReportHistory_action_report_idx" ON "ReportHistory"("action", "reportId", "createdAt")`);
   // The summary reads these; they are added elsewhere only when credit is first used.
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUserId" TEXT`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUser" TEXT`);
@@ -295,12 +297,16 @@ async function summarize(prisma, { from, to }) {
   const settings = await getSettings(prisma);
   const { rates } = settings;
 
+  // The accepted dates in one pass over the history, not one lookup per report.
   const reports = await prisma.$queryRawUnsafe(`
+    WITH accepted AS (
+      SELECT h."reportId", MIN(h."createdAt") AS at FROM "ReportHistory" h WHERE h.action = 'Report accepted' GROUP BY h."reportId"
+    )
     SELECT * FROM (
       SELECT r.id, r.title, r.type::text AS type, r."bugLevel"::text AS "bugLevel", r.status::text AS status,
         r."discordUserId", r."discordUser", r."creditedDiscordUserId", r."creditedDiscordUser",
-        COALESCE((SELECT MIN(h."createdAt") FROM "ReportHistory" h WHERE h."reportId" = r.id AND h.action = 'Report accepted'), r."createdAt") AS "acceptedAt"
-      FROM "Report" r
+        COALESCE(a.at, r."createdAt") AS "acceptedAt"
+      FROM "Report" r LEFT JOIN accepted a ON a."reportId" = r.id
       WHERE r.type::text IN ('bug', 'crash') AND r.queued = false AND r.status::text <> 'declined'
     ) x
     WHERE x."acceptedAt" >= $1::date AND x."acceptedAt" < ($2::date + 1)
