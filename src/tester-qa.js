@@ -17,12 +17,18 @@ const TESTER_CHECK_COLUMN = `(
   FROM "ReportQaCheck" c WHERE c."reportId" = r.id ORDER BY c."requestedAt" DESC LIMIT 1
 ) AS "testerCheck"`;
 
+// The teammates the reporter added with /team, as a column for the report queries.
+const TEAM_COLUMN = `(
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('discordUserId', t."discordUserId", 'discordUser', t."discordUser") ORDER BY t."addedAt"), '[]'::jsonb)
+  FROM "ReportTeammate" t WHERE t."reportId" = r.id
+) AS team`;
+
 async function fetchReport(prisma, id) {
   await pay.ensureTables(prisma);
   await tickets.ensureTables(prisma);
   await require('./dev-tags').ensureColumn(prisma);
   const rows = await prisma.$queryRawUnsafe(`
-    SELECT r.*, ${TESTER_CHECK_COLUMN}, ${tickets.TICKET_COLUMN},
+    SELECT r.*, ${TESTER_CHECK_COLUMN}, ${TEAM_COLUMN}, ${tickets.TICKET_COLUMN},
       COALESCE(json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email)) FILTER (WHERE u.id IS NOT NULL), '[]') AS assignees,
       COALESCE(json_agg(DISTINCT jsonb_build_object('id', a.id, 'type', a.type, 'url', a.url, 'filename', a.filename)) FILTER (WHERE a.id IS NOT NULL), '[]') AS attachments
     FROM "Report" r
@@ -123,4 +129,4 @@ async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, ve
   return { check, autoResolved, reportTitle: report?.title || null };
 }
 
-module.exports = { TESTER_CHECK_COLUMN, fetchReport, afterStatusChange, applyAnswer, markQaFail };
+module.exports = { TESTER_CHECK_COLUMN, TEAM_COLUMN, fetchReport, afterStatusChange, applyAnswer, markQaFail };

@@ -6,6 +6,9 @@
 //               and click Fixed or Not fixed. Every check is kept. One left
 //               unanswered is opened up in QA Requests, where anyone can
 //               take it and answer it in that thread instead.
+//   Teams       the reporter can add the people who helped find a bug (a
+//               multiplayer bug needs more than one player); the report's
+//               pay is split between them instead of paid to each.
 //   Payouts     pay periods and a price per accepted report (by bug level),
 //               per fix a tester confirmed, and per report QA staff approved
 //               on the dashboard, so what everyone is owed for a period is one query.
@@ -88,6 +91,16 @@ async function ensureTables(prisma) {
     '"takenByDiscordUserId" TEXT', '"takenBy" TEXT', '"takenAt" TIMESTAMP(3)', '"answeredByDiscordUserId" TEXT', '"answeredBy" TEXT']) {
     await prisma.$executeRawUnsafe(`ALTER TABLE "ReportQaCheck" ADD COLUMN IF NOT EXISTS ${column}`);
   }
+  // Teammates the reporter added with /team; the report's pay is split between them and the reporter.
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "ReportTeammate" (
+      "reportId" TEXT NOT NULL,
+      "discordUserId" TEXT NOT NULL,
+      "discordUser" TEXT,
+      "addedBy" TEXT,
+      "addedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY ("reportId", "discordUserId")
+    )`);
   // The summary reads these; they are added elsewhere only when credit is first used.
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUserId" TEXT`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "creditedDiscordUser" TEXT`);
@@ -221,6 +234,51 @@ async function reopenPeriod(prisma, id) {
   return getPeriod(prisma, id);
 }
 
+// ── teams ────────────────────────────────────────────────────────────────────
+
+// Up to this many people besides the reporter; a report split further than
+// that is worth little to anyone.
+const MAX_TEAMMATES = 5;
+
+async function listTeam(prisma, reportId) {
+  await ensureTables(prisma);
+  return prisma.$queryRawUnsafe(
+    `SELECT "discordUserId", "discordUser", "addedBy", "addedAt" FROM "ReportTeammate" WHERE "reportId" = $1 ORDER BY "addedAt"`, reportId);
+}
+
+async function addTeammate(prisma, reportId, { discordUserId, discordUser, addedBy }) {
+  await ensureTables(prisma);
+  const rows = await prisma.$queryRawUnsafe(`SELECT id, type::text AS type, "discordUserId" FROM "Report" WHERE id = $1`, reportId);
+  if (!rows.length) throw new PayError(404, 'No DevTrack report found for this post.');
+  if (!['bug', 'crash'].includes(rows[0].type)) throw new PayError(400, 'Only bug reports have teams.');
+  const who = String(discordUserId || '');
+  if (!who) throw new PayError(400, 'Say who to add.');
+  if (who === rows[0].discordUserId) throw new PayError(400, 'That is the reporter, who is on the team already.');
+  const team = await listTeam(prisma, reportId);
+  if (team.some(m => m.discordUserId === who)) throw new PayError(409, 'They are on this report\'s team already.');
+  if (team.length >= MAX_TEAMMATES) throw new PayError(400, `A report can have up to ${MAX_TEAMMATES} teammates besides the reporter.`);
+  await prisma.$executeRawUnsafe(`
+    INSERT INTO "ReportTeammate" ("reportId", "discordUserId", "discordUser", "addedBy") VALUES ($1, $2, $3, $4)
+    ON CONFLICT DO NOTHING`, reportId, who, String(discordUser || '').slice(0, 100) || null, String(addedBy || '').slice(0, 100) || null);
+  return listTeam(prisma, reportId);
+}
+
+async function removeTeammate(prisma, reportId, discordUserId) {
+  await ensureTables(prisma);
+  const removed = await prisma.$executeRawUnsafe(
+    `DELETE FROM "ReportTeammate" WHERE "reportId" = $1 AND "discordUserId" = $2`, reportId, String(discordUserId || ''));
+  if (!removed) throw new PayError(404, 'They are not on this report\'s team.');
+  return listTeam(prisma, reportId);
+}
+
+// An amount split n ways to the cent; the first shares take any odd cents,
+// so the shares always add up to the amount.
+function splitAmount(amount, n) {
+  const cents = Math.round((Number(amount) || 0) * 100);
+  const base = Math.floor(cents / n);
+  return Array.from({ length: n }, (_, i) => (base + (i < cents - base * n ? 1 : 0)) / 100);
+}
+
 // ── what is owed ─────────────────────────────────────────────────────────────
 
 // from / to are calendar dates (UTC), both included.
@@ -229,7 +287,8 @@ async function reopenPeriod(prisma, id) {
 // in, and only while it is still accepted: a report declined later drops
 // out. Bugs and crashes only. A confirmed fix counts in the period the
 // tester confirmed it, once per report, and is paid to whoever did the
-// check: the reporter, or the person who took it in QA Requests.
+// check: the reporter, or the person who took it in QA Requests. A report
+// with a team is split evenly between the reporter and the teammates.
 async function summarize(prisma, { from, to }) {
   if (!isDate(from) || !isDate(to)) throw new PayError(400, 'Give a start and an end date');
   if (to < from) throw new PayError(400, 'The end date is before the start date');
@@ -246,6 +305,17 @@ async function summarize(prisma, { from, to }) {
     ) x
     WHERE x."acceptedAt" >= $1::date AND x."acceptedAt" < ($2::date + 1)
     ORDER BY x."acceptedAt"`, from, to);
+
+  const teams = new Map();
+  if (reports.length) {
+    const members = await prisma.$queryRawUnsafe(
+      `SELECT "reportId", "discordUserId", "discordUser" FROM "ReportTeammate" WHERE "reportId" = ANY($1::text[]) ORDER BY "addedAt"`,
+      reports.map(r => r.id));
+    for (const m of members) {
+      if (!teams.has(m.reportId)) teams.set(m.reportId, []);
+      teams.get(m.reportId).push({ discordUserId: m.discordUserId, discordUser: m.discordUser });
+    }
+  }
 
   const fixes = await prisma.$queryRawUnsafe(`
     SELECT * FROM (
@@ -291,7 +361,7 @@ async function summarize(prisma, { from, to }) {
     if (!testers.has(key)) {
       testers.set(key, {
         key, discordUserId: id || null, name: name || 'Unknown',
-        levels: Object.fromEntries(BUG_LEVELS.map(l => [l, 0])), noLevel: 0, credited: 0, reports: 0,
+        levels: Object.fromEntries(BUG_LEVELS.map(l => [l, 0])), noLevel: 0, credited: 0, shared: 0, reports: 0,
         verifiedFixes: 0, reportsAmount: 0, fixesAmount: 0, total: 0,
       });
     }
@@ -299,19 +369,28 @@ async function summarize(prisma, { from, to }) {
     if (name && t.name === 'Unknown') t.name = name;
     return t;
   };
-  const count = (t, report, asCredit) => {
-    const level = BUG_LEVELS.includes(report.bugLevel) ? report.bugLevel : null;
+  const levelOf = report => (BUG_LEVELS.includes(report.bugLevel) ? report.bugLevel : null);
+  const count = (t, report, { asCredit = false, shared = false, amount }) => {
+    const level = levelOf(report);
     if (level) t.levels[level]++; else t.noLevel++;
     t.reports++;
     if (asCredit) t.credited++;
-    t.reportsAmount = money(t.reportsAmount + (level ? rates[level] : 0));
+    if (shared) t.shared++;
+    t.reportsAmount = money(t.reportsAmount + amount);
   };
 
   for (const r of reports) {
-    count(tester(r.discordUserId, r.discordUser), r, false);
+    const price = levelOf(r) ? rates[levelOf(r)] : 0;
+    const team = teams.get(r.id) || [];
+    const shares = splitAmount(price, team.length + 1);
+    r.team = team.map((m, i) => ({ ...m, share: shares[i + 1] }));
+    r.share = shares[0];
+    count(tester(r.discordUserId, r.discordUser), r, { shared: team.length > 0, amount: shares[0] });
+    team.forEach((m, i) => count(tester(m.discordUserId, m.discordUser), r, { shared: true, amount: shares[i + 1] }));
+    // A credited co-finder is paid in full on top, unless they are on the team and already have a share.
     const hasCredit = r.creditedDiscordUserId || r.creditedDiscordUser;
-    const sameAsReporter = r.creditedDiscordUserId && r.creditedDiscordUserId === r.discordUserId;
-    if (settings.payCredited && hasCredit && !sameAsReporter) count(tester(r.creditedDiscordUserId, r.creditedDiscordUser), r, true);
+    const alreadyPaid = r.creditedDiscordUserId && (r.creditedDiscordUserId === r.discordUserId || team.some(m => m.discordUserId === r.creditedDiscordUserId));
+    if (settings.payCredited && hasCredit && !alreadyPaid) count(tester(r.creditedDiscordUserId, r.creditedDiscordUser), r, { asCredit: true, amount: price });
   }
   for (const f of fixes) {
     const t = tester(f.discordUserId, f.discordUser);
@@ -350,6 +429,57 @@ async function periodSummary(prisma, id) {
   const { snapshot, ...rest } = period;
   if (period.paidAt && snapshot) return { period: rest, frozen: true, ...snapshot };
   return { period: rest, frozen: false, ...(await summarize(prisma, { from: period.startsOn, to: period.endsOn })) };
+}
+
+// One tester's own numbers, for /leaderboard in Discord (only they see it):
+// what they filed and how it went, what it has earned at today's prices,
+// what was paid in periods marked paid, what has come in since the last of
+// those ended, and where they rank among testers by accepted reports.
+async function testerStats(prisma, discordUserId, { today = new Date().toISOString().slice(0, 10) } = {}) {
+  await ensureTables(prisma);
+  const who = String(discordUserId || '');
+  const [filed] = await prisma.$queryRawUnsafe(`
+    SELECT COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE queued)::int AS queued,
+      COUNT(*) FILTER (WHERE NOT queued AND status::text NOT IN ('declined', 'resolved'))::int AS active,
+      COUNT(*) FILTER (WHERE NOT queued AND status::text = 'resolved')::int AS resolved,
+      COUNT(*) FILTER (WHERE status::text = 'declined')::int AS declined
+    FROM "Report" WHERE "discordUserId" = $1 AND type::text IN ('bug', 'crash')`, who);
+
+  const all = await summarize(prisma, { from: '2000-01-01', to: today });
+  const me = all.testers.find(t => t.discordUserId === who) || null;
+  const rank = me && me.reports ? 1 + all.testers.filter(t => t.reports > me.reports).length : null;
+
+  const periods = await prisma.$queryRawUnsafe(`
+    SELECT name, to_char("endsOn", 'YYYY-MM-DD') AS "endsOn", snapshot FROM "TesterPayPeriod"
+    WHERE "paidAt" IS NOT NULL ORDER BY "endsOn"`);
+  let paid = 0;
+  let paidPeriods = 0;
+  for (const p of periods) {
+    const row = (p.snapshot?.testers || []).find(t => t.discordUserId === who);
+    if (row?.total) { paid = money(paid + row.total); paidPeriods++; }
+  }
+  const lastPaidEnd = periods.length ? periods[periods.length - 1].endsOn : null;
+  let sinceLastPaid = null;
+  if (lastPaidEnd && lastPaidEnd < today) {
+    const from = new Date(Date.parse(`${lastPaidEnd}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    const recent = await summarize(prisma, { from, to: today });
+    sinceLastPaid = { from, amount: recent.testers.find(t => t.discordUserId === who)?.total || 0 };
+  }
+
+  return {
+    currency: all.settings.currency,
+    filed,
+    accepted: me ? me.reports : 0,
+    levels: me ? me.levels : Object.fromEntries(BUG_LEVELS.map(l => [l, 0])),
+    noLevel: me ? me.noLevel : 0,
+    shared: me ? me.shared : 0,
+    credited: me ? me.credited : 0,
+    verifiedFixes: me ? me.verifiedFixes : 0,
+    earned: me ? me.total : 0,
+    paid, paidPeriods, sinceLastPaid,
+    rank, testers: all.testers.filter(t => t.reports > 0).length,
+  };
 }
 
 // ── tester QA checks ─────────────────────────────────────────────────────────
@@ -455,37 +585,58 @@ async function markEscalated(prisma, checkId, { channelId, messageId }) {
 }
 
 // Someone pressed Take this check in QA Requests. It is theirs for
-// TAKE_MINUTES; after that anyone else can take it over, so a check nobody
-// finishes does not stay stuck.
+// TAKE_MINUTES, and nobody else can take it until that runs out, not even the
+// reporter. After it, anyone can take it, the reporter and the last holder
+// included, so a check nobody finishes does not stay stuck.
 async function take(prisma, checkId, { discordUserId, discordUserName }) {
   const check = await getCheck(prisma, checkId);
   if (!check) throw new PayError(404, 'That QA check no longer exists.');
   if (check.status !== 'pending') throw new PayError(409, 'This check has already been answered.');
   if (!check.escalatedAt) throw new PayError(409, 'This check is still waiting on the tester who filed the report.');
-  if (String(discordUserId) === check.discordUserId) throw new PayError(400, 'This is your own report: answer the check in its post.');
+  const who = String(discordUserId);
+  if (heldBy(check) === who) throw new PayError(409, `This check is already yours until ${clock(holdEnds(check))} UTC. Answer it in the report's post.`);
   const taken = await prisma.$executeRawUnsafe(`
     UPDATE "ReportQaCheck" SET "takenByDiscordUserId" = $2, "takenBy" = $3, "takenAt" = CURRENT_TIMESTAMP
-    WHERE id = $1 AND status = 'pending' AND ("takenByDiscordUserId" IS NULL OR "takenByDiscordUserId" = $2
-      OR "takenAt" < NOW() - ($4 * INTERVAL '1 minute'))`,
-    checkId, String(discordUserId), String(discordUserName || '').slice(0, 100) || null, TAKE_MINUTES);
+    WHERE id = $1 AND status = 'pending' AND ("takenByDiscordUserId" IS NULL OR "takenAt" < NOW() - ($4 * INTERVAL '1 minute'))`,
+    checkId, who, String(discordUserName || '').slice(0, 100) || null, TAKE_MINUTES);
   if (!taken) {
     const now = await getCheck(prisma, checkId);
     if (now?.status !== 'pending') throw new PayError(409, 'This check has already been answered.');
-    throw new PayError(409, `${now.takenBy || 'Someone'} is already checking this. If they have not answered ${TAKE_MINUTES} minutes after taking it, it opens up again.`);
+    throw new PayError(409, `${now.takenBy || 'Someone'} is checking this until ${clock(holdEnds(now))} UTC. If they have not answered by then, you can take it.`);
   }
   return getCheck(prisma, checkId);
 }
 
-// The answer. The person who filed the report can give it, or whoever took
-// the check in QA Requests (the latest to take it), once.
+// Who holds a check taken in QA Requests right now: the last person to take
+// it, until TAKE_MINUTES after they took it. Null once that runs out.
+const holdEnds = check => new Date(new Date(check.takenAt).getTime() + TAKE_MINUTES * 60000);
+const heldBy = (check, now = new Date()) =>
+  (check.takenByDiscordUserId && check.takenAt && holdEnds(check) > now ? check.takenByDiscordUserId : null);
+const clock = date => date.toISOString().slice(11, 16);
+
+// Why this person cannot answer the check, or null if they can. Before the
+// check is opened up only the reporter can. Once it is open in QA Requests
+// only whoever holds it can; the reporter too has to press Take this check.
+function answerRefusal(check, discordUserId, now = new Date()) {
+  if (!check) return 'That QA check no longer exists.';
+  const who = String(discordUserId);
+  if (!check.escalatedAt) return who === check.discordUserId ? null : 'Only the tester who filed this report can confirm the fix.';
+  const holder = heldBy(check, now);
+  if (holder === who) return null;
+  if (holder) return `${check.takenBy || 'Someone else'} has taken this check in QA Requests and has it until ${clock(holdEnds(check))} UTC.`;
+  if (who === check.takenByDiscordUserId) return 'Your time on this check ran out. Press Take this check in QA Requests again to get it back.';
+  return 'This check is open in QA Requests: press Take this check there first, then answer it here.';
+}
+
+// The answer, once. Before the check is opened up, from the person who filed
+// the report; after, from whoever holds it in QA Requests.
 async function respond(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl }) {
   const check = await getCheck(prisma, checkId);
   if (!check) throw new PayError(404, 'That QA check no longer exists.');
   const who = String(discordUserId);
-  if (who !== check.discordUserId && who !== check.takenByDiscordUserId) {
-    throw new PayError(403, check.escalatedAt
-      ? 'Take this check in QA Requests first, then answer it here.'
-      : 'Only the tester who filed this report can confirm the fix.');
+  if (check.status === 'pending') {
+    const refusal = answerRefusal(check, who);
+    if (refusal) throw new PayError(403, refusal);
   }
   if (!['fixed', 'not_fixed'].includes(verdict)) throw new PayError(400, 'Unknown answer');
   const settings = await getSettings(prisma);
@@ -501,22 +652,34 @@ async function respond(prisma, checkId, { discordUserId, discordUserName, verdic
   const claimed = await prisma.$executeRawUnsafe(`
     UPDATE "ReportQaCheck" SET status = $2, note = $3, "videoUrl" = $4, "respondedAt" = CURRENT_TIMESTAMP,
       "answeredByDiscordUserId" = $5, "answeredBy" = $6
-    WHERE id = $1 AND status = 'pending' AND ($5 = "discordUserId" OR $5 = "takenByDiscordUserId")`,
-    checkId, verdict, text, video, who, String(discordUserName || '').slice(0, 100) || (who === check.discordUserId ? check.discordUser : check.takenBy));
+    WHERE id = $1 AND status = 'pending' AND (("escalatedAt" IS NULL AND $5 = "discordUserId")
+      OR ("escalatedAt" IS NOT NULL AND $5 = "takenByDiscordUserId" AND "takenAt" >= NOW() - ($7 * INTERVAL '1 minute')))`,
+    checkId, verdict, text, video, who, String(discordUserName || '').slice(0, 100) || (who === check.discordUserId ? check.discordUser : check.takenBy), TAKE_MINUTES);
   if (!claimed) {
     const now = await getCheck(prisma, checkId);
-    if (now?.status === 'pending') throw new PayError(409, `${now.takenBy || 'Someone else'} has taken this check over in QA Requests.`);
+    if (now?.status === 'pending') throw new PayError(409, answerRefusal(now, who) || 'Someone else has taken this check over in QA Requests.');
     const said = { fixed: 'already confirmed as fixed', not_fixed: 'already reported as not fixed', staff_approved: 'already approved by staff', cancelled: 'no longer waiting on a check' };
     throw new PayError(409, `This fix was ${said[now?.status] || 'already answered'}.`);
   }
   return { check: await getCheck(prisma, checkId), settings };
 }
 
+// The check's message could not be posted because the report's post is gone
+// (deleted in Discord). Nobody can answer it there, so it is withdrawn.
+async function cancelUnreachable(prisma, checkId) {
+  await ensureTables(prisma);
+  await prisma.$executeRawUnsafe(`
+    UPDATE "ReportQaCheck" SET status = 'cancelled', "resolvedByName" = 'Discord post deleted', "respondedAt" = CURRENT_TIMESTAMP
+    WHERE id = $1 AND status = 'pending'`, checkId);
+  return getCheck(prisma, checkId);
+}
+
 module.exports = {
   BUG_LEVELS, DEFAULTS, PayError, ensureTables,
+  MAX_TEAMMATES, listTeam, addTeammate, removeTeammate, splitAmount,
   getSettings, saveSettings,
   listPeriods, getPeriod, createPeriod, updatePeriod, deletePeriod, markPaid, reopenPeriod,
-  summarize, periodSummary,
-  getCheck, pendingCheck, listChecks, onStatusChange, respond,
+  summarize, periodSummary, testerStats,
+  getCheck, pendingCheck, listChecks, onStatusChange, respond, answerRefusal, cancelUnreachable,
   TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take,
 };

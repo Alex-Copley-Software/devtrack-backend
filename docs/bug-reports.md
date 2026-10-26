@@ -10,6 +10,46 @@ report pause, tester QA and tester payouts all work in the post.
 While reports are paused a new post is not logged; the poster is told, and
 pinged when reports resume.
 
+## Keeping posts in sync
+
+The bot keeps reports in step with their posts without anyone running
+`/syncreport`:
+
+- **Every 10 minutes** (`FORUM_SYNC_MINUTES`, 0 turns it off) and at startup
+  it looks at every open post in the watched forums and the newest 100
+  archived ones. A post with no report (made while the bot was down, or one
+  that failed to log) gets one, with its replies. Posts older than 14 days
+  (`FORUM_SYNC_DAYS`), posts made while reports were paused, and posts whose
+  report was deleted on the dashboard are left alone. Replies the bot missed
+  while it was down are logged in order; each message is stored with its
+  Discord id, so nothing is logged twice. A post renamed in Discord renames
+  its report.
+- **Editing the opening message** updates the report's description; the old
+  text is kept in the history.
+- **Status messages and QA checks** the backend could not hand to the bot
+  (it restarts on every deploy) wait in an outbox and are sent again, in
+  order, every 30 seconds for up to a day.
+- Files posted in replies are copied to R2, since Discord links expire after
+  about a day.
+
+`/syncreport` is still there for an odd case: it creates a missing report
+straight away, or, in a tracked post, logs any replies the report is
+missing.
+
+## Deleting a post
+
+A forum post can be deleted once you are done with it. The report, its
+conversation, its files and its history stay in DevTrack, and its history
+says the post was deleted. Payouts are unaffected. What is lost is the
+Discord side: status messages for it have nowhere to go, a QA check waiting
+in the post is withdrawn (and taken off QA Requests), and if the report
+later goes back to QA Review the tester cannot be asked, so staff resolve it
+on the dashboard. Proof links from Fixed / Not fixed answers point at the
+Discord message and stop working, though the video or photo itself is still
+in the report's conversation (copied to R2 when it was posted). Dashboard QA
+proof is in R2 and stays.
+Delete posts after the report is resolved, not while it is still in QA.
+
 ## Tester QA in a shared post
 
 Anyone can chat in a forum post, so the QA check belongs to the person who
@@ -47,6 +87,12 @@ post. The bot reads it by name on every forum (each forum has its own tag
 ids), sends it with the new report, updates it whenever the post's tags
 change, and re-reads every post in the watched forums when it starts.
 `DEV_TAG_NAMES` on the bot (comma separated) changes the list of names.
+
+Changing a queued report's status (to Open, In Progress and so on) in the
+report window accepts it, the same as Accept: it leaves the queue, counts as
+accepted for payouts, and its post is tagged and told. A bug or crash needs
+a bug level for that, already set or chosen in the same change; without one
+the change is refused. Only QA, engineers and admins can do it.
 
 On the **Bug Queue** page the tags show on each report, and you can:
 

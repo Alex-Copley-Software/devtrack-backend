@@ -198,7 +198,7 @@ async function fetchReports(whereClauses = [], values = [], extra = '') {
   await devTags.ensureColumn(prisma);
   const where = whereClauses.length ? 'WHERE ' + whereClauses.join(' AND ') : '';
   const sql = `
-    SELECT r.*, ${testerQa.TESTER_CHECK_COLUMN}, ${reportTickets.TICKET_COLUMN},
+    SELECT r.*, ${testerQa.TESTER_CHECK_COLUMN}, ${testerQa.TEAM_COLUMN}, ${reportTickets.TICKET_COLUMN},
       COALESCE(
         json_agg(DISTINCT jsonb_build_object('id', u.id, 'name', u.name, 'email', u.email))
         FILTER (WHERE u.id IS NOT NULL), '[]'
@@ -519,13 +519,27 @@ router.patch('/:id', auth, async (req, res) => {
     const stale = assertFreshReport(existingReport, expectedUpdatedAt);
     if (stale) return res.status(stale.status).json({ ...stale.body, report: existingReport });
 
+    // Giving a report still in the queue a working status (open, in progress...) accepts it, the same
+    // as Accept: it leaves the queue, counts as accepted for payouts and its post is tagged. A bug or
+    // crash needs a bug level for that, already set or sent with the change.
+    const accepting = status !== undefined && existingReport.queued && queued !== true && !['queued', 'declined'].includes(status);
+    if (accepting) {
+      if (!hasRole(req.user, ['admin', 'qa', 'engineer'])) {
+        return res.status(403).json({ error: 'Only QA, engineers and admins can accept a report from the queue' });
+      }
+      const level = bugLevel !== undefined ? bugLevel : existingReport.bugLevel;
+      if (['bug', 'crash'].includes(existingReport.type) && !level) {
+        return res.status(400).json({ error: 'Set a bug level first: changing the status of a queued report accepts it', needsBugLevel: true });
+      }
+    }
+
     const setClauses = [];
     const values     = [];
     let   idx        = 1;
 
     if (status      !== undefined) { setClauses.push(`status = $${idx++}::"Status"`);        values.push(status); }
     // Auto-dequeue when declining
-    if (status === 'declined' && queued === undefined) { setClauses.push(`queued = $${idx++}`); values.push(false); }
+    if ((status === 'declined' || accepting) && queued === undefined) { setClauses.push(`queued = $${idx++}`); values.push(false); }
     if (priority    !== undefined) { setClauses.push(`priority = $${idx++}::"Priority"`);    values.push(priority); }
     if (bugLevel    !== undefined) { setClauses.push(`"bugLevel" = $${idx++}::"BugLevel"`);  values.push(bugLevel === '' ? null : bugLevel); }
     if (category    !== undefined) { setClauses.push(`category = $${idx++}`);                values.push(category === '' ? null : category); }
@@ -562,6 +576,21 @@ router.patch('/:id', auth, async (req, res) => {
     if (!report) return res.status(404).json({ error: 'Report not found' });
 
     // Log history
+    if (accepting) {
+      const assigneeName = Array.isArray(report.assignees) ? report.assignees[0]?.name || null : null;
+      await log({ reportId: id, action: 'accepted', detail: `${report.bugLevel || ''}${assigneeName ? ' → ' + assigneeName : ''} (status set to ${status})`, actorName: req.user.name, actorId: req.user.id });
+      // Awaited so the post says "accepted" before the status message below.
+      await notify({
+        threadId:      report.discordThreadId,
+        reportType:    report.type,
+        action:        'accepted',
+        bugLevel:      report.bugLevel,
+        devNotes:      report.devNotes,
+        discordUserId: report.discordUserId,
+        assigneeName,
+        notifyOwner:   report.notifyOwner,
+      });
+    }
     if (status) {
       await log({ reportId: id, action: status, actorName: req.user.name, actorId: req.user.id });
       // Going into QA Review asks the tester who filed it to confirm the fix;
@@ -713,6 +742,11 @@ router.delete('/:id', auth, requireRole('admin', 'qa', 'engineer'), async (req, 
   try {
     const [report] = await fetchReports(['r.id = $1'], [req.params.id]);
     await prisma.report.delete({ where: { id: req.params.id } });
+    // Remembered so the bot's forum sweep does not log the post again as a missed one.
+    if (report?.discordThreadId) {
+      await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "DeletedReportThread" ("threadId" TEXT PRIMARY KEY, "deletedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+      await prisma.$executeRawUnsafe(`INSERT INTO "DeletedReportThread" ("threadId") VALUES ($1) ON CONFLICT DO NOTHING`, report.discordThreadId);
+    }
     if (report) {
       notify({
         threadId:      report.discordThreadId,

@@ -133,15 +133,17 @@ test('QA Requests: a check left 30 minutes opens up; one person takes it, answer
   assert.deepEqual([escalated.escalationChannelId, escalated.escalationMessageId], ['qa', 'qm']);
   assert.deepEqual(await due(), [], 'posted once');
 
-  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-ana' }), /your own report/);
-  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Take this check in QA Requests first/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /press Take this check there first/);
   const taken = await pay.take(prisma, ask.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
   assert.deepEqual([taken.takenByDiscordUserId, taken.takenBy], ['u-ben', 'Ben']);
-  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy' }), /Ben is already checking this/);
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy' }), /Ben is checking this until/);
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-ana', discordUserName: 'Ana' }), /Ben is checking this until/, 'not even the reporter can take it from him');
+  await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben' }), /already yours/, 'taking it again does not stretch the time');
   // Ben goes quiet: after 30 minutes Cy can take it over, and Ben can no longer answer.
   await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "takenAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, ask.check.id);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /time on this check ran out/);
   await pay.take(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy' });
-  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Take this check/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Cy has taken this check/);
 
   const yes = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
   assert.deepEqual([yes.check.status, yes.check.answeredByDiscordUserId, yes.check.answeredBy], ['fixed', 'u-cy', 'Cy']);
@@ -162,16 +164,38 @@ test('the QA Requests wait: whole minutes from 0 to a day, 30 by default', async
   assert.equal(ask.escalateMinutes, 90, 'the bot is told the wait when it posts a check');
 });
 
-test('the reporter can still answer after the check is opened up, and is paid for it', async () => {
+test('once a check is opened up, the reporter has to take it like anyone else', async () => {
   const { prisma, report } = await createDb();
   const r = await report({ status: 'in_progress' });
   const ask = await pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
   await pay.markEscalated(prisma, ask.check.id, { channelId: 'qa', messageId: 'qm' });
+  const video = { verdict: 'fixed', videoUrl: 'https://x/v.mp4' };
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', ...video }), /press Take this check there first/);
   await pay.take(prisma, ask.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
-  const yes = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', ...video }), /Ben has taken this check/);
+  // Ben's time runs out; the reporter takes it back and answers.
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "takenAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, ask.check.id);
+  await pay.take(prisma, ask.check.id, { discordUserId: 'u-ana', discordUserName: 'Ana' });
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', ...video }), /Ana has taken this check/);
+  const yes = await pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', ...video });
   assert.deepEqual([yes.check.answeredByDiscordUserId, yes.check.answeredBy], ['u-ana', 'Ana']);
-  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /already confirmed as fixed/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', ...video }), /already confirmed as fixed/);
   await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy' }), /already been answered/);
+});
+
+test('answerRefusal says who may answer a check', () => {
+  const now = new Date('2026-10-26T12:00:00Z');
+  const base = { discordUserId: 'u-ana', escalatedAt: null, takenByDiscordUserId: null, takenAt: null, takenBy: null };
+  assert.equal(pay.answerRefusal(base, 'u-ana', now), null);
+  assert.match(pay.answerRefusal(base, 'u-ben', now), /Only the tester/);
+  const open = { ...base, escalatedAt: '2026-10-26T11:00:00Z' };
+  assert.match(pay.answerRefusal(open, 'u-ana', now), /Take this check there first/);
+  const held = { ...open, takenByDiscordUserId: 'u-ben', takenBy: 'Ben', takenAt: new Date('2026-10-26T11:45:00Z') };
+  assert.equal(pay.answerRefusal(held, 'u-ben', now), null);
+  assert.match(pay.answerRefusal(held, 'u-ana', now), /Ben has taken this check .* until 12:15 UTC/);
+  const lapsed = { ...held, takenAt: new Date('2026-10-26T11:20:00Z') };
+  assert.match(pay.answerRefusal(lapsed, 'u-ben', now), /ran out/);
+  assert.match(pay.answerRefusal(lapsed, 'u-ana', now), /Take this check there first/);
 });
 
 test('staff resolving first approves the check without paying; leaving review any other way withdraws it', async () => {
@@ -310,3 +334,51 @@ test('QA staff are paid once per report they approved on the dashboard, from the
   assert.equal(s.totals.total, testersTotal + 6);
 });
 
+
+test('a report with a team is split between the reporter and the teammates, to the cent', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { rates: RATES });
+  const r = await report({ bugLevel: 'moderate' });                       // 5 split three ways
+  await report({ bugLevel: 'major', credited: 'u-cy', creditedName: 'Cy' }); // no team: Cy is paid in full on top
+  await pay.addTeammate(prisma, r.id, { discordUserId: 'u-ben', discordUser: 'Ben', addedBy: 'Ana' });
+  await pay.addTeammate(prisma, r.id, { discordUserId: 'u-cy', discordUser: 'Cy', addedBy: 'Ana' });
+  await assert.rejects(pay.addTeammate(prisma, r.id, { discordUserId: 'u-ben' }), /on this report's team already/);
+  await assert.rejects(pay.addTeammate(prisma, r.id, { discordUserId: 'u-ana' }), /That is the reporter/);
+
+  const s = await pay.summarize(prisma, { from: '2026-10-01', to: '2026-10-07' });
+  const of = name => s.testers.find(t => t.name === name);
+  assert.deepEqual([of('Ana').reportsAmount, of('Ana').shared, of('Ana').reports], [14.17, 1, 2], '1.67 + 12.5');
+  assert.deepEqual([of('Ben').reportsAmount, of('Ben').shared, of('Ben').levels.moderate], [1.67, 1, 1]);
+  assert.deepEqual([of('Cy').reportsAmount, of('Cy').shared, of('Cy').credited], [14.16, 1, 1], '1.66 share + 12.5 credit');
+  assert.equal(s.totals.reportsAmount, 30, 'the split adds up to the price: 5 + 12.5 + 12.5 credited');
+  assert.deepEqual(s.reports.find(x => x.id === r.id).team.map(m => [m.discordUser, m.share]), [['Ben', 1.67], ['Cy', 1.66]]);
+
+  await pay.removeTeammate(prisma, r.id, 'u-cy');
+  await assert.rejects(pay.removeTeammate(prisma, r.id, 'u-cy'), /not on this report's team/);
+  const after = await pay.summarize(prisma, { from: '2026-10-01', to: '2026-10-07' });
+  assert.deepEqual(after.testers.find(t => t.name === 'Ben').reportsAmount, 2.5);
+  for (let i = 0; i < 4; i++) await pay.addTeammate(prisma, r.id, { discordUserId: `u-${i}` });
+  await assert.rejects(pay.addTeammate(prisma, r.id, { discordUserId: 'u-9' }), /up to 5 teammates/);
+});
+
+test('a tester\'s own stats: filed, accepted, earned, paid and rank', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { rates: RATES });
+  await report({ bugLevel: 'major', acceptedAt: '2026-09-10' });
+  await report({ bugLevel: 'minor', acceptedAt: '2026-10-02' });
+  await report({ bugLevel: null, queued: true, status: 'queued', acceptedAt: null });
+  await report({ status: 'declined' });
+  await report({ discordUserId: 'u-ben', discordUser: 'Ben' });
+  await report({ discordUserId: 'u-ben', discordUser: 'Ben' });
+  await report({ discordUserId: 'u-ben', discordUser: 'Ben', status: 'resolved' });
+  const period = await pay.createPeriod(prisma, { name: 'September', startsOn: '2026-09-01', endsOn: '2026-09-30' });
+  await pay.markPaid(prisma, period.id, 'Admin');
+
+  const ana = await pay.testerStats(prisma, 'u-ana', { today: '2026-10-26' });
+  assert.deepEqual(ana.filed, { total: 4, queued: 1, active: 2, resolved: 0, declined: 1 });
+  assert.deepEqual([ana.accepted, ana.levels.major, ana.levels.minor, ana.earned], [2, 1, 1, 14.5]);
+  assert.deepEqual([ana.paid, ana.paidPeriods, ana.sinceLastPaid], [12.5, 1, { from: '2026-10-01', amount: 2 }]);
+  assert.deepEqual([ana.rank, ana.testers], [2, 2], 'Ben has three accepted');
+  const nobody = await pay.testerStats(prisma, 'u-zed', { today: '2026-10-26' });
+  assert.deepEqual([nobody.filed.total, nobody.accepted, nobody.earned, nobody.rank], [0, 0, 0, null]);
+});

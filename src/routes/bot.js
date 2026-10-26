@@ -439,6 +439,18 @@ router.post('/qa-check/:id/escalated', botAuth, async (req, res) => {
   }
 });
 
+// The bot could not post the check because the report's post is gone.
+router.post('/qa-check/:id/unreachable', botAuth, async (req, res) => {
+  try {
+    const check = await testerPay.cancelUnreachable(prisma, req.params.id);
+    if (check) await require('../history-logger').log({ reportId: check.reportId, action: 'tester_qa_unreachable', detail: null, actorName: 'System', actorId: '' });
+    res.json({ check });
+  } catch (err) {
+    console.error('[QA check unreachable]', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
+});
+
 // Someone pressed Take this check in QA Requests.
 router.post('/qa-check/:id/take', botAuth, async (req, res) => {
   try {
@@ -456,7 +468,9 @@ router.get('/qa-check/:id', botAuth, async (req, res) => {
   try {
     const check = await testerPay.getCheck(prisma, req.params.id);
     if (!check) return res.status(404).json({ error: 'That QA check no longer exists.' });
-    res.json({ check, settings: await testerPay.getSettings(prisma) });
+    // With ?discordUserId=, also why that person cannot answer it right now (null if they can).
+    const refusal = req.query.discordUserId && check.status === 'pending' ? testerPay.answerRefusal(check, req.query.discordUserId) : null;
+    res.json({ check, settings: await testerPay.getSettings(prisma), refusal, takeMinutes: testerPay.TAKE_MINUTES });
   } catch (err) {
     res.status(500).json({ error: 'Something went wrong' });
   }
@@ -494,6 +508,109 @@ router.post('/tickets/:channelId/closed', botAuth, ticketRoute(async req =>
 
 router.post('/tickets/:channelId/close-failed', botAuth, ticketRoute(async req =>
   broadcastTicket(await reportTickets.closeFailed(prisma, req.params.channelId, req.body?.error))));
+
+// ── forum sync ───────────────────────────────────────────────────────────────
+// The bot sweeps the report forums every few minutes (forum-sync.js) so posts
+// stay in step without anyone running /syncreport.
+
+let threadDeletedReady = false;
+async function ensureThreadDeleted() {
+  if (threadDeletedReady) return;
+  await prisma.$executeRawUnsafe(`ALTER TABLE "Report" ADD COLUMN IF NOT EXISTS "discordThreadDeletedAt" TIMESTAMP(3)`);
+  threadDeletedReady = true;
+}
+
+// POST /api/bot/thread-sync { threads: [{ threadId, title }] }
+// For each post: its report, and the newest Discord message logged on it, so
+// the bot can log what it missed. skip lists posts with no report that must
+// stay that way: made while reports were paused, or whose report was deleted.
+// A post renamed in Discord renames its report.
+router.post('/thread-sync', botAuth, async (req, res) => {
+  const threads = (Array.isArray(req.body?.threads) ? req.body.threads : []).slice(0, 2000)
+    .filter(t => t && t.threadId).map(t => ({ threadId: String(t.threadId), title: String(t.title || '').trim().slice(0, 300) }));
+  try {
+    await require('./messages').ensureDiscordId();
+    await ensureReportPauseTables();
+    const ids = threads.map(t => t.threadId);
+    const rows = ids.length ? await prisma.$queryRawUnsafe(`
+      SELECT DISTINCT ON (r."discordThreadId") r.id, r."discordThreadId" AS "threadId", r.title,
+        (SELECT m."discordMessageId" FROM "Message" m WHERE m."reportId" = r.id AND m."discordMessageId" ~ '^[0-9]+$'
+          ORDER BY m."discordMessageId"::numeric DESC LIMIT 1) AS "lastMessageId"
+      FROM "Report" r WHERE r."discordThreadId" = ANY($1::text[])
+      ORDER BY r."discordThreadId", r."createdAt" DESC`, ids) : [];
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "DeletedReportThread" ("threadId" TEXT PRIMARY KEY, "deletedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+    const skip = ids.length ? await prisma.$queryRawUnsafe(`
+      SELECT "threadId" FROM "PausedReportAttempt" WHERE "threadId" = ANY($1::text[])
+      UNION SELECT "threadId" FROM "DeletedReportThread" WHERE "threadId" = ANY($1::text[])`, ids) : [];
+
+    const reports = {};
+    const { log } = require('../history-logger');
+    for (const r of rows) {
+      reports[r.threadId] = { reportId: r.id, lastMessageId: r.lastMessageId || null };
+      const title = threads.find(t => t.threadId === r.threadId)?.title;
+      if (title && title !== r.title) {
+        await prisma.$executeRawUnsafe(`UPDATE "Report" SET title = $2, "updatedAt" = NOW() WHERE id = $1`, r.id, title);
+        await log({ reportId: r.id, action: 'Renamed in Discord', detail: `${r.title} → ${title}`, actorName: 'Discord', actorId: '' });
+        broadcastReport('report.updated', await testerQa.fetchReport(prisma, r.id));
+      }
+    }
+    res.json({ reports, skip: skip.map(p => p.threadId) });
+  } catch (err) {
+    console.error('[Thread sync]', err.message);
+    res.status(500).json({ error: 'Sync failed' });
+  }
+});
+
+// POST /api/bot/report-description { threadId, description }
+// The opening message of a post was edited.
+router.post('/report-description', botAuth, async (req, res) => {
+  const { threadId, description } = req.body || {};
+  const text = String(description || '').trim();
+  if (!threadId || !text) return res.status(400).json({ error: 'threadId and description are required' });
+  try {
+    const rows = await prisma.$queryRawUnsafe(`SELECT id, description FROM "Report" WHERE "discordThreadId" = $1`, String(threadId));
+    for (const r of rows) {
+      if (r.description === text) continue;
+      await prisma.$executeRawUnsafe(`UPDATE "Report" SET description = $2, "updatedAt" = NOW() WHERE id = $1`, r.id, text);
+      await require('../history-logger').log({ reportId: r.id, action: 'Description edited in Discord', detail: `Previous:\n${r.description}`, actorName: 'Discord', actorId: '' });
+      broadcastReport('report.updated', await testerQa.fetchReport(prisma, r.id));
+    }
+    res.json({ success: true, changed: rows.length });
+  } catch (err) {
+    console.error('[Report description]', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
+});
+
+// POST /api/bot/thread-deleted { threadId }
+// The report's forum post was deleted in Discord. The report stays as it is;
+// a QA check waiting in the post is withdrawn, since nobody can answer it
+// there, and the bot is told so it can take it off QA Requests.
+router.post('/thread-deleted', botAuth, async (req, res) => {
+  const threadId = String(req.body?.threadId || '');
+  if (!threadId) return res.status(400).json({ error: 'threadId is required' });
+  try {
+    await ensureThreadDeleted();
+    await testerPay.ensureTables(prisma);
+    const rows = await prisma.$queryRawUnsafe(`SELECT id FROM "Report" WHERE "discordThreadId" = $1 AND "discordThreadDeletedAt" IS NULL`, threadId);
+    const checks = [];
+    const { log } = require('../history-logger');
+    for (const { id } of rows) {
+      await prisma.$executeRawUnsafe(`UPDATE "Report" SET "discordThreadDeletedAt" = NOW() WHERE id = $1`, id);
+      await log({ reportId: id, action: 'Discord post deleted', detail: null, actorName: 'Discord', actorId: '' });
+      const pending = await testerPay.pendingCheck(prisma, id);
+      if (pending) {
+        checks.push(await testerPay.cancelUnreachable(prisma, pending.id));
+        await log({ reportId: id, action: 'tester_qa_unreachable', detail: null, actorName: 'System', actorId: '' });
+      }
+      broadcastReport('report.updated', await testerQa.fetchReport(prisma, id));
+    }
+    res.json({ reports: rows.map(r => r.id), checks });
+  } catch (err) {
+    console.error('[Thread deleted]', err.message);
+    res.status(500).json({ error: 'Could not save' });
+  }
+});
 
 // GET /api/bot/report-by-thread/:threadId
 router.get('/report-by-thread/:threadId', botAuth, async (req, res) => {
@@ -546,6 +663,53 @@ router.get('/reports', botAuth, async (req, res) => {
     res.status(500).json({ error: 'Could not fetch reports' });
   }
 });
+
+// ── teams (/team in Discord) ─────────────────────────────────────────────────
+// The reporter adds the people who helped find a bug; its pay is split
+// between them. The bot checks who may change a team; so does this, unless
+// the bot says a server admin did it.
+
+const teamRoute = fn => async (req, res) => {
+  try {
+    res.json(await fn(req));
+  } catch (err) {
+    if (err instanceof testerPay.PayError) return res.status(err.status).json({ error: err.message });
+    console.error('[Team]', err.message);
+    res.status(500).json({ error: 'Something went wrong. Try again in a moment.' });
+  }
+};
+
+async function assertTeamOwner(req) {
+  if (req.body?.asAdmin) return;
+  const rows = await prisma.$queryRawUnsafe(`SELECT "discordUserId" FROM "Report" WHERE id = $1`, req.params.id);
+  if (!rows.length) throw new testerPay.PayError(404, 'No DevTrack report found for this post.');
+  if (String(req.body?.actorDiscordUserId || '') !== rows[0].discordUserId) {
+    throw new testerPay.PayError(403, 'Only the person who posted this report can change its team.');
+  }
+}
+
+router.get('/report/:id/team', botAuth, teamRoute(async req => ({ team: await testerPay.listTeam(prisma, req.params.id) })));
+
+router.post('/report/:id/team', botAuth, teamRoute(async req => {
+  await assertTeamOwner(req);
+  const { discordUserId, discordUser, actorDiscordUser } = req.body || {};
+  const team = await testerPay.addTeammate(prisma, req.params.id, { discordUserId, discordUser, addedBy: actorDiscordUser });
+  await require('../history-logger').log({ reportId: req.params.id, action: 'teammate_added', detail: discordUser || discordUserId, actorName: actorDiscordUser || 'Discord', actorId: '' });
+  broadcastReport('report.updated', await testerQa.fetchReport(prisma, req.params.id));
+  return { team };
+}));
+
+router.post('/report/:id/team/remove', botAuth, teamRoute(async req => {
+  await assertTeamOwner(req);
+  const { discordUserId, discordUser, actorDiscordUser } = req.body || {};
+  const team = await testerPay.removeTeammate(prisma, req.params.id, discordUserId);
+  await require('../history-logger').log({ reportId: req.params.id, action: 'teammate_removed', detail: discordUser || discordUserId, actorName: actorDiscordUser || 'Discord', actorId: '' });
+  broadcastReport('report.updated', await testerQa.fetchReport(prisma, req.params.id));
+  return { team };
+}));
+
+// /leaderboard in Discord: one tester's own numbers.
+router.get('/tester-stats/:discordUserId', botAuth, teamRoute(async req => testerPay.testerStats(prisma, req.params.discordUserId)));
 
 // POST /api/bot/report/:id/credit — the report owner attaches another
 // Discord user as a co-finder, so that person's leaderboard count also

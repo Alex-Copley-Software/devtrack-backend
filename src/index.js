@@ -93,5 +93,8 @@ app.listen(PORT, () => {
   console.log(`DevTrack API running on http://localhost:${PORT}`);
 });
 
+// Sends the bot what it missed while it was restarting (see discord-notifier.js).
+require('./discord-notifier').startOutbox();
+
 // No-op unless ASSETS_ENABLED and ASSET_SHEET_EXPORT are both true.
 require('./assets/sheets/exporter').startNightlyExport();

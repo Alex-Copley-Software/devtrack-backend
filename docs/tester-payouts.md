@@ -24,7 +24,7 @@ fixed** buttons.
 
 Only the tester who filed the report can answer, and only once per request,
 until the request has waited 30 minutes (or whatever `/qadelay` is set to). Then it opens up in QA Requests
-(below). A report that comes back to QA Review after a "Not fixed" gets a new request.
+(below), and from then on the reporter can only answer by taking it there like anyone else. A report that comes back to QA Review after a "Not fixed" gets a new request.
 Reports with no Discord thread or reporter (imports, manual entries) and
 suggestions are skipped. Every request and answer is kept in the **Tester QA
 log** on the payouts page.
@@ -43,13 +43,15 @@ straight away to checks already waiting, and needs no restart.
 
 - **Take this check** makes it that person's for 30 minutes. They are sent a
   link to the check message, and the QA Requests post and the report's post
-  both say who has it. Nobody else can take it in that time; after it,
-  anyone can take it over, and the last person to take it is the one who can
-  answer.
+  both say who has it and until when.
+- While they hold it nobody else can take it or answer it, the reporter
+  included. Pressing Take again does not stretch their time.
+- When the 30 minutes are up they can no longer answer. Anyone can take it
+  then: someone new, the reporter, or the same person again if nobody else
+  got there first.
 - They answer in the report's post exactly as the reporter would: their own
   video or photo posted there, then Fixed or Not fixed. Somebody else's
   upload never counts as their proof.
-- The reporter can still answer at any point until someone does.
 - When the check ends (answered, approved by staff, withdrawn) the QA
   Requests post is deleted, so the channel only shows checks still waiting.
   The outcome is recorded in the report's post.
@@ -81,8 +83,12 @@ What counts:
   counting.
 - A report accepted without a bug level counts for nothing until a level is
   set; it is flagged in the table.
-- A credited co-finder (`/credit`) is paid as well as the reporter, unless
-  *Pay credited co-finders* is switched off.
+- A report with a team (`/team`, below) is split evenly between the reporter
+  and the teammates, to the cent (any odd cent goes to the reporter first).
+  The payouts table marks those as *shared*.
+- A credited co-finder (`/credit`) is paid in full as well as the reporter,
+  unless *Pay credited co-finders* is switched off, or they are on the team
+  and already have a share.
 - A confirmed fix is paid once per report, to whoever confirmed it (the
   reporter, or the person who took it in QA Requests), in the period they
   confirmed it. The report itself is still paid to the reporter.
@@ -94,6 +100,24 @@ What counts:
   afterwards stops counting. Engineers, admins and owners are not paid for
   resolving. QA staff have their own table under the testers, and the total
   owed includes them.
+
+## Teams: splitting a report's pay
+
+A multiplayer bug often takes several testers to find. In the report's
+forum post the reporter runs `/team add user:@someone` (up to 5 people);
+`/team remove` takes someone off and `/team list` shows the team. Server
+moderators (Manage Threads) can change any report's team. The report's pay
+is then split between the reporter and the team instead of each being paid
+for it. Each teammate also counts the report on the dashboard leaderboard.
+
+## /leaderboard
+
+Any tester can run `/leaderboard` in Discord to see their own numbers; only
+they see the reply: reports filed (queued, being worked on, resolved,
+declined), accepted reports by level, shared and credited ones, fixes they
+confirmed, what it has all earned at today's prices, what was paid in
+periods marked paid, what has come in since the last paid period ended, and
+their rank among testers by accepted reports.
 
 ## Rules (Prices and rules tab)
 
