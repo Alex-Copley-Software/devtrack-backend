@@ -29,6 +29,7 @@ const ACTION_LABELS = {
   tester_not_fixed: 'Tester says it is not fixed',
   tester_qa_escalated: 'QA check opened up in QA Requests',
   tester_qa_taken: 'QA check taken in QA Requests',
+  tester_qa_released: 'QA check handed back to QA Requests',
   tester_qa_unreachable: 'QA check withdrawn: the Discord post is gone',
   qa_failed: 'Failed QA, sent back to In Progress',
   ticket_opened: 'Ticket opened',

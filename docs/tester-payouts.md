@@ -49,6 +49,14 @@ straight away to checks already waiting, and needs no restart.
 - When the 30 minutes are up they can no longer answer. Anyone can take it
   then: someone new, the reporter, or the same person again if nobody else
   got there first.
+- **One QA Request at a time.** Nobody can take a second while they hold
+  one; they are told which one they have. Once they answer it (or their 30
+  minutes run out) they can take another. Checks on their own reports, before
+  those open up in QA Requests, do not count: a tester can have any number of
+  those waiting.
+- On October 26, 2026, when the one-at-a-time rule came in, every claim was
+  handed back once so everyone takes them again under it. Anyone who was in
+  the middle of a check was pinged in its post to take it again.
 - They answer in the report's post exactly as the reporter would: their own
   video or photo posted there, then Fixed or Not fixed. Somebody else's
   upload never counts as their proof.

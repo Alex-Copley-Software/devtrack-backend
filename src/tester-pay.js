@@ -600,6 +600,9 @@ async function markEscalated(prisma, checkId, { channelId, messageId }) {
 // TAKE_MINUTES, and nobody else can take it until that runs out, not even the
 // reporter. After it, anyone can take it, the reporter and the last holder
 // included, so a check nobody finishes does not stay stuck.
+// One QA Request at a time: nobody can take another while they hold one,
+// until they answer it or their time on it runs out. Checks on their own
+// reports, before those are opened up, do not count.
 async function take(prisma, checkId, { discordUserId, discordUserName }) {
   const check = await getCheck(prisma, checkId);
   if (!check) throw new PayError(404, 'That QA check no longer exists.');
@@ -607,16 +610,55 @@ async function take(prisma, checkId, { discordUserId, discordUserName }) {
   if (!check.escalatedAt) throw new PayError(409, 'This check is still waiting on the tester who filed the report.');
   const who = String(discordUserId);
   if (heldBy(check) === who) throw new PayError(409, `This check is already yours until ${clock(holdEnds(check))} UTC. Answer it in the report's post.`);
+  const refuseSecond = held => new PayError(409, `You already have a QA Request: **${held.title || 'a report'}** <#${held.threadId}>, until ${clock(holdEnds(held))} UTC. `
+    + 'Answer that one first (or wait for your time on it to run out), then you can take another.');
+  const held = await heldCheck(prisma, who, checkId);
+  if (held) throw refuseSecond(held);
   const taken = await prisma.$executeRawUnsafe(`
     UPDATE "ReportQaCheck" SET "takenByDiscordUserId" = $2, "takenBy" = $3, "takenAt" = CURRENT_TIMESTAMP
-    WHERE id = $1 AND status = 'pending' AND ("takenByDiscordUserId" IS NULL OR "takenAt" < NOW() - ($4 * INTERVAL '1 minute'))`,
+    WHERE id = $1 AND status = 'pending' AND ("takenByDiscordUserId" IS NULL OR "takenAt" < NOW() - ($4 * INTERVAL '1 minute'))
+      AND NOT EXISTS (SELECT 1 FROM "ReportQaCheck" o WHERE o.id <> $1 AND o.status = 'pending' AND o."escalatedAt" IS NOT NULL
+        AND o."takenByDiscordUserId" = $2 AND o."takenAt" >= NOW() - ($4 * INTERVAL '1 minute'))`,
     checkId, who, String(discordUserName || '').slice(0, 100) || null, TAKE_MINUTES);
   if (!taken) {
     const now = await getCheck(prisma, checkId);
     if (now?.status !== 'pending') throw new PayError(409, 'This check has already been answered.');
+    const other = await heldCheck(prisma, who, checkId);
+    if (other) throw refuseSecond(other);
     throw new PayError(409, `${now.takenBy || 'Someone'} is checking this until ${clock(holdEnds(now))} UTC. If they have not answered by then, you can take it.`);
   }
   return getCheck(prisma, checkId);
+}
+
+// The QA Request this person holds right now, other than exceptId, or null.
+async function heldCheck(prisma, discordUserId, exceptId = '') {
+  const rows = await prisma.$queryRawUnsafe(`
+    SELECT ${CHECK_FIELDS}, r.title FROM "ReportQaCheck" c JOIN "Report" r ON r.id = c."reportId"
+    WHERE c.id <> $2 AND c.status = 'pending' AND c."escalatedAt" IS NOT NULL
+      AND c."takenByDiscordUserId" = $1 AND c."takenAt" >= NOW() - ($3 * INTERVAL '1 minute')
+    ORDER BY c."takenAt" DESC LIMIT 1`, String(discordUserId), String(exceptId), TAKE_MINUTES);
+  return rows[0] || null;
+}
+
+// Hands every QA Request back: nobody holds one, and anyone can take them
+// again. With once, only the first call with that key does anything, so a
+// release run when the bot starts happens one time only. Returns the checks
+// released, each with whether its hold was still running.
+async function releaseClaims(prisma, { once } = {}) {
+  await ensureTables(prisma);
+  if (once) {
+    const first = await prisma.$executeRawUnsafe(`
+      INSERT INTO "TesterPaySetting" ("key", "value") VALUES ($1, $2::jsonb) ON CONFLICT ("key") DO NOTHING`,
+    `release-claims:${once}`, JSON.stringify({ at: new Date().toISOString() }));
+    if (!first) return { released: [], skipped: true };
+  }
+  const released = await prisma.$queryRawUnsafe(`
+    UPDATE "ReportQaCheck" c SET "takenByDiscordUserId" = NULL, "takenBy" = NULL, "takenAt" = NULL
+    FROM (SELECT id, "takenByDiscordUserId" AS holder, "takenAt" >= NOW() - ($1 * INTERVAL '1 minute') AS active
+          FROM "ReportQaCheck" WHERE status = 'pending' AND "takenByDiscordUserId" IS NOT NULL) old
+    WHERE c.id = old.id
+    RETURNING c.id, c."reportId", c."threadId", c."escalationChannelId", c."escalationMessageId", old.holder, old.active`, TAKE_MINUTES);
+  return { released, skipped: false };
 }
 
 // Who holds a check taken in QA Requests right now: the last person to take
@@ -693,5 +735,5 @@ module.exports = {
   listPeriods, getPeriod, createPeriod, updatePeriod, deletePeriod, markPaid, reopenPeriod,
   summarize, periodSummary, testerStats,
   getCheck, pendingCheck, listChecks, onStatusChange, respond, answerRefusal, cancelUnreachable,
-  TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take,
+  TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take, heldCheck, releaseClaims,
 };

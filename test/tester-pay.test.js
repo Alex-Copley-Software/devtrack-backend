@@ -183,6 +183,61 @@ test('once a check is opened up, the reporter has to take it like anyone else', 
   await assert.rejects(pay.take(prisma, ask.check.id, { discordUserId: 'u-cy' }), /already been answered/);
 });
 
+test('one QA Request at a time: a second waits until the first is answered or runs out; own checks do not count', async () => {
+  const { prisma, report } = await createDb();
+  const open = async (fields = {}) => {
+    const r = await report({ status: 'in_progress', ...fields });
+    const ask = await pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
+    return { r, id: ask.check.id };
+  };
+  const a = await open({ title: 'Lobby door' });
+  const b = await open();
+  const c = await open();
+  const bensOwn = await open({ discordUserId: 'u-ben', discordUser: 'Ben' }); // Ben's own report, not opened up
+  for (const x of [a, b, c]) await pay.markEscalated(prisma, x.id, { channelId: 'qa', messageId: `qm-${x.id}` });
+
+  await pay.take(prisma, a.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  await assert.rejects(pay.take(prisma, b.id, { discordUserId: 'u-ben', discordUserName: 'Ben' }), /You already have a QA Request: \*\*Lobby door\*\*/);
+  assert.equal((await pay.getCheck(prisma, b.id)).takenByDiscordUserId, null, 'the second was not taken');
+  await pay.take(prisma, b.id, { discordUserId: 'u-cy', discordUserName: 'Cy' }); // others are not held up
+  // His own report's check is answered as usual while he holds a QA Request.
+  const own = await pay.respond(prisma, bensOwn.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
+  assert.equal(own.check.status, 'fixed');
+
+  // Answered: he can take the next.
+  await pay.respond(prisma, a.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
+  await pay.take(prisma, c.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  // Run out: he can take another too.
+  const d = await open();
+  await pay.markEscalated(prisma, d.id, { channelId: 'qa', messageId: 'qm-d' });
+  await assert.rejects(pay.take(prisma, d.id, { discordUserId: 'u-ben' }), /You already have a QA Request/);
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "takenAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, c.id);
+  await pay.take(prisma, d.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  assert.equal((await pay.heldCheck(prisma, 'u-ben')).id, d.id);
+});
+
+test('releasing claims hands every QA Request back, once per key', async () => {
+  const { prisma, report } = await createDb();
+  const ids = [];
+  for (let i = 0; i < 3; i++) {
+    const r = await report({ status: 'in_progress' });
+    const ask = await pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
+    await pay.markEscalated(prisma, ask.check.id, { channelId: 'qa', messageId: `qm${i}` });
+    ids.push(ask.check.id);
+  }
+  await pay.take(prisma, ids[0], { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  await pay.take(prisma, ids[1], { discordUserId: 'u-cy', discordUserName: 'Cy' });
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "takenAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, ids[1]);
+
+  const first = await pay.releaseClaims(prisma, { once: 'one-claim' });
+  assert.deepEqual(first.released.map(c => [c.id, c.holder, c.active, c.escalationMessageId]).sort(),
+    [[ids[0], 'u-ben', true, 'qm0'], [ids[1], 'u-cy', false, 'qm1']].sort());
+  for (const id of ids) assert.equal((await pay.getCheck(prisma, id)).takenByDiscordUserId, null);
+  await pay.take(prisma, ids[0], { discordUserId: 'u-cy', discordUserName: 'Cy' }); // free to take again
+  assert.deepEqual(await pay.releaseClaims(prisma, { once: 'one-claim' }), { released: [], skipped: true }, 'a restart does not run it again');
+  assert.equal((await pay.getCheck(prisma, ids[0])).takenByDiscordUserId, 'u-cy');
+});
+
 test('answerRefusal says who may answer a check', () => {
   const now = new Date('2026-10-26T12:00:00Z');
   const base = { discordUserId: 'u-ana', escalatedAt: null, takenByDiscordUserId: null, takenAt: null, takenBy: null };

@@ -464,6 +464,20 @@ router.post('/qa-check/:id/take', botAuth, async (req, res) => {
   }
 });
 
+// Hands every QA Request back so they can be taken again (see releaseClaims).
+router.post('/qa-checks/release-claims', botAuth, async (req, res) => {
+  try {
+    const result = await testerPay.releaseClaims(prisma, { once: req.body?.once ? String(req.body.once) : undefined });
+    for (const check of result.released) {
+      await require('../history-logger').log({ reportId: check.reportId, action: 'tester_qa_released', detail: null, actorName: 'DevTrack (QA Requests reset)', actorId: '' });
+    }
+    res.json(result);
+  } catch (err) {
+    console.error('[QA claims release]', err.message);
+    res.status(500).json({ error: 'Could not release the QA Requests' });
+  }
+});
+
 router.get('/qa-check/:id', botAuth, async (req, res) => {
   try {
     const check = await testerPay.getCheck(prisma, req.params.id);
