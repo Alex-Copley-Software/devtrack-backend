@@ -437,54 +437,60 @@ async function periodSummary(prisma, id) {
   return { period: rest, frozen: false, ...(await summarize(prisma, { from: period.startsOn, to: period.endsOn })) };
 }
 
-// One tester's own numbers, for /leaderboard in Discord (only they see it):
-// what they filed and how it went, what it has earned at today's prices,
-// what was paid in periods marked paid, what has come in since the last of
-// those ended, and where they rank among testers by accepted reports.
+// One tester's own numbers, for /leaderboard in Discord (only they see it),
+// for the pay period set up on the payouts page that covers today: what they
+// filed in it and how that went, what was accepted, what it earns (what was
+// paid, if the period is marked paid) and where they rank among the testers
+// in it. With no period covering today, it is everything since the last paid
+// period ended, or all time if there are no periods. Paid so far is all time.
 async function testerStats(prisma, discordUserId, { today = new Date().toISOString().slice(0, 10) } = {}) {
   await ensureTables(prisma);
   const who = String(discordUserId || '');
+  const periods = await prisma.$queryRawUnsafe(`SELECT ${PERIOD_FIELDS}, snapshot FROM "TesterPayPeriod" ORDER BY "startsOn", "createdAt"`);
+
+  // The open period wins when a paid one overlaps today too; then the latest start.
+  const current = periods.filter(p => p.startsOn <= today && today <= p.endsOn)
+    .sort((a, b) => Number(!a.paidAt) - Number(!b.paidAt) || a.startsOn.localeCompare(b.startsOn)).pop() || null;
+  const lastPaidEnd = periods.filter(p => p.paidAt && p.endsOn < today).map(p => p.endsOn).sort().pop() || null;
+  const dayAfter = d => new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+  const range = current ? { from: current.startsOn, to: current.endsOn }
+    : lastPaidEnd ? { from: dayAfter(lastPaidEnd), to: today }
+      : { from: '2000-01-01', to: today };
+
+  const summary = current?.paidAt && current.snapshot ? current.snapshot : await summarize(prisma, range);
+  const me = summary.testers.find(t => t.discordUserId === who) || null;
+  const rank = me && me.reports ? 1 + summary.testers.filter(t => t.reports > me.reports).length : null;
+
   const [filed] = await prisma.$queryRawUnsafe(`
     SELECT COUNT(*)::int AS total,
       COUNT(*) FILTER (WHERE queued)::int AS queued,
       COUNT(*) FILTER (WHERE NOT queued AND status::text NOT IN ('declined', 'resolved'))::int AS active,
       COUNT(*) FILTER (WHERE NOT queued AND status::text = 'resolved')::int AS resolved,
       COUNT(*) FILTER (WHERE status::text = 'declined')::int AS declined
-    FROM "Report" WHERE "discordUserId" = $1 AND type::text IN ('bug', 'crash')`, who);
+    FROM "Report" WHERE "discordUserId" = $1 AND type::text IN ('bug', 'crash')
+      AND "createdAt" >= $2::date AND "createdAt" < ($3::date + 1)`, who, range.from, range.to);
 
-  const all = await summarize(prisma, { from: '2000-01-01', to: today });
-  const me = all.testers.find(t => t.discordUserId === who) || null;
-  const rank = me && me.reports ? 1 + all.testers.filter(t => t.reports > me.reports).length : null;
-
-  const periods = await prisma.$queryRawUnsafe(`
-    SELECT name, to_char("endsOn", 'YYYY-MM-DD') AS "endsOn", snapshot FROM "TesterPayPeriod"
-    WHERE "paidAt" IS NOT NULL ORDER BY "endsOn"`);
   let paid = 0;
   let paidPeriods = 0;
   for (const p of periods) {
-    const row = (p.snapshot?.testers || []).find(t => t.discordUserId === who);
+    const row = p.paidAt && (p.snapshot?.testers || []).find(t => t.discordUserId === who);
     if (row?.total) { paid = money(paid + row.total); paidPeriods++; }
-  }
-  const lastPaidEnd = periods.length ? periods[periods.length - 1].endsOn : null;
-  let sinceLastPaid = null;
-  if (lastPaidEnd && lastPaidEnd < today) {
-    const from = new Date(Date.parse(`${lastPaidEnd}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
-    const recent = await summarize(prisma, { from, to: today });
-    sinceLastPaid = { from, amount: recent.testers.find(t => t.discordUserId === who)?.total || 0 };
   }
 
   return {
-    currency: all.settings.currency,
+    currency: (summary.settings || await getSettings(prisma)).currency,
+    period: current ? { name: current.name, startsOn: current.startsOn, endsOn: current.endsOn, paid: !!current.paidAt } : null,
+    from: range.from === '2000-01-01' ? null : range.from, to: range.to,
     filed,
     accepted: me ? me.reports : 0,
     levels: me ? me.levels : Object.fromEntries(BUG_LEVELS.map(l => [l, 0])),
     noLevel: me ? me.noLevel : 0,
-    shared: me ? me.shared : 0,
-    credited: me ? me.credited : 0,
+    shared: me ? me.shared || 0 : 0,
+    credited: me ? me.credited || 0 : 0,
     verifiedFixes: me ? me.verifiedFixes : 0,
     earned: me ? me.total : 0,
-    paid, paidPeriods, sinceLastPaid,
-    rank, testers: all.testers.filter(t => t.reports > 0).length,
+    paid, paidPeriods,
+    rank, testers: summary.testers.filter(t => t.reports > 0).length,
   };
 }
 

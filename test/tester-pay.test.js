@@ -361,24 +361,44 @@ test('a report with a team is split between the reporter and the teammates, to t
   await assert.rejects(pay.addTeammate(prisma, r.id, { discordUserId: 'u-9' }), /up to 5 teammates/);
 });
 
-test('a tester\'s own stats: filed, accepted, earned, paid and rank', async () => {
+test('a tester\'s own stats follow the pay period that covers today', async () => {
   const { prisma, report } = await createDb();
   await pay.saveSettings(prisma, { rates: RATES });
-  await report({ bugLevel: 'major', acceptedAt: '2026-09-10' });
-  await report({ bugLevel: 'minor', acceptedAt: '2026-10-02' });
-  await report({ bugLevel: null, queued: true, status: 'queued', acceptedAt: null });
-  await report({ status: 'declined' });
-  await report({ discordUserId: 'u-ben', discordUser: 'Ben' });
-  await report({ discordUserId: 'u-ben', discordUser: 'Ben' });
-  await report({ discordUserId: 'u-ben', discordUser: 'Ben', status: 'resolved' });
-  const period = await pay.createPeriod(prisma, { name: 'September', startsOn: '2026-09-01', endsOn: '2026-09-30' });
-  await pay.markPaid(prisma, period.id, 'Admin');
+  await report({ bugLevel: 'major', createdAt: '2026-09-05', acceptedAt: '2026-09-10' });
+  await report({ bugLevel: 'minor', createdAt: '2026-10-01', acceptedAt: '2026-10-02' });
+  await report({ bugLevel: null, queued: true, status: 'queued', createdAt: '2026-10-05', acceptedAt: null });
+  await report({ status: 'declined', createdAt: '2026-10-06' });
+  await report({ discordUserId: 'u-ben', discordUser: 'Ben', createdAt: '2026-10-01' });
+  await report({ discordUserId: 'u-ben', discordUser: 'Ben', createdAt: '2026-10-01' });
+  await report({ discordUserId: 'u-ben', discordUser: 'Ben', status: 'resolved', createdAt: '2026-09-02', acceptedAt: '2026-09-15' });
+  const september = await pay.createPeriod(prisma, { name: 'September', startsOn: '2026-09-01', endsOn: '2026-09-30' });
+  await pay.markPaid(prisma, september.id, 'Admin');
+  await pay.createPeriod(prisma, { name: 'October', startsOn: '2026-10-01', endsOn: '2026-10-31' });
 
   const ana = await pay.testerStats(prisma, 'u-ana', { today: '2026-10-26' });
-  assert.deepEqual(ana.filed, { total: 4, queued: 1, active: 2, resolved: 0, declined: 1 });
-  assert.deepEqual([ana.accepted, ana.levels.major, ana.levels.minor, ana.earned], [2, 1, 1, 14.5]);
-  assert.deepEqual([ana.paid, ana.paidPeriods, ana.sinceLastPaid], [12.5, 1, { from: '2026-10-01', amount: 2 }]);
-  assert.deepEqual([ana.rank, ana.testers], [2, 2], 'Ben has three accepted');
+  assert.deepEqual(ana.period, { name: 'October', startsOn: '2026-10-01', endsOn: '2026-10-31', paid: false });
+  assert.deepEqual(ana.filed, { total: 3, queued: 1, active: 1, resolved: 0, declined: 1 }, 'filed in October only');
+  assert.deepEqual([ana.accepted, ana.levels.minor, ana.levels.major, ana.earned], [1, 1, 0, 2]);
+  assert.deepEqual([ana.paid, ana.paidPeriods], [12.5, 1], 'paid so far is all time');
+  assert.deepEqual([ana.rank, ana.testers], [2, 2], 'Ben has two accepted in October');
+
+  // A paid period shows what was paid.
+  const inSeptember = await pay.testerStats(prisma, 'u-ana', { today: '2026-09-20' });
+  assert.deepEqual([inSeptember.period.name, inSeptember.period.paid, inSeptember.accepted, inSeptember.earned], ['September', true, 1, 12.5]);
+  assert.deepEqual([inSeptember.rank, inSeptember.testers, inSeptember.filed.total], [1, 2, 1]);
+
+  // No period covers today: everything since the last paid period ended.
+  const later = await pay.testerStats(prisma, 'u-ana', { today: '2026-11-05' });
+  assert.deepEqual([later.period, later.from, later.to, later.accepted, later.earned], [null, '2026-10-01', '2026-11-05', 1, 2]);
+
   const nobody = await pay.testerStats(prisma, 'u-zed', { today: '2026-10-26' });
   assert.deepEqual([nobody.filed.total, nobody.accepted, nobody.earned, nobody.rank], [0, 0, 0, null]);
+});
+
+test('with no pay periods, a tester\'s stats are all time', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { rates: RATES });
+  await report({ bugLevel: 'major', createdAt: '2025-01-05', acceptedAt: '2025-01-10' });
+  const ana = await pay.testerStats(prisma, 'u-ana', { today: '2026-10-26' });
+  assert.deepEqual([ana.period, ana.from, ana.accepted, ana.earned, ana.filed.total, ana.rank], [null, null, 1, 12.5, 1, 1]);
 });

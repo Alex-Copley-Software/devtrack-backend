@@ -113,11 +113,17 @@ for it. Each teammate also counts the report on the dashboard leaderboard.
 ## /leaderboard
 
 Any tester can run `/leaderboard` in Discord to see their own numbers; only
-they see the reply: reports filed (queued, being worked on, resolved,
-declined), accepted reports by level, shared and credited ones, fixes they
-confirmed, what it has all earned at today's prices, what was paid in
-periods marked paid, what has come in since the last paid period ended, and
-their rank among testers by accepted reports.
+they see the reply. The numbers are for the pay period on the Pay periods
+tab that covers today: reports filed in it (queued, being worked on,
+resolved, declined), reports accepted in it by level, shared and credited
+ones, fixes they confirmed, what that earns at today's prices (or what was
+paid, once the period is marked paid) and their rank among the testers in
+it by accepted reports. Below that is what they have been paid in total over
+every paid period.
+
+When no period covers today, the numbers run from the day after the last
+paid period ended; with no periods at all, they are all time. So adding the
+next period on the Pay periods tab is what moves `/leaderboard` on to it.
 
 ## Rules (Prices and rules tab)
 
