@@ -481,8 +481,8 @@ async function previewPrices(prisma, { periodIds, rates, payCredited } = {}) {
 // for the pay period set up on the payouts page that covers today: what they
 // filed in it and how that went, what was accepted, what it earns (what was
 // paid, if the period is marked paid) and where they rank among the testers
-// in it. With no period covering today, it is everything since the last paid
-// period ended, or all time if there are no periods. Paid so far is all time.
+// in it. With no period covering today, it is everything since the most recent
+// period ended (paid or not), or all time if there are no periods. Paid so far is all time.
 async function testerStats(prisma, discordUserId, { today = new Date().toISOString().slice(0, 10) } = {}) {
   await ensureTables(prisma);
   const who = String(discordUserId || '');
@@ -491,10 +491,10 @@ async function testerStats(prisma, discordUserId, { today = new Date().toISOStri
   // The open period wins when a paid one overlaps today too; then the latest start.
   const current = periods.filter(p => p.startsOn <= today && today <= p.endsOn)
     .sort((a, b) => Number(!a.paidAt) - Number(!b.paidAt) || a.startsOn.localeCompare(b.startsOn)).pop() || null;
-  const lastPaidEnd = periods.filter(p => p.paidAt && p.endsOn < today).map(p => p.endsOn).sort().pop() || null;
+  const lastEnd = periods.filter(p => p.endsOn < today).map(p => p.endsOn).sort().pop() || null;
   const dayAfter = d => new Date(Date.parse(`${d}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
   const range = current ? { from: current.startsOn, to: current.endsOn }
-    : lastPaidEnd ? { from: dayAfter(lastPaidEnd), to: today }
+    : lastEnd ? { from: dayAfter(lastEnd), to: today }
       : { from: '2000-01-01', to: today };
 
   const summary = current?.paidAt && current.snapshot ? current.snapshot : await summarize(prisma, range);

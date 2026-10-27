@@ -467,8 +467,11 @@ test('a tester\'s own stats follow the pay period that covers today', async () =
   assert.deepEqual([inSeptember.rank, inSeptember.testers, inSeptember.filed.total], [1, 2, 1]);
 
   // No period covers today: everything since the last paid period ended.
+  await report({ bugLevel: 'moderate', createdAt: '2026-11-02', acceptedAt: '2026-11-03' });
   const later = await pay.testerStats(prisma, 'u-ana', { today: '2026-11-05' });
-  assert.deepEqual([later.period, later.from, later.to, later.accepted, later.earned], [null, '2026-10-01', '2026-11-05', 1, 2]);
+  // No period covers today: from the day after the latest period ended (October, unpaid), not the last paid one.
+  assert.deepEqual([later.period, later.from, later.to], [null, '2026-11-01', '2026-11-05']);
+  assert.deepEqual([later.filed.total, later.accepted, later.levels.moderate, later.earned], [1, 1, 1, 5], 'only what came in since October ended');
 
   const nobody = await pay.testerStats(prisma, 'u-zed', { today: '2026-10-26' });
   assert.deepEqual([nobody.filed.total, nobody.accepted, nobody.earned, nobody.rank], [0, 0, 0, null]);
