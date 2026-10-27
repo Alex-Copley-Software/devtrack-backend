@@ -6,8 +6,10 @@
 //   POST /periods                     { name, startsOn, endsOn, notes }
 //   PATCH/DELETE /periods/:id
 //   GET  /periods/:id/summary         per-tester totals for the period (frozen once paid)
-//   POST /periods/:id/paid            freeze the numbers and mark it paid
-//   POST /periods/:id/reopen
+//   GET  /periods/:id/revenue         for Mark as paid: who would be logged on the Revenue page, in Robux
+//   POST /periods/:id/paid            freeze the numbers and mark it paid; { revenue: { keys, category,
+//                                     costSharePersonIds, robloxIds } } also logs them as Revenue expenses
+//   POST /periods/:id/reopen          and takes those expenses back out
 //   GET  /summary?from=&to=           the same totals for any date range
 //   POST /preview                     { periodIds, rates, payCredited } those periods now and at trial prices; saves nothing
 //   GET  /checks?status=&from=&to=    the tester QA log
@@ -45,7 +47,8 @@ router.post('/periods', h(async (req, res) => {
 router.patch('/periods/:id', h(req => pay.updatePeriod(db(), req.params.id, req.body || {})));
 router.delete('/periods/:id', h(req => pay.deletePeriod(db(), req.params.id)));
 router.get('/periods/:id/summary', h(req => pay.periodSummary(db(), req.params.id)));
-router.post('/periods/:id/paid', h(req => pay.markPaid(db(), req.params.id, req.user.name)));
+router.get('/periods/:id/revenue', h(req => pay.revenuePlan(db(), req.params.id)));
+router.post('/periods/:id/paid', h(req => pay.markPaid(db(), req.params.id, req.user.name, { revenue: req.body?.revenue })));
 router.post('/periods/:id/reopen', h(req => pay.reopenPeriod(db(), req.params.id)));
 
 router.get('/summary', h(req => pay.summarize(db(), { from: req.query.from, to: req.query.to })));

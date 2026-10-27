@@ -57,6 +57,15 @@ straight away to checks already waiting, and needs no restart.
 - On October 26, 2026, when the one-at-a-time rule came in, every claim was
   handed back once so everyone takes them again under it. Anyone who was in
   the middle of a check was pinged in its post to take it again.
+- **Moderators can change who has it.** In the report's post, someone with
+  Manage Threads runs `/qaswitch to user:@someone` to hand the check to that
+  person. It is theirs for 30 minutes from then, as if they had taken it,
+  and whoever had it before can no longer answer. The one-at-a-time rule
+  still applies to the new person. A check still waiting on the reporter is
+  opened up by this and posted in QA Requests already taken. `/qaswitch free`
+  takes it off whoever has it so anyone can take it again (one handed out
+  before it reached QA Requests goes back to the reporter until it does).
+  Both are logged in the report's history and announced in its post.
 - They answer in the report's post exactly as the reporter would: their own
   video or photo posted there, then Fixed or Not fixed. Somebody else's
   upload never counts as their proof.
@@ -80,9 +89,23 @@ private, so nobody else could post proof in it.
 - A period's table shows, per tester, accepted reports by level, fixes
   confirmed, and the amount owed. Click a tester for the reports behind the
   number. **Export CSV** downloads the table.
+- **Robux.** Every amount is also shown in Robux, at the rate under Prices
+  and rules (*Robux per $1*). Left blank it is the DevEx rate the Revenue
+  page uses (US$0.0038 per Robux, about 263 Robux per $1), or 1 when the
+  currency is already R$. Each person's Robux is rounded on its own, so the
+  total is what paying them all comes to. The CSV has a Robux column too.
 - **Mark as paid** freezes the period's numbers at that moment, so later
   price changes or re-levelled reports do not alter what was paid. **Reopen**
   discards the frozen copy and recalculates.
+- **Logged on the Revenue page.** With Revenue switched on, the Mark as paid
+  dialog lists everyone owed something with their Robux. Each person left
+  ticked becomes an expense in Robux, dated that day, to them as a payee
+  (found by Roblox user ID, then name; made if new). A Roblox user ID typed
+  in the dialog is saved on the payee. Pick the expense category and tick
+  **who pays for it** (the people who split the cost); nobody ticked is the
+  default split, as for asset payouts. The period then says what was logged.
+  Reopening it takes those expenses back out. Marking paid still works if
+  logging fails; the period says so, and it can be logged by hand.
 
 What counts:
 

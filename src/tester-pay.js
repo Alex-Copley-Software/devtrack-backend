@@ -26,6 +26,9 @@ const DEFAULTS = {
   // QA staff approve (resolve) on the dashboard is paid the same as a fix.
   rates: { insignificant: 0, minor: 0, moderate: 0, major: 0, verifiedFix: 0 },
   currency: '$',
+  // Robux per 1 of the currency, for paying in Robux. Null: the DevEx rate the
+  // Revenue page uses (US$0.0038 per Robux), or 1 when amounts are already in Robux.
+  robuxRate: null,
   // Ask the original reporter to confirm fixes in their thread.
   testerQaEnabled: true,
   // "Fixed" needs a video (or other attachment / link) posted in the thread first.
@@ -69,6 +72,8 @@ async function ensureTables(prisma) {
       "createdByName" TEXT,
       "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`);
+  // What marking it paid logged on the Revenue page: { expenseIds, total, category, paidFor } or { note } saying why not.
+  await prisma.$executeRawUnsafe(`ALTER TABLE "TesterPayPeriod" ADD COLUMN IF NOT EXISTS "revenue" JSONB`);
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "ReportQaCheck" (
       "id" TEXT NOT NULL PRIMARY KEY,
@@ -122,12 +127,20 @@ function normalize(raw = {}) {
   return {
     rates,
     currency: String(raw.currency ?? DEFAULTS.currency).trim().slice(0, 8) || DEFAULTS.currency,
+    robuxRate: Number(raw.robuxRate) > 0 && Number(raw.robuxRate) <= 100000 ? Number(raw.robuxRate) : null,
     testerQaEnabled: flag('testerQaEnabled'),
     requireVideo: flag('requireVideo'),
     autoResolve: flag('autoResolve'),
     payCredited: flag('payCredited'),
     qaEscalateMinutes: escalateMinutes(raw.qaEscalateMinutes),
   };
+}
+
+// Robux per 1 of the currency: the rate set, or the default.
+function robuxPerUnit(settings) {
+  if (settings.robuxRate) return settings.robuxRate;
+  if (/r\$|robux/i.test(settings.currency || '')) return 1;
+  return 1 / require('./revenue/sync').USD_PER_ROBUX();
 }
 
 // Whole minutes from 0 to a day; anything else keeps the default.
@@ -159,7 +172,7 @@ class PayError extends Error {
 }
 const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
 const PERIOD_FIELDS = `id, name, to_char("startsOn", 'YYYY-MM-DD') AS "startsOn", to_char("endsOn", 'YYYY-MM-DD') AS "endsOn",
-  notes, "paidAt", "paidByName", "createdByName", "createdAt"`;
+  notes, "paidAt", "paidByName", "createdByName", "createdAt", "revenue"`;
 
 function periodInput(data, { partial = false } = {}) {
   const out = {};
@@ -220,20 +233,68 @@ async function deletePeriod(prisma, id) {
 
 // Freezes the numbers: a paid period keeps showing what was actually paid,
 // even if rates change or a report is re-levelled afterwards.
-async function markPaid(prisma, id, actorName) {
+// With revenue ({ keys, category, costSharePersonIds, robloxIds }), what the
+// people whose keys are given were paid is also logged on the Revenue page as
+// expenses in Robux, split between costSharePersonIds (the default split when
+// none). A problem there is noted on the period and never undoes marking it paid.
+async function markPaid(prisma, id, actorName, { revenue } = {}) {
   const period = await getPeriod(prisma, id);
   if (period.paidAt) throw new PayError(409, 'Already marked paid');
   const snapshot = await summarize(prisma, { from: period.startsOn, to: period.endsOn });
   await prisma.$executeRawUnsafe(`
-    UPDATE "TesterPayPeriod" SET "paidAt" = CURRENT_TIMESTAMP, "paidByName" = $2, snapshot = $3::jsonb WHERE id = $1`,
+    UPDATE "TesterPayPeriod" SET "paidAt" = CURRENT_TIMESTAMP, "paidByName" = $2, snapshot = $3::jsonb, "revenue" = NULL WHERE id = $1`,
   id, actorName || null, JSON.stringify(snapshot));
+  if (revenue) {
+    let logged;
+    try {
+      const keys = new Set((Array.isArray(revenue.keys) ? revenue.keys : []).map(String));
+      const ids = revenue.robloxIds && typeof revenue.robloxIds === 'object' ? revenue.robloxIds : {};
+      const range = `${period.startsOn} to ${period.endsOn}`;
+      const entries = payLines(snapshot).filter(l => keys.has(l.key)).map(l => ({
+        ...l, robloxUserId: ids[l.key] || null,
+        description: `${l.kind === 'qa' ? 'QA approvals' : 'Tester pay'}: ${period.name} (${range}), ${moneyText(snapshot.settings, l.amount)}`
+          + (snapshot.robuxRate === 1 ? '' : ` at ${rateText(snapshot.robuxRate)} Robux per ${snapshot.settings?.currency || '$'}1`),
+      }));
+      const result = entries.length
+        ? await require('./revenue/sync').logTesterPayout(prisma, { ref: id, entries, category: revenue.category, costSharePersonIds: revenue.costSharePersonIds })
+        : { skipped: 'nobody was picked' };
+      logged = result.skipped
+        ? { note: `Not logged to Revenue: ${result.skipped}` }
+        : { expenseIds: result.expenseIds, total: result.total, category: result.category, paidFor: result.paidFor };
+    } catch (err) {
+      console.error('[Payouts] could not log to Revenue:', err.message);
+      logged = { note: 'Not logged to Revenue: something went wrong, log it there by hand' };
+    }
+    await prisma.$executeRawUnsafe(`UPDATE "TesterPayPeriod" SET "revenue" = $2::jsonb WHERE id = $1`, id, JSON.stringify(logged));
+  }
   return getPeriod(prisma, id);
 }
 
+// Everyone with something to pay in a summary, testers then QA staff.
+function payLines(sum) {
+  return [
+    ...(sum.testers || []).map(t => ({ key: t.key, kind: 'tester', name: t.name, discordUserId: t.discordUserId || null, amount: money(t.total), robux: t.robux })),
+    ...(sum.qaStaff || []).map(m => ({ key: m.key, kind: 'qa', name: m.name, discordUserId: null, amount: money(m.amount), robux: m.robux })),
+  ].filter(l => l.amount > 0);
+}
+const moneyText = (settings, n) => `${settings?.currency || '$'}${money(n).toFixed(2)}`;
+const rateText = rate => String(Math.round(Number(rate) * 100) / 100);
+
+// For the Mark as paid dialog: who would be logged on the Revenue page, and as whom.
+async function revenuePlan(prisma, id) {
+  const period = await getPeriod(prisma, id);
+  const sum = await summarize(prisma, { from: period.startsOn, to: period.endsOn });
+  const plan = await require('./revenue/sync').planTesterPayout(prisma, payLines(sum));
+  return { ...plan, robuxRate: sum.robuxRate, lines: plan.lines || payLines(sum) };
+}
+
+// Reopening also takes the period's expenses back off the Revenue page.
 async function reopenPeriod(prisma, id) {
-  await getPeriod(prisma, id);
-  await prisma.$executeRawUnsafe(`UPDATE "TesterPayPeriod" SET "paidAt" = NULL, "paidByName" = NULL, snapshot = NULL WHERE id = $1`, id);
-  return getPeriod(prisma, id);
+  const period = await getPeriod(prisma, id);
+  let removed = 0;
+  if (period.revenue?.expenseIds?.length) removed = await require('./revenue/sync').unlogTesterPayout(prisma, id);
+  await prisma.$executeRawUnsafe(`UPDATE "TesterPayPeriod" SET "paidAt" = NULL, "paidByName" = NULL, snapshot = NULL, "revenue" = NULL WHERE id = $1`, id);
+  return { ...(await getPeriod(prisma, id)), expensesRemoved: removed };
 }
 
 // ── teams ────────────────────────────────────────────────────────────────────
@@ -359,6 +420,9 @@ async function summarize(prisma, { from, to }, { settings: given } = {}) {
     m.approvals++;
     m.amount = money(m.amount + rates.verifiedFix);
   }
+  const robuxRate = robuxPerUnit(settings);
+  const robux = n => Math.round(money(n) * robuxRate);
+  for (const m of staff.values()) m.robux = robux(m.amount);
   const qaStaff = [...staff.values()].sort((a, b) => b.amount - a.amount || b.approvals - a.approvals || a.name.localeCompare(b.name));
   const qaAmount = money(qaStaff.reduce((n, m) => n + m.amount, 0));
 
@@ -405,7 +469,7 @@ async function summarize(prisma, { from, to }, { settings: given } = {}) {
     t.fixesAmount = money(t.fixesAmount + rates.verifiedFix);
   }
 
-  const rows = [...testers.values()].map(t => ({ ...t, total: money(t.reportsAmount + t.fixesAmount) }))
+  const rows = [...testers.values()].map(t => ({ ...t, total: money(t.reportsAmount + t.fixesAmount), robux: robux(t.reportsAmount + t.fixesAmount) }))
     .sort((a, b) => b.total - a.total || b.reports - a.reports || a.name.localeCompare(b.name));
   const testersTotal = money(rows.reduce((n, t) => n + t.total, 0));
   return {
@@ -422,7 +486,10 @@ async function summarize(prisma, { from, to }, { settings: given } = {}) {
       qaApprovals: qaApprovals.length,
       qaAmount,
       total: money(testersTotal + qaAmount),
+      // Each person's Robux is rounded on its own, so this is what paying them all comes to.
+      robux: rows.reduce((n, t) => n + t.robux, 0) + qaStaff.reduce((n, m) => n + m.robux, 0),
     },
+    robuxRate,
     reports,
     fixes,
     qaApprovals,
@@ -609,9 +676,10 @@ async function onStatusChange(prisma, report, previousStatus, actorName) {
 // ── QA Requests: checks the reporter left unanswered ─────────────────────────
 
 // Checks still waiting on the reporter qaEscalateMinutes after they were
-// asked, not yet opened up. Tickets are left out: they are private, so
-// nobody else could post proof in them. Changing the setting applies to
-// checks already waiting too.
+// asked, not yet opened up, and checks handed out by /qaswitch before they
+// had a post there, once the holder's time runs out. Tickets are left out:
+// they are private, so nobody else could post proof in them. Changing the
+// setting applies to checks already waiting too.
 async function dueForEscalation(prisma) {
   const minutes = (await getSettings(prisma)).qaEscalateMinutes;
   if (!minutes) return { minutes, checks: [] };
@@ -619,11 +687,13 @@ async function dueForEscalation(prisma) {
   const checks = await prisma.$queryRawUnsafe(`
     SELECT ${CHECK_FIELDS}, r.title, r."bugLevel"::text AS "bugLevel"
     FROM "ReportQaCheck" c JOIN "Report" r ON r.id = c."reportId"
-    WHERE c.status = 'pending' AND c."messageId" IS NOT NULL AND c."escalatedAt" IS NULL
+    WHERE c.status = 'pending' AND c."messageId" IS NOT NULL
+      AND (c."escalatedAt" IS NULL
+        OR (COALESCE(c."escalationMessageId", '') = '' AND (c."takenAt" IS NULL OR c."takenAt" < NOW() - ($2 * INTERVAL '1 minute'))))
       AND c."requestedAt" < NOW() - ($1 * INTERVAL '1 minute')
       AND NOT EXISTS (SELECT 1 FROM "ReportTicket" t WHERE t."reportId" = c."reportId")
     ORDER BY c."requestedAt"
-    LIMIT 20`, minutes);
+    LIMIT 20`, minutes, TAKE_MINUTES);
   return { minutes, checks };
 }
 
@@ -631,8 +701,8 @@ async function dueForEscalation(prisma) {
 async function markEscalated(prisma, checkId, { channelId, messageId }) {
   await ensureTables(prisma);
   await prisma.$executeRawUnsafe(`
-    UPDATE "ReportQaCheck" SET "escalatedAt" = CURRENT_TIMESTAMP, "escalationChannelId" = $2, "escalationMessageId" = $3
-    WHERE id = $1 AND "escalatedAt" IS NULL`, checkId, String(channelId || ''), String(messageId || ''));
+    UPDATE "ReportQaCheck" SET "escalatedAt" = COALESCE("escalatedAt", CURRENT_TIMESTAMP), "escalationChannelId" = $2, "escalationMessageId" = $3
+    WHERE id = $1 AND ("escalatedAt" IS NULL OR COALESCE("escalationMessageId", '') = '')`, checkId, String(channelId || ''), String(messageId || ''));
   return getCheck(prisma, checkId);
 }
 
@@ -699,6 +769,51 @@ async function releaseClaims(prisma, { once } = {}) {
     WHERE c.id = old.id
     RETURNING c.id, c."reportId", c."threadId", c."escalationChannelId", c."escalationMessageId", old.holder, old.active`, TAKE_MINUTES);
   return { released, skipped: false };
+}
+
+// Staff (/qaswitch in Discord) hand a report's QA check to someone else, who
+// holds it for TAKE_MINUTES from now, as if they had taken it. A check still
+// waiting on the reporter is opened up by this, so only the new holder can
+// answer it. They still hold one QA Request at a time. With no one given, the
+// holder is taken off and it is free to take again; a check that was handed
+// out before it ever reached QA Requests goes back to waiting for its post
+// there. Returns the check, and who held it before.
+async function switchHolder(prisma, reportId, { discordUserId, discordUserName } = {}) {
+  await ensureTables(prisma);
+  const check = await pendingCheck(prisma, reportId);
+  if (!check) throw new PayError(404, 'This report has no QA check waiting.');
+  const before = heldBy(check) || (check.escalatedAt ? null : check.discordUserId);
+  const previous = before ? { discordUserId: before, name: before === check.takenByDiscordUserId ? check.takenBy : check.discordUser } : null;
+
+  if (!discordUserId) {
+    if (!check.takenByDiscordUserId) throw new PayError(409, check.escalatedAt ? 'Nobody has this check: it is free to take in QA Requests.' : 'This check is still with the tester who filed the report.');
+    await prisma.$executeRawUnsafe(`
+      UPDATE "ReportQaCheck" SET "takenByDiscordUserId" = NULL, "takenBy" = NULL, "takenAt" = NULL,
+        "escalatedAt" = CASE WHEN COALESCE("escalationMessageId", '') = '' THEN NULL ELSE "escalatedAt" END
+      WHERE id = $1 AND status = 'pending'`, check.id);
+    return { check: await getCheck(prisma, check.id), previous };
+  }
+
+  const who = String(discordUserId);
+  if (before === who) throw new PayError(409, `<@${who}> already has this check.`);
+  const held = await heldCheck(prisma, who, check.id);
+  if (held) {
+    throw new PayError(409, `<@${who}> already has a QA Request: **${held.title || 'a report'}** <#${held.threadId}>, until ${clock(holdEnds(held))} UTC. `
+      + 'Run `/qaswitch free` in that post first, or wait for it to be answered.');
+  }
+  const switched = await prisma.$executeRawUnsafe(`
+    UPDATE "ReportQaCheck" SET "takenByDiscordUserId" = $2, "takenBy" = $3, "takenAt" = CURRENT_TIMESTAMP,
+      "escalatedAt" = COALESCE("escalatedAt", CURRENT_TIMESTAMP)
+    WHERE id = $1 AND status = 'pending'
+      AND NOT EXISTS (SELECT 1 FROM "ReportQaCheck" o WHERE o.id <> $1 AND o.status = 'pending' AND o."escalatedAt" IS NOT NULL
+        AND o."takenByDiscordUserId" = $2 AND o."takenAt" >= NOW() - ($4 * INTERVAL '1 minute'))`,
+    check.id, who, String(discordUserName || '').slice(0, 100) || null, TAKE_MINUTES);
+  if (!switched) {
+    const now = await getCheck(prisma, check.id);
+    if (now?.status !== 'pending') throw new PayError(409, alreadyAnswered(now?.status));
+    throw new PayError(409, `<@${who}> just took another QA Request. Try again once that one is answered.`);
+  }
+  return { check: await getCheck(prisma, check.id), previous };
 }
 
 // Who holds a check taken in QA Requests right now: the last person to take
@@ -776,8 +891,8 @@ module.exports = {
   BUG_LEVELS, DEFAULTS, PayError, ensureTables,
   MAX_TEAMMATES, listTeam, addTeammate, removeTeammate, splitAmount,
   getSettings, saveSettings,
-  listPeriods, getPeriod, createPeriod, updatePeriod, deletePeriod, markPaid, reopenPeriod,
+  listPeriods, getPeriod, createPeriod, updatePeriod, deletePeriod, markPaid, reopenPeriod, revenuePlan, robuxPerUnit,
   summarize, periodSummary, previewPrices, MAX_PREVIEW_PERIODS, testerStats,
   getCheck, pendingCheck, listChecks, onStatusChange, respond, answerRefusal, cancelUnreachable,
-  TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take, heldCheck, releaseClaims,
+  TAKE_MINUTES, MAX_ESCALATE_MINUTES, dueForEscalation, markEscalated, take, heldCheck, releaseClaims, switchHolder,
 };

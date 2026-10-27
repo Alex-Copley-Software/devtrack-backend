@@ -239,6 +239,113 @@ test('releasing claims hands every QA Request back, once per key', async () => {
   assert.equal((await pay.getCheck(prisma, ids[0])).takenByDiscordUserId, 'u-cy');
 });
 
+test('amounts convert to Robux, and marking a period paid can log each person on the Revenue page', async () => {
+  const { prisma, report } = await createDb();
+  process.env.REVENUE_ENABLED = 'true';
+  try {
+    const { ensureRevenueSchema } = require('../src/revenue/schema');
+    await ensureRevenueSchema(prisma);
+    await prisma.$executeRawUnsafe(`INSERT INTO rev_monthly_revenue (month, gross_revenue) VALUES ('2026-10-01', 0)`);
+    await prisma.$executeRawUnsafe(`INSERT INTO rev_people (name) VALUES ('Owner A'), ('Owner B')`);
+    await prisma.$executeRawUnsafe(`INSERT INTO rev_share_terms (person_id, share_pct, payout_method, effective_from) SELECT id, 50, 'manual', '2026-01-01' FROM rev_people`);
+    await prisma.$executeRawUnsafe(`INSERT INTO rev_expenses (date_incurred, month, description, category, amount) VALUES ('2026-10-01', '2026-10-01', 'old', 'QA Testing', 1)`);
+    await prisma.$executeRawUnsafe(`INSERT INTO rev_payees (display_name, roblox_user_id) VALUES ('Ana', '111')`);
+    await pay.saveSettings(prisma, { rates: RATES });
+    await report({ bugLevel: 'major' });                                          // Ana 12.50
+    await report({ bugLevel: 'minor', discordUserId: 'u-ben', discordUser: 'Ben' }); // Ben 2.00
+    await report({ bugLevel: 'insignificant', discordUserId: 'u-cy', discordUser: 'Cy' });
+
+    // The DevEx rate by default: $12.50 is 3,289 Robux.
+    const sum = await pay.summarize(prisma, { from: '2026-10-01', to: '2026-10-07' });
+    assert.deepEqual(sum.testers.map(t => [t.name, t.robux]), [['Ana', 3289], ['Ben', 526], ['Cy', 132]]);
+    assert.equal(sum.totals.robux, 3289 + 526 + 132);
+    await pay.saveSettings(prisma, { robuxRate: 300 });
+    assert.equal((await pay.summarize(prisma, { from: '2026-10-01', to: '2026-10-07' })).testers[0].robux, 3750);
+
+    const period = await pay.createPeriod(prisma, { name: 'Week 1', startsOn: '2026-10-01', endsOn: '2026-10-07' });
+    const plan = await pay.revenuePlan(prisma, period.id);
+    assert.equal(plan.ready, true);
+    assert.equal(plan.category, 'QA Testing');
+    assert.deepEqual(plan.people.map(p => p.name), ['Owner A', 'Owner B']);
+    assert.deepEqual(plan.lines.map(l => [l.name, l.robux, l.payeeName, l.robloxUserId]), [['Ana', 3750, 'Ana', '111'], ['Ben', 600, null, null], ['Cy', 150, null, null]]);
+
+    // Ana and Ben are logged (Cy was paid some other way), paid for by Owner A alone.
+    const ownerA = plan.people[0].id;
+    const paid = await pay.markPaid(prisma, period.id, 'Olive', { revenue: { keys: ['u-ana', 'u-ben'], costSharePersonIds: [ownerA], robloxIds: { 'u-ben': '222' } } });
+    assert.deepEqual([paid.revenue.total, paid.revenue.paidFor, paid.revenue.expenseIds.length], [4350, ['Owner A'], 2]);
+    const logged = await prisma.$queryRawUnsafe(`SELECT e.*, p.display_name, p.roblox_user_id FROM rev_expenses e JOIN rev_payees p ON p.id = e.payee_id WHERE e.source = 'tester_payout' ORDER BY e.amount DESC`);
+    assert.deepEqual(logged.map(e => [e.display_name, e.roblox_user_id, e.amount, e.category, e.cost_share_person_ids]),
+      [['Ana', '111', 3750, 'QA Testing', JSON.stringify([ownerA])], ['Ben', '222', 600, 'QA Testing', JSON.stringify([ownerA])]]);
+    assert.equal(logged[0].description, 'Tester pay: Week 1 (2026-10-01 to 2026-10-07), $12.50 at 300 Robux per $1');
+
+    // Reopening takes them back out.
+    const reopened = await pay.reopenPeriod(prisma, period.id);
+    assert.deepEqual([reopened.expensesRemoved, reopened.revenue], [2, null]);
+    assert.equal((await prisma.$queryRawUnsafe(`SELECT * FROM rev_expenses WHERE source = 'tester_payout'`)).length, 0);
+
+    // Marked paid without logging anything: nothing goes to Revenue.
+    assert.equal((await pay.markPaid(prisma, period.id, 'Olive')).revenue, null);
+  } finally { delete process.env.REVENUE_ENABLED; }
+});
+
+test('staff can hand a QA check to someone else, or take it off them', async () => {
+  const { prisma, report } = await createDb();
+  const open = async (fields = {}) => {
+    const r = await report({ status: 'in_progress', ...fields });
+    const ask = await pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
+    return { r, id: ask.check.id };
+  };
+  const a = await open({ title: 'Lobby door' });
+  await pay.markEscalated(prisma, a.id, { channelId: 'qa', messageId: 'qm-a' });
+  await pay.take(prisma, a.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+
+  // Ben's check goes to Cy: only Cy can answer now, for a fresh 30 minutes.
+  const moved = await pay.switchHolder(prisma, a.r.id, { discordUserId: 'u-cy', discordUserName: 'Cy' });
+  assert.deepEqual(moved.previous, { discordUserId: 'u-ben', name: 'Ben' });
+  assert.deepEqual([moved.check.takenByDiscordUserId, moved.check.takenBy], ['u-cy', 'Cy']);
+  await assert.rejects(pay.respond(prisma, a.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Cy has taken this check/);
+  await assert.rejects(pay.switchHolder(prisma, a.r.id, { discordUserId: 'u-cy' }), /already has this check/);
+  assert.equal((await pay.heldCheck(prisma, 'u-ben')), null, 'Ben is free to take another');
+
+  // Cy still holds one at a time.
+  const b = await open();
+  await pay.markEscalated(prisma, b.id, { channelId: 'qa', messageId: 'qm-b' });
+  await assert.rejects(pay.switchHolder(prisma, b.r.id, { discordUserId: 'u-cy' }), /already has a QA Request: \*\*Lobby door\*\*/);
+
+  // Taken off Cy: free to take again, still in QA Requests.
+  const freed = await pay.switchHolder(prisma, a.r.id, {});
+  assert.deepEqual(freed.previous, { discordUserId: 'u-cy', name: 'Cy' });
+  assert.equal(freed.check.takenByDiscordUserId, null);
+  assert.ok(freed.check.escalatedAt);
+  await assert.rejects(pay.switchHolder(prisma, a.r.id, {}), /Nobody has this check/);
+  await pay.take(prisma, a.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+
+  // A check still with the reporter: handing it out opens it up, so Ana can no longer answer.
+  const c = await open({ title: 'Shop' });
+  await assert.rejects(pay.switchHolder(prisma, c.r.id, { discordUserId: 'u-ana' }), /already has this check/);
+  const handed = await pay.switchHolder(prisma, c.r.id, { discordUserId: 'u-dee', discordUserName: 'Dee' });
+  assert.deepEqual(handed.previous, { discordUserId: 'u-ana', name: 'Ana' });
+  assert.ok(handed.check.escalatedAt);
+  await assert.rejects(pay.respond(prisma, c.id, { discordUserId: 'u-ana', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Dee has taken this check/);
+  // The bot then posts it in QA Requests and records the post.
+  await pay.markEscalated(prisma, c.id, { channelId: 'qa', messageId: 'qm-c' });
+  assert.equal((await pay.getCheck(prisma, c.id)).escalationMessageId, 'qm-c');
+
+  // One handed out before it had a post, then taken back, waits for its QA Requests post again.
+  const d = await open();
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "requestedAt" = NOW() - INTERVAL '2 hours' WHERE id = $1`, d.id);
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "messageId" = 'm-d' WHERE id = $1`, d.id);
+  await pay.switchHolder(prisma, d.r.id, { discordUserId: 'u-eve', discordUserName: 'Eve' });
+  assert.ok(!(await pay.dueForEscalation(prisma)).checks.some(x => x.id === d.id), 'not while Eve has it');
+  await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "takenAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, d.id);
+  assert.ok((await pay.dueForEscalation(prisma)).checks.some(x => x.id === d.id), 'posted once her time runs out');
+  await pay.switchHolder(prisma, d.r.id, {});
+  assert.equal((await pay.getCheck(prisma, d.id)).escalatedAt, null);
+
+  await pay.respond(prisma, a.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' });
+  await assert.rejects(pay.switchHolder(prisma, a.r.id, { discordUserId: 'u-cy' }), /no QA check waiting/);
+});
+
 test('answerRefusal says who may answer a check', () => {
   const now = new Date('2026-10-26T12:00:00Z');
   const base = { discordUserId: 'u-ana', escalatedAt: null, takenByDiscordUserId: null, takenAt: null, takenBy: null };

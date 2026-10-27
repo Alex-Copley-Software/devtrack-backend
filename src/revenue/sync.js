@@ -155,6 +155,92 @@ async function unlogAssetPayout(prisma, payoutId) {
   return prisma.$executeRawUnsafe(`DELETE FROM rev_expenses WHERE source = 'asset_payout' AND source_ref = $1`, payoutId);
 }
 
+// ── tester payouts ───────────────────────────────────────────────────────────
+// Marking a tester pay period paid on the payouts page can log what each
+// tester (and QA staff member) was paid as an expense, in Robux, once per
+// person per period. Reopening the period takes those expenses back out.
+
+const TESTER_SOURCE = 'tester_payout';
+
+function testerCategory(categories) {
+  return categories.find(c => /test|qa\b|bug/i.test(c)) || 'Other';
+}
+
+// The payee a tester is paid as: by the Roblox id given first, then by name.
+// A namesake on file with a different Roblox id is someone else, so a new
+// payee is made for the tester. found is false when none exists yet.
+async function testerPayee(prisma, { name, robloxUserId: given }) {
+  const id = robloxUserId(given);
+  const payee = await findPayee(prisma, { name, roblox: id });
+  if (payee && !(id && payee.roblox_user_id && String(payee.roblox_user_id) !== id)) return { payee, found: true };
+  return { payee: null, found: false, displayName: payee ? `${name} (${id})` : name, robloxUserId: id };
+}
+
+// What the Mark as paid dialog shows: whether Revenue can take it, the
+// categories and the people who can split a cost, and who each person
+// would be paid as.
+async function planTesterPayout(prisma, lines) {
+  if (!enabled()) return { enabled: false };
+  await ensureRevenueSchema(prisma);
+  const [{ n: months }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM rev_monthly_revenue`);
+  const categories = await expenseCategories(prisma);
+  const out = [];
+  for (const line of lines) {
+    const { payee } = await testerPayee(prisma, { name: line.name });
+    out.push({ ...line, payeeName: payee ? payee.display_name : null, robloxUserId: payee?.roblox_user_id ? String(payee.roblox_user_id) : null });
+  }
+  return {
+    enabled: true, ready: months > 0, categories, category: testerCategory(categories),
+    people: await audienceOptions(prisma), lines: out,
+  };
+}
+
+// Logs each entry ({ key, name, robux, robloxUserId, description }) as an
+// expense dated today. ref ties the rows to the period, so a retry never
+// doubles one. Returns { expenseIds, total } or { skipped: why }.
+async function logTesterPayout(prisma, { ref, entries, category, costSharePersonIds, date }) {
+  if (!enabled()) return { skipped: 'Revenue is not switched on' };
+  await ensureRevenueSchema(prisma);
+  const [{ n: months }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM rev_monthly_revenue`);
+  if (!months) return { skipped: 'the Revenue page has no data yet (import your backup first)' };
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) ? date : new Date().toISOString().slice(0, 10);
+  const cat = String(category || '').trim().slice(0, 100) || testerCategory(await expenseCategories(prisma));
+  const audience = await audienceJson(prisma, costSharePersonIds);
+  const expenseIds = [];
+  let total = 0;
+  for (const e of entries) {
+    const amount = Math.round(Number(e.robux));
+    if (!(amount > 0)) continue;
+    const sourceRef = `${ref}:${e.key}`;
+    const [existing] = await prisma.$queryRawUnsafe(`SELECT id, amount FROM rev_expenses WHERE source = $1 AND source_ref = $2 LIMIT 1`, TESTER_SOURCE, sourceRef);
+    if (existing) { expenseIds.push(existing.id); total += Number(existing.amount); continue; }
+    const found = await testerPayee(prisma, { name: e.name, robloxUserId: e.robloxUserId });
+    let payee = found.payee;
+    if (!payee) {
+      [payee] = await prisma.$queryRawUnsafe(
+        `INSERT INTO rev_payees (display_name, roblox_user_id) VALUES ($1, $2) ON CONFLICT (display_name) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING *`,
+        String(found.displayName || 'Unknown tester').slice(0, 120), found.robloxUserId);
+    } else if (!payee.roblox_user_id && robloxUserId(e.robloxUserId)) {
+      await prisma.$executeRawUnsafe(`UPDATE rev_payees SET roblox_user_id = $1 WHERE id = $2`, robloxUserId(e.robloxUserId), payee.id);
+    }
+    const [row] = await prisma.$queryRawUnsafe(
+      `INSERT INTO rev_expenses (date_incurred, month, description, category, amount, payee_id, source, source_ref, cost_share_person_ids)
+       VALUES ($1, $2, $3, $4, $5::double precision, $6::int, $7, $8, $9) RETURNING id`,
+      day, `${day.slice(0, 8)}01`, String(e.description || 'Tester payout').slice(0, 500), cat, amount, payee.id, TESTER_SOURCE, sourceRef, audience);
+    expenseIds.push(row.id);
+    total += amount;
+  }
+  const paidFor = audience ? (await prisma.$queryRawUnsafe(`SELECT name FROM rev_people WHERE id = ANY($1::int[]) ORDER BY name`, JSON.parse(audience))).map(p => p.name) : [];
+  return { expenseIds, total, category: cat, paidFor };
+}
+
+// Takes a period's expenses back out (the period was reopened).
+async function unlogTesterPayout(prisma, ref) {
+  if (!enabled()) return 0;
+  await ensureRevenueSchema(prisma);
+  return prisma.$executeRawUnsafe(`DELETE FROM rev_expenses WHERE source = $1 AND source_ref LIKE $2 || ':%'`, TESTER_SOURCE, String(ref));
+}
+
 // For the assistant: payments to someone, newest first, with a total.
 async function paymentsTo(prisma, { name, text, limit = 15 } = {}) {
   if (!enabled()) return { error: 'The Revenue page is not switched on, so there is no payment history to read.' };
@@ -319,4 +405,5 @@ module.exports = {
   enabled, audienceOptions, robloxUserId, findPayee, robloxFor, recentPayments, logAssetPayout, unlogAssetPayout, paymentsTo, looksLikeDollars,
   USD_PER_ROBUX, robuxFromUsd, usdIn,
   parseRobux, expenseCategories, prepareExpenses, logExpenses, MAX_EXPENSES_PER_CARD,
+  planTesterPayout, logTesterPayout, unlogTesterPayout,
 };

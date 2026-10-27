@@ -478,6 +478,27 @@ router.post('/qa-checks/release-claims', botAuth, async (req, res) => {
   }
 });
 
+// /qaswitch in Discord: staff hand the QA check on the report in this post to
+// someone else, or take it off whoever has it. The bot checks who may.
+router.post('/qa-check-by-thread/:threadId/switch', botAuth, async (req, res) => {
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT id FROM "Report" WHERE "discordThreadId" = $1 ORDER BY "createdAt" DESC LIMIT 1`, req.params.threadId);
+    if (!rows.length) return res.status(404).json({ error: 'No DevTrack report found for this post.' });
+    const { discordUserId, discordUserName, actorName } = req.body || {};
+    const result = await testerPay.switchHolder(prisma, rows[0].id, { discordUserId, discordUserName });
+    await require('../history-logger').log({
+      reportId: rows[0].id, action: discordUserId ? 'tester_qa_switched' : 'tester_qa_released',
+      detail: discordUserId ? (result.check.takenBy || null) : null, actorName: `${actorName || 'Staff'} (/qaswitch)`, actorId: '',
+    });
+    res.json({ ...result, takeMinutes: testerPay.TAKE_MINUTES });
+  } catch (err) {
+    if (err instanceof testerPay.PayError) return res.status(err.status).json({ error: err.message });
+    console.error('[QA check switch]', err.message);
+    res.status(500).json({ error: 'Something went wrong. Try again in a moment.' });
+  }
+});
+
 router.get('/qa-check/:id', botAuth, async (req, res) => {
   try {
     const check = await testerPay.getCheck(prisma, req.params.id);
