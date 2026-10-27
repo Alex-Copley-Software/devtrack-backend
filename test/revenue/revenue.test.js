@@ -150,6 +150,10 @@ test('edits behave like the original: only the fields sent change, errors come b
 
     assert.deepEqual(await call('PATCH', '/api/expenses/99999', { amount: 1 }), { status: 404, body: { detail: 'Expense not found' } });
     assert.deepEqual(await call('POST', '/api/expenses', { description: 'no date' }), { status: 422, body: { detail: 'date_incurred is required' } });
+    assert.deepEqual(await call('POST', '/api/expenses', { date_incurred: '', description: 'blank date', amount: 1 }),
+      { status: 422, body: { detail: 'date_incurred must be a YYYY-MM-DD date' } });
+    assert.deepEqual(await call('PATCH', `/api/expenses/${e.id}`, { date_incurred: '' }),
+      { status: 422, body: { detail: 'date_incurred must be a YYYY-MM-DD date' } });
     assert.equal((await call('POST', '/api/payees', { display_name: '  ' })).body.detail, "Display name can't be empty");
     // A Roblox user id sent as a number is still stored as text.
     const payee = (await call('POST', '/api/payees', { display_name: 'Numeric Nia', roblox_user_id: 7654321 })).body.id;

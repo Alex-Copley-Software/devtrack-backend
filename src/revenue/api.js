@@ -12,6 +12,12 @@ const { RevenueError, handle, reader, transaction, insert, patch, remove, sent, 
 const dayBefore = s => { const t = R.parseDate(s); return t === null ? null : R.isoDate(t - R.DAY); };
 const monthOf = dateIncurred => `${String(dateIncurred).slice(0, 8)}01`;
 
+// A blank date would file the expense under no month at all, hiding it from
+// every month view and everyone's cost-share.
+function requireExpenseDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}/.test(String(value))) throw new RevenueError(422, 'date_incurred must be a YYYY-MM-DD date');
+}
+
 function buildRouter(getPrisma) {
   const router = express.Router();
   const db = () => handle(getPrisma());
@@ -305,6 +311,7 @@ function buildRouter(getPrisma) {
 
   post('/expenses', async req => {
     required(req.body, ['date_incurred', 'description', 'amount']);
+    requireExpenseDate(req.body.date_incurred);
     return { id: await insert(db(), 'expenses', {
       date_incurred: req.body.date_incurred, month: monthOf(req.body.date_incurred), description: req.body.description,
       category: req.body.category ?? 'Other', amount: req.body.amount, receipt_url: req.body.receipt_url ?? null,
@@ -322,6 +329,7 @@ function buildRouter(getPrisma) {
     const existing = await d.one(`SELECT * FROM rev_expenses WHERE id = $1`, id(req));
     if (!existing) throw new RevenueError(404, 'Expense not found');
     const updates = withAudience(sent(req.body, fields));
+    if ('date_incurred' in updates) requireExpenseDate(updates.date_incurred);
     const merged = { ...existing, ...updates };
     await patch(d, 'expenses', existing.id, { ...updates, month: monthOf(merged.date_incurred) }, [...fields, 'month'], 'Expense not found');
   });
