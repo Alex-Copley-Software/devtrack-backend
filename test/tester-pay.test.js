@@ -83,7 +83,7 @@ test('tester QA: asked in review, only the reporter can answer, a video is requi
   assert.equal(await pay.onStatusChange(prisma, { ...r, type: 'suggestion', status: 'reviewing' }, 'open'), null);
   assert.equal(await pay.onStatusChange(prisma, { ...r, discordThreadId: null, status: 'reviewing' }, 'open'), null);
 
-  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Only the tester/);
+  await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ben', verdict: 'fixed', videoUrl: 'https://x/v.mp4' }), /Only Ana can answer this check/);
   await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'fixed' }), /Post a video or photo showing the fix/);
   await assert.rejects(pay.respond(prisma, ask.check.id, { discordUserId: 'u-ana', verdict: 'not_fixed' }), /still happening/);
 
@@ -346,11 +346,54 @@ test('staff can hand a QA check to someone else, or take it off them', async () 
   await assert.rejects(pay.switchHolder(prisma, a.r.id, { discordUserId: 'u-cy' }), /no QA check waiting/);
 });
 
+test('whoever said Not fixed is asked first to check the next fix, and it opens up in QA Requests if they do not answer', async () => {
+  const { prisma, report } = await createDb();
+  await pay.saveSettings(prisma, { requireVideo: false });
+  const r = await report({ status: 'in_progress' });
+  const toReview = () => pay.onStatusChange(prisma, { ...r, status: 'reviewing' }, 'in_progress', 'Dev');
+  const leaveReview = () => pay.onStatusChange(prisma, { ...r, status: 'in_progress' }, 'reviewing', 'Dev');
+  const openUp = async id => {
+    await prisma.$executeRawUnsafe(`UPDATE "ReportQaCheck" SET "messageId" = 'm', "requestedAt" = NOW() - INTERVAL '31 minutes' WHERE id = $1`, id);
+    assert.ok((await pay.dueForEscalation(prisma)).checks.some(c => c.id === id));
+    await pay.markEscalated(prisma, id, { channelId: 'qa', messageId: `qm-${id}` });
+  };
+
+  // First round: the reporter, Ana, is asked; it opens up and Ben finds it still broken.
+  const first = await toReview();
+  assert.deepEqual([first.check.discordUserId, first.retest], ['u-ana', false]);
+  await openUp(first.check.id);
+  await pay.take(prisma, first.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben' });
+  await pay.respond(prisma, first.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben', verdict: 'not_fixed', note: 'Door still sticks' });
+
+  // Next fix: Ben is asked, not Ana, and only he can answer until it opens up.
+  const second = await toReview();
+  assert.deepEqual([second.check.discordUserId, second.check.discordUser, second.retest], ['u-ben', 'Ben', true]);
+  await assert.rejects(pay.respond(prisma, second.check.id, { discordUserId: 'u-ana', verdict: 'fixed' }), /Only Ben can answer this check/);
+  await assert.rejects(pay.take(prisma, second.check.id, { discordUserId: 'u-cy' }), /still waiting on the tester/);
+  // Ben does not answer in time: it goes to QA Requests, where anyone (Ben too) can take it.
+  await openUp(second.check.id);
+  await pay.take(prisma, second.check.id, { discordUserId: 'u-cy', discordUserName: 'Cy' });
+
+  // Staff pull it back before anyone answers: withdrawn checks do not count, so Ben is still asked next time.
+  await leaveReview();
+  const third = await toReview();
+  assert.equal(third.check.discordUserId, 'u-ben');
+  // Ben answers himself this time, still broken: he stays the one asked.
+  await pay.respond(prisma, third.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben', verdict: 'not_fixed', note: 'Still' });
+  const fourth = await toReview();
+  assert.equal(fourth.check.discordUserId, 'u-ben');
+  await pay.respond(prisma, fourth.check.id, { discordUserId: 'u-ben', discordUserName: 'Ben', verdict: 'fixed' });
+
+  // Fixed since: if the report comes back to QA Review later, the reporter is asked again.
+  const later = await toReview();
+  assert.deepEqual([later.check.discordUserId, later.retest], ['u-ana', false]);
+});
+
 test('answerRefusal says who may answer a check', () => {
   const now = new Date('2026-10-26T12:00:00Z');
   const base = { discordUserId: 'u-ana', escalatedAt: null, takenByDiscordUserId: null, takenAt: null, takenBy: null };
   assert.equal(pay.answerRefusal(base, 'u-ana', now), null);
-  assert.match(pay.answerRefusal(base, 'u-ben', now), /Only the tester/);
+  assert.match(pay.answerRefusal(base, 'u-ben', now), /Only the tester it asked can answer/);
   const open = { ...base, escalatedAt: '2026-10-26T11:00:00Z' };
   assert.match(pay.answerRefusal(open, 'u-ana', now), /Take this check there first/);
   const held = { ...open, takenByDiscordUserId: 'u-ben', takenBy: 'Ben', takenAt: new Date('2026-10-26T11:45:00Z') };

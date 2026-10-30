@@ -25,6 +25,15 @@ fixed** buttons.
 Only the tester who filed the report can answer, and only once per request,
 until the request has waited 30 minutes (or whatever `/qadelay` is set to). Then it opens up in QA Requests
 (below), and from then on the reporter can only answer by taking it there like anyone else. A report that comes back to QA Review after a "Not fixed" gets a new request.
+
+**Whoever said Not fixed checks the next fix.** When a report comes back to
+QA Review, the new request goes to the last person who answered Not fixed
+(whether they were the reporter or took it in QA Requests), not the
+reporter. They are pinged in the report's post and have it to themselves for
+the same wait; if they have not answered by then it opens up in QA Requests
+as usual. A request withdrawn without an answer does not change who is
+asked. Once a fix is confirmed (or staff approve it), a later request goes
+back to the reporter.
 Reports with no Discord thread or reporter (imports, manual entries) and
 suggestions are skipped. Every request and answer is kept in the **Tester QA
 log** on the payouts page.

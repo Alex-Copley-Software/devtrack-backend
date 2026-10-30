@@ -638,6 +638,22 @@ async function listChecks(prisma, { status, from, to, limit = 300 } = {}) {
     LIMIT ${Math.min(1000, Math.max(1, Number(limit) || 300))}`, ...values);
 }
 
+// Who a new check asks first: whoever said Not fixed on the last answered
+// check, so the person who found it still broken checks the next fix, or
+// else the reporter. They have it alone for qaEscalateMinutes, as the
+// reporter would, before it opens up in QA Requests. Withdrawn checks are
+// skipped; a Fixed or staff approval since then goes back to the reporter.
+async function whoToAsk(prisma, report) {
+  const [last] = await prisma.$queryRawUnsafe(`
+    SELECT status, "answeredByDiscordUserId", "answeredBy" FROM "ReportQaCheck"
+    WHERE "reportId" = $1 AND status IN ('fixed', 'not_fixed', 'staff_approved')
+    ORDER BY COALESCE("respondedAt", "requestedAt") DESC LIMIT 1`, report.id);
+  if (last?.status === 'not_fixed' && last.answeredByDiscordUserId) {
+    return { discordUserId: last.answeredByDiscordUserId, discordUser: last.answeredBy };
+  }
+  return { discordUserId: report.discordUserId, discordUser: report.discordUser };
+}
+
 // Called when a report's status changes. Returns what the bot should do in
 // the reporter's thread, or null:
 //   { kind: 'ask', check }                    the report went to QA Review
@@ -653,11 +669,15 @@ async function onStatusChange(prisma, report, previousStatus, actorName) {
     if (!['bug', 'crash'].includes(report.type) || !report.discordThreadId || !report.discordUserId) return null;
     await prisma.$executeRawUnsafe(
       `UPDATE "ReportQaCheck" SET status = 'cancelled', "respondedAt" = CURRENT_TIMESTAMP WHERE "reportId" = $1 AND status = 'pending'`, report.id);
+    const asked = await whoToAsk(prisma, report);
     const id = crypto.randomUUID();
     await prisma.$executeRawUnsafe(`
       INSERT INTO "ReportQaCheck" ("id", "reportId", "discordUserId", "discordUser", "threadId")
-      VALUES ($1, $2, $3, $4, $5)`, id, report.id, report.discordUserId, report.discordUser || null, report.discordThreadId);
-    return { kind: 'ask', check: await getCheck(prisma, id), requireVideo: settings.requireVideo, escalateMinutes: settings.qaEscalateMinutes };
+      VALUES ($1, $2, $3, $4, $5)`, id, report.id, asked.discordUserId, asked.discordUser || null, report.discordThreadId);
+    return {
+      kind: 'ask', check: await getCheck(prisma, id), requireVideo: settings.requireVideo, escalateMinutes: settings.qaEscalateMinutes,
+      retest: asked.discordUserId !== report.discordUserId,
+    };
   }
 
   if (previousStatus === 'reviewing') {
@@ -824,12 +844,13 @@ const heldBy = (check, now = new Date()) =>
 const clock = date => date.toISOString().slice(11, 16);
 
 // Why this person cannot answer the check, or null if they can. Before the
-// check is opened up only the reporter can. Once it is open in QA Requests
+// check is opened up only the person it asked can (the reporter, or whoever
+// said Not fixed last time). Once it is open in QA Requests
 // only whoever holds it can; the reporter too has to press Take this check.
 function answerRefusal(check, discordUserId, now = new Date()) {
   if (!check) return 'That QA check no longer exists.';
   const who = String(discordUserId);
-  if (!check.escalatedAt) return who === check.discordUserId ? null : 'Only the tester who filed this report can confirm the fix.';
+  if (!check.escalatedAt) return who === check.discordUserId ? null : `Only ${check.discordUser || 'the tester it asked'} can answer this check for now.`;
   const holder = heldBy(check, now);
   if (holder === who) return null;
   if (holder) return `${check.takenBy || 'Someone else'} has taken this check in QA Requests and has it until ${clock(holdEnds(check))} UTC.`;
@@ -837,8 +858,8 @@ function answerRefusal(check, discordUserId, now = new Date()) {
   return 'This check is open in QA Requests: press Take this check there first, then answer it here.';
 }
 
-// The answer, once. Before the check is opened up, from the person who filed
-// the report; after, from whoever holds it in QA Requests.
+// The answer, once. Before the check is opened up, from the person it asked;
+// after, from whoever holds it in QA Requests.
 async function respond(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl }) {
   const check = await getCheck(prisma, checkId);
   if (!check) throw new PayError(404, 'That QA check no longer exists.');

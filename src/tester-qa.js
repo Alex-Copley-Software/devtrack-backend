@@ -69,10 +69,10 @@ async function afterStatusChange(prisma, report, previousStatus, actorName) {
     // Truthy either way, so the caller re-reads the report and sends the mark to the dashboard.
     if (!result) return marked ? { kind: 'qa_mark' } : null;
     if (result.kind === 'ask') {
-      await log({ reportId: report.id, action: 'tester_qa_requested', detail: report.discordUser || null, actorName: actorName || 'System', actorId: '' });
+      await log({ reportId: report.id, action: 'tester_qa_requested', detail: result.check.discordUser || null, actorName: actorName || 'System', actorId: '' });
       notifier.qaCheck({
         checkId: result.check.id, threadId: result.check.threadId, discordUserId: result.check.discordUserId,
-        title: report.title, requireVideo: result.requireVideo, escalateMinutes: result.escalateMinutes,
+        title: report.title, requireVideo: result.requireVideo, escalateMinutes: result.escalateMinutes, retest: result.retest,
       });
     } else {
       notifier.qaCheckUpdate({
@@ -91,8 +91,9 @@ async function afterStatusChange(prisma, report, previousStatus, actorName) {
 // The tester pressed Fixed or Not fixed in Discord.
 async function applyAnswer(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl }) {
   const { check, settings } = await pay.respond(prisma, checkId, { discordUserId, discordUserName, verdict, note, videoUrl });
-  const byReporter = check.answeredByDiscordUserId === check.discordUserId;
-  const actorName = `${check.answeredBy || 'Tester'} (${byReporter ? 'tester' : 'QA Requests'})`;
+  // The person the check asked (the reporter, or whoever said Not fixed last time), or someone from QA Requests.
+  const byAsked = check.answeredByDiscordUserId === check.discordUserId;
+  const actorName = `${check.answeredBy || 'Tester'} (${byAsked ? 'tester' : 'QA Requests'})`;
   let autoResolved = false;
 
   if (verdict === 'fixed') {
