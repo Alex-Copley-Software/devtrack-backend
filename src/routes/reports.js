@@ -16,6 +16,14 @@ const r2 = require('../r2');
 const devTags = require('../dev-tags');
 
 const prisma = new PrismaClient();
+
+// A declined report is never in the queue. Any left queued (declined before
+// declining took them out of it) would sit in neither the Bug Queue nor
+// Overview's Declined tab, so they are taken out once at startup.
+prisma.$executeRawUnsafe(`UPDATE "Report" SET queued = false WHERE status::text = 'declined' AND queued = true`)
+  .then(n => { if (n) console.log(`[Reports] Took ${n} declined report(s) out of the queue`); })
+  .catch(err => console.error('[Reports] Could not dequeue declined reports:', err.message));
+
 let statusEnumReady = false;
 
 async function ensureStatusEnumValues() {
@@ -538,13 +546,13 @@ router.patch('/:id', auth, async (req, res) => {
     let   idx        = 1;
 
     if (status      !== undefined) { setClauses.push(`status = $${idx++}::"Status"`);        values.push(status); }
-    // Auto-dequeue when declining
-    if ((status === 'declined' || accepting) && queued === undefined) { setClauses.push(`queued = $${idx++}`); values.push(false); }
+    // Declining or accepting always takes a report out of the queue.
+    if (status === 'declined' || (accepting && queued === undefined)) { setClauses.push(`queued = $${idx++}`); values.push(false); }
     if (priority    !== undefined) { setClauses.push(`priority = $${idx++}::"Priority"`);    values.push(priority); }
     if (bugLevel    !== undefined) { setClauses.push(`"bugLevel" = $${idx++}::"BugLevel"`);  values.push(bugLevel === '' ? null : bugLevel); }
     if (category    !== undefined) { setClauses.push(`category = $${idx++}`);                values.push(category === '' ? null : category); }
     if (devNotes    !== undefined) { setClauses.push(`"devNotes" = $${idx++}`);               values.push(devNotes); }
-    if (queued      !== undefined) { setClauses.push(`queued = $${idx++}`);                   values.push(queued); }
+    if (queued      !== undefined && status !== 'declined') { setClauses.push(`queued = $${idx++}`); values.push(queued); }
     if (req.body.publishStatus !== undefined) { setClauses.push(`"publishStatus" = $${idx++}`); values.push(req.body.publishStatus); }
     if (req.body.notifyOwner   !== undefined) { setClauses.push(`"notifyOwner" = $${idx++}`);   values.push(req.body.notifyOwner); }
     if (tags !== undefined) {
