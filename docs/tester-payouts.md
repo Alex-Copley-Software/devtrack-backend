@@ -115,6 +115,8 @@ private, so nobody else could post proof in it.
   default split, as for asset payouts. The period then says what was logged.
   Reopening it takes those expenses back out. Marking paid still works if
   logging fails; the period says so, and it can be logged by hand.
+  Deleting one of those expenses on the Revenue page leaves the period paid
+  and takes it out of what the period says was logged.
 
 What counts:
 

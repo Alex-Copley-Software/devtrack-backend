@@ -3,6 +3,7 @@
 // saves asking a dev for a Roblox account it already holds.
 
 const test = require('node:test');
+const express = require('express');
 const assert = require('node:assert/strict');
 
 process.env.REVENUE_ENABLED = 'true';
@@ -13,6 +14,7 @@ const payouts = require('../../src/assets/payouts');
 const assistant = require('../../src/assets/agent/assistant');
 const revenue = require('../../src/revenue/sync');
 const { ensureRevenueSchema } = require('../../src/revenue/schema');
+const { buildRouter } = require('../../src/revenue/api');
 
 const FORUM = '600000000000000001';
 const POST = '600000000000000002';
@@ -35,6 +37,26 @@ async function setup({ roblox = '5550001' } = {}) {
   const request = (text, result) => payouts.handleRequest(prisma, msg(text), { read: reads({ kind: 'request', item: 'Aizen', ...result }) });
   return { prisma, ...seeded, expenses, request };
 }
+
+test('deleting a logged expense on the Revenue page leaves the payout paid and says the expense is gone', async () => {
+  const { prisma, expenses, request } = await setup();
+  const p = (await request('30k payout for aizens shiny model', { amount_text: '30k', amount_number: 30000, description: 'Aizen shiny model' })).payout;
+  await payouts.resolve(prisma, p.id, { decision: 'paid', actorName: 'Olive', via: 'discord' });
+  const [e] = await expenses();
+
+  const app = express();
+  app.use('/api', buildRouter(() => prisma));
+  const server = await new Promise(resolve => { const s = app.listen(0, () => resolve(s)); });
+  try {
+    const url = `http://localhost:${server.address().port}/api/expenses/${e.id}`;
+    assert.deepEqual(await (await fetch(url, { method: 'DELETE' })).json(), { ok: true });
+    assert.equal((await fetch(url, { method: 'DELETE' })).status, 404);
+  } finally { server.close(); }
+
+  assert.deepEqual(await expenses(), []);
+  const [after] = await prisma.$queryRawUnsafe(`SELECT status, "revenueExpenseId", "revenueNote" FROM "AssetPayout" WHERE id = $1`, p.id);
+  assert.deepEqual([after.status, after.revenueExpenseId, after.revenueNote], ['paid', null, 'Its expense was deleted on the Revenue page']);
+});
 
 test('a paid payout is logged once as an expense against the right payee, and reopening takes it back out', async () => {
   const { prisma, expenses, request } = await setup();

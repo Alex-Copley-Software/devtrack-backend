@@ -241,6 +241,25 @@ async function unlogTesterPayout(prisma, ref) {
   return prisma.$executeRawUnsafe(`DELETE FROM rev_expenses WHERE source = $1 AND source_ref LIKE $2 || ':%'`, TESTER_SOURCE, String(ref));
 }
 
+// An expense deleted by hand on the Revenue page: the payout or pay period
+// that logged it stays paid, but stops saying it is logged.
+async function forgetExpense(prisma, expense) {
+  if (expense.source === 'asset_payout') {
+    await prisma.$executeRawUnsafe(`UPDATE "AssetPayout" SET "revenueExpenseId" = NULL, "revenueNote" = $2 WHERE id = $1`,
+      expense.source_ref, 'Its expense was deleted on the Revenue page');
+  } else if (expense.source === TESTER_SOURCE) {
+    const ref = String(expense.source_ref).split(':')[0];
+    const [period] = await prisma.$queryRawUnsafe(`SELECT "revenue" FROM "TesterPayPeriod" WHERE id = $1`, ref);
+    if (!period?.revenue?.expenseIds?.includes(expense.id)) return;
+    const expenseIds = period.revenue.expenseIds.filter(id => id !== expense.id);
+    const [{ total }] = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(amount), 0) AS total FROM rev_expenses WHERE id = ANY($1::int[])`, expenseIds);
+    const revenue = expenseIds.length
+      ? { ...period.revenue, expenseIds, total: Number(total) }
+      : { note: 'Its expenses were deleted on the Revenue page' };
+    await prisma.$executeRawUnsafe(`UPDATE "TesterPayPeriod" SET "revenue" = $2::jsonb WHERE id = $1`, ref, JSON.stringify(revenue));
+  }
+}
+
 // For the assistant: payments to someone, newest first, with a total.
 async function paymentsTo(prisma, { name, text, limit = 15 } = {}) {
   if (!enabled()) return { error: 'The Revenue page is not switched on, so there is no payment history to read.' };
@@ -405,5 +424,5 @@ module.exports = {
   enabled, audienceOptions, robloxUserId, findPayee, robloxFor, recentPayments, logAssetPayout, unlogAssetPayout, paymentsTo, looksLikeDollars,
   USD_PER_ROBUX, robuxFromUsd, usdIn,
   parseRobux, expenseCategories, prepareExpenses, logExpenses, MAX_EXPENSES_PER_CARD,
-  planTesterPayout, logTesterPayout, unlogTesterPayout,
+  planTesterPayout, logTesterPayout, unlogTesterPayout, forgetExpense,
 };

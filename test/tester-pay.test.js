@@ -285,6 +285,21 @@ test('amounts convert to Robux, and marking a period paid can log each person on
 
     // Marked paid without logging anything: nothing goes to Revenue.
     assert.equal((await pay.markPaid(prisma, period.id, 'Olive')).revenue, null);
+
+    // Deleting a logged expense by hand: the period stays paid and stops counting it.
+    await pay.reopenPeriod(prisma, period.id);
+    const again = await pay.markPaid(prisma, period.id, 'Olive', { revenue: { keys: ['u-ana', 'u-ben'] } });
+    const drop = async expenseId => {
+      const [row] = await prisma.$queryRawUnsafe(`DELETE FROM rev_expenses WHERE id = $1 RETURNING *`, expenseId);
+      await require('../src/revenue/sync').forgetExpense(prisma, row);
+      return pay.getPeriod(prisma, period.id);
+    };
+    const [anaExpense, benExpense] = again.revenue.expenseIds;
+    const oneLeft = await drop(benExpense);
+    assert.deepEqual([oneLeft.revenue.expenseIds, oneLeft.revenue.total, !!oneLeft.paidAt], [[anaExpense], 3750, true]);
+    const noneLeft = await drop(anaExpense);
+    assert.deepEqual([noneLeft.revenue, !!noneLeft.paidAt], [{ note: 'Its expenses were deleted on the Revenue page' }, true]);
+    assert.equal((await pay.reopenPeriod(prisma, period.id)).expensesRemoved, 0);
   } finally { delete process.env.REVENUE_ENABLED; }
 });
 

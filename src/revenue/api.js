@@ -7,6 +7,7 @@
 const express = require('express');
 const R = require('./resolver');
 const { RevenueError, handle, reader, transaction, insert, patch, remove, sent, required, coerce } = require('./store');
+const { forgetExpense } = require('./sync');
 
 // SQLite's date(x, '-1 day'): the day before, or null when x is not a date.
 const dayBefore = s => { const t = R.parseDate(s); return t === null ? null : R.isoDate(t - R.DAY); };
@@ -335,7 +336,10 @@ function buildRouter(getPrisma) {
   });
 
   // Not in the original (an expense could only be edited, never removed).
-  del('/expenses/:id', async req => { await remove(db(), 'expenses', id(req), 'Expense not found'); });
+  del('/expenses/:id', async req => {
+    const removed = await remove(db(), 'expenses', id(req), 'Expense not found');
+    await forgetExpense(getPrisma(), removed).catch(err => console.error('[Revenue] could not update what logged a deleted expense:', err.message));
+  });
 
   // ── monthly revenue ───────────────────────────────────────────────────────
 

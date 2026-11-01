@@ -85,6 +85,10 @@ The payee is found by Roblox user id first, then by name, and created if the
 directory has nobody. Reopening or declining a paid payout removes that
 expense. The payout card shows the expense number.
 
+**Deleting an expense.** Any expense can be deleted from the Expenses tab,
+after a confirmation. One logged by a paid payout or pay period leaves that
+payout or period paid; it just stops saying the expense is logged.
+
 **Who pays for it.** Pressing Paid out asks who splits the cost, the same
 choice the Expenses tab has: pick people from this month's manual-payout
 shareholders, or take the default (an even split across all of them). In
