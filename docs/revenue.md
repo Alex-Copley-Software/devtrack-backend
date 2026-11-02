@@ -85,6 +85,12 @@ The payee is found by Roblox user id first, then by name, and created if the
 directory has nobody. Reopening or declining a paid payout removes that
 expense. The payout card shows the expense number.
 
+**Sorting and filtering the expense log.** Next to the month filter, *Paid
+to* shows what one payee was paid, and *Who pays* shows the expenses one person
+is in the split for, including default splits in months they are part of
+them. *Sort* orders by date or by cost. The total covers what is showing, at
+full cost rather than one person's share. The choices are remembered.
+
 **Deleting an expense.** Any expense can be deleted from the Expenses tab,
 after a confirmation. One logged by a paid payout or pay period leaves that
 payout or period paid; it just stops saying the expense is logged.

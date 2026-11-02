@@ -310,6 +310,16 @@ function buildRouter(getPrisma) {
     ? await db().all(`SELECT * FROM rev_expenses WHERE month = $1 ORDER BY date_incurred, id`, req.query.month)
     : await db().all(`SELECT * FROM rev_expenses ORDER BY date_incurred, id`)).map(R.withCostShareIds));
 
+  // Who an expense with no "who pays" of its own is split between, by month.
+  get('/expense-audiences', async () => {
+    const d = rd();
+    const out = {};
+    for (const { month } of await d.all(`SELECT DISTINCT month FROM rev_expenses WHERE month IS NOT NULL`)) {
+      out[month] = await R.resolveCostSharePersonIds(d, month);
+    }
+    return out;
+  });
+
   post('/expenses', async req => {
     required(req.body, ['date_incurred', 'description', 'amount']);
     requireExpenseDate(req.body.date_incurred);

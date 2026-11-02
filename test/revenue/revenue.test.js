@@ -148,6 +148,11 @@ test('edits behave like the original: only the fields sent change, errors come b
     after = (await call('GET', '/api/expenses')).body.find(x => x.id === e.id);
     assert.deepEqual([after.payee_id, after.cost_share_person_ids, after.month], [null, null, '2026-10-01']);
 
+    // The default split is worked out per month, the same way the cost-share maths does.
+    const audiences = (await call('GET', '/api/expense-audiences')).body;
+    assert.deepEqual(Object.keys(audiences).sort(), [...new Set(expenses.map(x => x.month).concat('2026-10-01'))].sort());
+    assert.deepEqual(audiences['2026-10-01'], (await call('GET', '/api/payouts/2026-10-01')).body.map(r => r.person_id).sort((a, b) => a - b));
+
     assert.deepEqual(await call('PATCH', '/api/expenses/99999', { amount: 1 }), { status: 404, body: { detail: 'Expense not found' } });
     assert.deepEqual(await call('POST', '/api/expenses', { description: 'no date' }), { status: 422, body: { detail: 'date_incurred is required' } });
     assert.deepEqual(await call('POST', '/api/expenses', { date_incurred: '', description: 'blank date', amount: 1 }),
