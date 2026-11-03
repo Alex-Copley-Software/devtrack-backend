@@ -270,3 +270,48 @@ test('a new person can be added to the roster with their first contract term, in
     assert.equal((await call('POST', '/api/people', { name: 'Name Only' })).status, 200);
   } finally { close(); }
 });
+
+test('Revenue (new) splits what the group has left; a cost pushed onto someone raises everyone else', async () => {
+  const { prisma, call, close } = await portWithFixture();
+  try {
+    const month = (await call('GET', '/api/monthly-revenue')).body.map(m => m.month).sort().pop();
+    const empty = (await call('GET', `/api/split/${month}`)).body;
+    assert.equal(empty.remaining, null, 'nothing entered yet');
+    assert.ok(empty.people.length > 1 && empty.people.every(p => p.payout === null));
+
+    assert.equal((await call('PUT', `/api/split/${month}`, { remaining: -5 })).status, 422);
+    assert.equal((await call('PUT', '/api/split/soon', { remaining: 5 })).status, 422);
+    assert.equal((await call('PUT', `/api/split/${month}`, { remaining: 1000000, note: 'end of month' })).status, 200);
+    const sum = rows => rows.reduce((s, p) => s + p.payout, 0);
+    const before = (await call('GET', `/api/split/${month}`)).body;
+    assert.equal(before.remaining, 1000000);
+    assert.ok(Math.abs(sum(before.people) - 1000000) < 1e-6, 'payouts add up to what the group has left');
+    assert.ok(Math.abs(before.people.reduce((s, p) => s + p.split_fraction, 0) - 1) < 1e-9);
+    assert.ok(before.auto_paid.every(p => !before.people.some(q => q.person_id === p.person_id)), 'Standard people are paid by Roblox, not from the group');
+
+    // Push one "everyone" expense onto a single person.
+    const target = before.people[before.people.length - 1];
+    const expenseId = (await call('POST', '/api/expenses', { date_incurred: month, description: 'Test model', amount: 30000 })).body.id;
+    const withShared = (await call('GET', `/api/split/${month}`)).body;
+    assert.ok(withShared.shared_costs.some(l => l.kind === 'expense' && l.id === expenseId));
+    // The group paid it, so it has 30,000 less.
+    await call('PUT', `/api/split/${month}`, { remaining: 970000 });
+    const shared = (await call('GET', `/api/split/${month}`)).body;
+    await call('PATCH', `/api/expenses/${expenseId}`, { cost_share_person_ids: [target.person_id] });
+    const pushed = (await call('GET', `/api/split/${month}`)).body;
+    assert.ok(Math.abs(sum(pushed.people) - 970000) < 1e-6);
+    const mine = pushed.people.find(p => p.person_id === target.person_id);
+    assert.deepEqual(mine.charges.filter(c => c.id === expenseId).map(c => c.charged), [30000], 'the whole amount, not a split');
+    for (const p of pushed.people) {
+      const was = shared.people.find(q => q.person_id === p.person_id).payout;
+      if (p.person_id === target.person_id) assert.ok(p.payout < was);
+      else assert.ok(p.payout > was, `${p.name} gets more once someone else carries the cost`);
+    }
+    assert.equal(pushed.people.filter(p => p.charges.some(c => c.id === expenseId)).length, 1, 'only the person charged sees it');
+
+    // Clearing the balance leaves the split unworked rather than zero.
+    await call('PUT', `/api/split/${month}`, { remaining: null });
+    assert.equal((await call('GET', `/api/split/${month}`)).body.remaining, null);
+    assert.ok((await prisma.$queryRawUnsafe(`SELECT 1 FROM rev_people LIMIT 1`)).length, 'the roster is untouched');
+  } finally { close(); }
+});

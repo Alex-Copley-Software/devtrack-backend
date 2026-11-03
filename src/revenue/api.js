@@ -6,6 +6,7 @@
 
 const express = require('express');
 const R = require('./resolver');
+const split = require('./split');
 const { RevenueError, handle, reader, transaction, insert, patch, remove, sent, required, coerce } = require('./store');
 const { forgetExpense } = require('./sync');
 
@@ -677,6 +678,10 @@ function buildRouter(getPrisma) {
     return out;
   };
   get('/payouts/:month', byMethod('manual'));
+
+  // Revenue (new): the split of what the group has left (split.js).
+  get('/split/:month', req => split.splitMonth(rd(), req.params.month));
+  router.put('/split/:month', h(req => split.setRemaining(db(), req.params.month, req.body || {})));
   // Standard-payout people's resolved earnings. Informational only - Roblox's
   // group % split pays these out automatically, outside this system.
   get('/auto-payouts/:month', byMethod('standard'));
