@@ -91,11 +91,43 @@ function buildRouter(getPrisma) {
 
   get('/people', () => people(db()));
 
+  // Adds someone to the roster. Sent with a share (DevTrack's Roster tab
+  // does), the person and their first contract term are written together, so
+  // nobody is ever left on the roster with no term (which would hide them).
+  // Sent with only a name it behaves exactly as the original did.
   post('/people', async req => {
     required(req.body, ['name']);
-    return { id: await insert(db(), 'people', {
-      name: req.body.name, roblox_handle: req.body.roblox_handle ?? null, discord_id: req.body.discord_id ?? null, category: req.body.category ?? 'Developer',
-    }) };
+    const name = String(req.body.name).trim();
+    if (!name) throw new RevenueError(400, "Name can't be empty");
+    const withShare = req.body.share_pct !== undefined && req.body.share_pct !== null && req.body.share_pct !== '';
+    let pct = null;
+    let startsOn = null;
+    if (withShare) {
+      pct = Number(req.body.share_pct);
+      if (!Number.isFinite(pct) || pct < 0 || pct > 1) throw new RevenueError(400, 'share_pct must be a fraction between 0 and 1 (0.05 is 5%)');
+      if (!['standard', 'manual'].includes(req.body.payout_method ?? 'standard')) throw new RevenueError(400, 'payout_method must be standard or manual');
+      if (!['active', 'no_contract'].includes(req.body.contract_status ?? 'active')) throw new RevenueError(400, 'contract_status must be active or no_contract');
+      const t = R.parseDate(req.body.effective_from);
+      if (t === null) throw new RevenueError(400, 'effective_from must be a YYYY-MM-DD date');
+      startsOn = `${R.isoDate(t).slice(0, 8)}01`; // terms start on the 1st, like every other roster change
+    }
+    return tx(async d => {
+      if (await d.one(`SELECT id FROM rev_people WHERE lower(name) = lower($1)`, name)) throw new RevenueError(409, `${name} is already on the roster`);
+      if (req.body.payee_id !== undefined && req.body.payee_id !== null && !await d.one(`SELECT id FROM rev_payees WHERE id = $1`, Number(req.body.payee_id))) {
+        throw new RevenueError(404, 'Payee not found');
+      }
+      const personId = await insert(d, 'people', {
+        name, roblox_handle: req.body.roblox_handle ?? null, discord_id: req.body.discord_id ?? null, category: req.body.category ?? 'Developer',
+        ...(req.body.payee_id !== undefined && req.body.payee_id !== null ? { payee_id: Number(req.body.payee_id) } : {}),
+      });
+      if (withShare) {
+        await insert(d, 'share_terms', {
+          person_id: personId, share_pct: pct, payout_method: req.body.payout_method ?? 'standard',
+          contract_status: req.body.contract_status ?? 'active', effective_from: startsOn, effective_until: null,
+        });
+      }
+      return { id: personId };
+    });
   });
 
   patchRoute('/people/:id', async req => {

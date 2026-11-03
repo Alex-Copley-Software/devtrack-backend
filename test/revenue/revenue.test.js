@@ -232,3 +232,41 @@ test('the page is off by default, needs a sign-in, and only the owner or people 
     assert.equal((await call('GET', '/api/revenue/overview/2026-09-01', undefined, token('u-fin', 'engineer'))).body.month, '2026-09-01');
   } finally { close(); delete process.env.REVENUE_ENABLED; }
 });
+
+test('a new person can be added to the roster with their first contract term, in one go', async () => {
+  const { call, close } = await portWithFixture();
+  try {
+    const month = (await call('GET', '/api/monthly-revenue')).body.map(m => m.month).sort().pop();
+    const before = (await call('GET', `/api/roster/${month}`)).body;
+    const made = await call('POST', '/api/people', {
+      name: '  New Nadia ', roblox_handle: 'nadia_rbx', category: 'Investor', share_pct: 0.025, payout_method: 'manual',
+      contract_status: 'no_contract', effective_from: `${month.slice(0, 7)}-17`,
+    });
+    assert.equal(made.status, 200);
+    const terms = (await call('GET', `/api/people/${made.body.id}/share-terms`)).body;
+    assert.deepEqual(terms.map(t => [t.share_pct, t.payout_method, t.contract_status, t.effective_from, t.effective_until]),
+      [[0.025, 'manual', 'no_contract', month, null]], 'the term starts on the 1st of the chosen month');
+    const row = (await call('GET', `/api/roster/${month}`)).body.find(r => r.person_id === made.body.id);
+    assert.deepEqual([row.name, row.category, row.effective_share_pct, row.payout_method], ['New Nadia', 'Investor', 0.025, 'manual']);
+    assert.equal((await call('GET', `/api/roster/${month}`)).body.length, before.length + 1);
+
+    // Mistakes are refused before anything is written.
+    const count = async () => (await call('GET', '/api/people')).body.length;
+    const n = await count();
+    assert.deepEqual(await call('POST', '/api/people', { name: 'new nadia', share_pct: 0.01, effective_from: month }), { status: 409, body: { detail: 'new nadia is already on the roster' } });
+    assert.equal((await call('POST', '/api/people', { name: 'Big Ben', share_pct: 5, effective_from: month })).body.detail, 'share_pct must be a fraction between 0 and 1 (0.05 is 5%)');
+    assert.equal((await call('POST', '/api/people', { name: 'Big Ben', share_pct: 0.01, effective_from: 'soon' })).body.detail, 'effective_from must be a YYYY-MM-DD date');
+    assert.equal((await call('POST', '/api/people', { name: 'Big Ben', share_pct: 0.01, effective_from: month, payout_method: 'cash' })).body.detail, 'payout_method must be standard or manual');
+    assert.equal((await call('POST', '/api/people', { name: 'Big Ben', share_pct: 0.01, effective_from: month, payee_id: 999999 })).status, 404);
+    assert.equal((await call('POST', '/api/people', { name: '   ' })).body.detail, "Name can't be empty");
+    assert.equal(await count(), n, 'nothing half-added');
+
+    // Linked to someone in the payee directory, the person shows as that payee's roster entry.
+    const payee = (await call('POST', '/api/payees', { display_name: 'Ben | benrbx', roblox_user_id: '5550123' })).body.id;
+    const ben = (await call('POST', '/api/people', { name: 'Ben', share_pct: 0.01, effective_from: month, payee_id: payee })).body.id;
+    assert.equal((await call('GET', `/api/payees/${payee}/history`)).body.roster_person.id, ben);
+
+    // A name alone still works the way the original app did (no term yet).
+    assert.equal((await call('POST', '/api/people', { name: 'Name Only' })).status, 200);
+  } finally { close(); }
+});
