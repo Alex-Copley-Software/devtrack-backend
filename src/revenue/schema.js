@@ -116,10 +116,12 @@ async function ensureRevenueSchema(prisma) {
   }
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS rev_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
   await prisma.$executeRawUnsafe(`INSERT INTO rev_settings (key, value) VALUES ('robux_usd_rate', '0.0038') ON CONFLICT (key) DO NOTHING`);
-  // What the group had left at the end of each month, for Revenue (new) (split.js).
-  // Not one of TABLES, so backups and imports are unchanged by it.
+  // The month's figure for Revenue (new) (split.js): what the group had left
+  // (basis 'remaining') or what it made before costs (basis 'made'), held in
+  // the remaining column. Not one of TABLES, so backups and imports are unchanged by it.
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS rev_group_balances (month ${D} PRIMARY KEY, remaining DOUBLE PRECISION NOT NULL, note TEXT, updated_at ${NOW})`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE rev_group_balances ADD COLUMN IF NOT EXISTS basis TEXT NOT NULL DEFAULT 'remaining'`);
   for (const [table, cols] of UNIQUES) {
     await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS rev_${table}_uniq ON rev_${table} ${cols}`);
   }

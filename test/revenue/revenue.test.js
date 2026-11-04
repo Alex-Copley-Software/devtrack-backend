@@ -309,6 +309,17 @@ test('Revenue (new) splits what the group has left; a cost pushed onto someone r
     }
     assert.equal(pushed.people.filter(p => p.charges.some(c => c.id === expenseId)).length, 1, 'only the person charged sees it');
 
+    // Entered as what the group made, what's left follows the costs: dropping one leaves more to pay out.
+    assert.equal((await call('PUT', `/api/split/${month}`, { remaining: 5, basis: 'spent' })).status, 422);
+    await call('PUT', `/api/split/${month}`, { remaining: 2000000, basis: 'made' });
+    const made = (await call('GET', `/api/split/${month}`)).body;
+    assert.equal(made.basis, 'made');
+    assert.ok(Math.abs(made.remaining - (2000000 - made.shared_total - made.charged_total)) < 1e-6);
+    assert.ok(Math.abs(sum(made.people) - made.remaining) < 1e-6);
+    await call('DELETE', `/api/expenses/${expenseId}`);
+    const dropped = (await call('GET', `/api/split/${month}`)).body;
+    assert.ok(Math.abs(dropped.remaining - (made.remaining + 30000)) < 1e-6, 'the dropped cost stays in the group');
+
     // Clearing the balance leaves the split unworked rather than zero.
     await call('PUT', `/api/split/${month}`, { remaining: null });
     assert.equal((await call('GET', `/api/split/${month}`)).body.remaining, null);

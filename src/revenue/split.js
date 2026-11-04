@@ -82,7 +82,11 @@ async function splitMonth(d, month) {
   const sharedTotal = shared.reduce((s, l) => s + l.amount, 0);
   const chargedTotal = [...charges.values()].flat().reduce((s, c) => s + c.charged, 0);
 
-  const remaining = balance ? balance.remaining : null;
+  // The owner enters either what the group has left, or what it made before
+  // costs. Entered as made, what's left moves as costs are added or dropped.
+  const basis = balance ? balance.basis || 'remaining' : 'remaining';
+  const entered = balance ? balance.remaining : null;
+  const remaining = entered === null ? null : basis === 'made' ? entered - sharedTotal - chargedTotal : entered;
   const splitBase = remaining === null ? null : remaining + chargedTotal;
   const people = pool.map(p => {
     const fraction = totalWeight ? p.weight / totalWeight : 0;
@@ -99,7 +103,7 @@ async function splitMonth(d, month) {
   }).sort((a, b) => b.split_fraction - a.split_fraction || a.name.localeCompare(b.name));
 
   return {
-    month, remaining, note: balance ? balance.note : null, updated_at: balance ? balance.updated_at : null,
+    month, basis, entered, remaining, note: balance ? balance.note : null, updated_at: balance ? balance.updated_at : null,
     group_pct: groupPct, unheld_pct: unheldPct, owner_in_split: !!owner,
     auto_paid: autoPaid, shared_costs: shared, shared_total: sharedTotal,
     charged_lines: [...new Map([...charges.values()].flat().map(c => [`${c.kind}:${c.id}`, { kind: c.kind, id: c.id, date: c.date, description: c.description, category: c.category, amount: c.amount, who: c.who }])).values()],
@@ -115,11 +119,13 @@ async function setRemaining(d, month, body) {
   }
   const remaining = Number(body.remaining);
   if (!Number.isFinite(remaining) || remaining < 0) throw new RevenueError(422, 'remaining must be a number of Robux, 0 or more');
+  const basis = body.basis ?? 'remaining';
+  if (!['remaining', 'made'].includes(basis)) throw new RevenueError(422, 'basis must be remaining or made');
   await d.run(
-    `INSERT INTO rev_group_balances (month, remaining, note) VALUES ($1, $2::double precision, $3)
-     ON CONFLICT (month) DO UPDATE SET remaining = EXCLUDED.remaining, note = EXCLUDED.note,
+    `INSERT INTO rev_group_balances (month, remaining, note, basis) VALUES ($1, $2::double precision, $3, $4)
+     ON CONFLICT (month) DO UPDATE SET remaining = EXCLUDED.remaining, note = EXCLUDED.note, basis = EXCLUDED.basis,
        updated_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')`,
-    month, remaining, body.note ? String(body.note) : null);
+    month, remaining, body.note ? String(body.note) : null, basis);
 }
 
 module.exports = { splitMonth, setRemaining };
