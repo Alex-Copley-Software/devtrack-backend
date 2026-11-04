@@ -287,6 +287,7 @@ test('Revenue (new) splits what the group has left; a cost pushed onto someone r
     assert.equal(before.remaining, 1000000);
     assert.ok(Math.abs(sum(before.people) - 1000000) < 1e-6, 'payouts add up to what the group has left');
     assert.ok(Math.abs(before.people.reduce((s, p) => s + p.split_fraction, 0) - 1) < 1e-9);
+    assert.ok(before.people.every(p => 'roblox_handle' in p && 'roblox_user_id' in p), 'where each person is paid');
     assert.ok(before.auto_paid.every(p => !before.people.some(q => q.person_id === p.person_id)), 'Standard people are paid by Roblox, not from the group');
 
     // Push one "everyone" expense onto a single person.

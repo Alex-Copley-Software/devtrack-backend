@@ -56,10 +56,16 @@ async function splitMonth(d, month) {
 
   const pool = [];
   const autoPaid = [];
+  // Where each person is paid: their Roblox username, and the Roblox user id
+  // on the payee they're linked to, when there is one.
+  const payees = new Map((await d.all(`SELECT id, roblox_user_id FROM rev_payees`)).map(p => [p.id, p]));
   for (const person of await d.all(`SELECT * FROM rev_people ORDER BY id`)) {
     const r = await R.resolvePersonMonth(d, person, month);
     if (!r || !(r.effective_share_pct > 0)) continue;
-    (r.payout_method === 'manual' ? pool : autoPaid).push({ person_id: r.person_id, name: r.name, share_pct: r.effective_share_pct });
+    (r.payout_method === 'manual' ? pool : autoPaid).push({
+      person_id: r.person_id, name: r.name, share_pct: r.effective_share_pct,
+      roblox_handle: person.roblox_handle || null, roblox_user_id: payees.get(person.payee_id)?.roblox_user_id || null,
+    });
   }
   const groupPct = Math.max(0, 1 - autoPaid.reduce((s, p) => s + p.share_pct, 0));
   const unheldPct = Math.max(0, groupPct - pool.reduce((s, p) => s + p.share_pct, 0));
@@ -93,7 +99,7 @@ async function splitMonth(d, month) {
     const items = charges.get(p.person_id);
     const charged = items.reduce((s, c) => s + c.charged, 0);
     return {
-      person_id: p.person_id, name: p.name, share_pct: p.share_pct, unheld_pct: p === owner ? unheldPct : 0,
+      person_id: p.person_id, name: p.name, roblox_handle: p.roblox_handle, roblox_user_id: p.roblox_user_id, share_pct: p.share_pct, unheld_pct: p === owner ? unheldPct : 0,
       split_fraction: fraction, is_owner: p === owner,
       split_amount: splitBase === null ? null : splitBase * fraction,
       shared_costs: sharedTotal * fraction,
