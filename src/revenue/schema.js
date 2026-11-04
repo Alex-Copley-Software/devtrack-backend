@@ -122,6 +122,10 @@ async function ensureRevenueSchema(prisma) {
   await prisma.$executeRawUnsafe(
     `CREATE TABLE IF NOT EXISTS rev_group_balances (month ${D} PRIMARY KEY, remaining DOUBLE PRECISION NOT NULL, note TEXT, updated_at ${NOW})`);
   await prisma.$executeRawUnsafe(`ALTER TABLE rev_group_balances ADD COLUMN IF NOT EXISTS basis TEXT NOT NULL DEFAULT 'remaining'`);
+  // Who has been paid on Revenue (new), and how much it was when they were.
+  // Separate from rev_payment_status, which belongs to the Revenue page's own payouts.
+  await prisma.$executeRawUnsafe(
+    `CREATE TABLE IF NOT EXISTS rev_split_payments (month ${D} NOT NULL, person_id INT NOT NULL, amount DOUBLE PRECISION NOT NULL, paid_at ${NOW}, PRIMARY KEY (month, person_id))`);
   for (const [table, cols] of UNIQUES) {
     await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS rev_${table}_uniq ON rev_${table} ${cols}`);
   }

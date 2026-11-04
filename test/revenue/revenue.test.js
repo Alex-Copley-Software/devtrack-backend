@@ -321,6 +321,19 @@ test('Revenue (new) splits what the group has left; a cost pushed onto someone r
     const dropped = (await call('GET', `/api/split/${month}`)).body;
     assert.ok(Math.abs(dropped.remaining - (made.remaining + 30000)) < 1e-6, 'the dropped cost stays in the group');
 
+    // Marked paid at what they're owed; the amount stays put if the payout later moves.
+    const someone = dropped.people[0];
+    assert.equal((await call('POST', `/api/split/${month}/paid`, { person_id: 999999, paid: true })).status, 404);
+    assert.equal((await call('POST', `/api/split/${month}/paid`, { person_id: someone.person_id, paid: true })).status, 200);
+    let row = (await call('GET', `/api/split/${month}`)).body.people.find(p => p.person_id === someone.person_id);
+    assert.equal(row.paid.amount, Math.round(someone.payout));
+    await call('PUT', `/api/split/${month}`, { remaining: 3000000, basis: 'made' });
+    row = (await call('GET', `/api/split/${month}`)).body.people.find(p => p.person_id === someone.person_id);
+    assert.equal(row.paid.amount, Math.round(someone.payout), 'what was paid is kept');
+    assert.ok(Math.round(row.payout) > row.paid.amount);
+    await call('POST', `/api/split/${month}/paid`, { person_id: someone.person_id, paid: false });
+    assert.equal((await call('GET', `/api/split/${month}`)).body.people.find(p => p.person_id === someone.person_id).paid, null);
+
     // Clearing the balance leaves the split unworked rather than zero.
     await call('PUT', `/api/split/${month}`, { remaining: null });
     assert.equal((await call('GET', `/api/split/${month}`)).body.remaining, null);

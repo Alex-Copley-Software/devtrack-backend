@@ -94,6 +94,7 @@ async function splitMonth(d, month) {
   const entered = balance ? balance.remaining : null;
   const remaining = entered === null ? null : basis === 'made' ? entered - sharedTotal - chargedTotal : entered;
   const splitBase = remaining === null ? null : remaining + chargedTotal;
+  const paid = new Map((await d.all(`SELECT person_id, amount, paid_at FROM rev_split_payments WHERE month = $1`, month)).map(r => [r.person_id, r]));
   const people = pool.map(p => {
     const fraction = totalWeight ? p.weight / totalWeight : 0;
     const items = charges.get(p.person_id);
@@ -105,6 +106,7 @@ async function splitMonth(d, month) {
       shared_costs: sharedTotal * fraction,
       charged, charges: items.map(({ who, ...c }) => c),
       payout: splitBase === null ? null : splitBase * fraction - charged,
+      paid: paid.has(p.person_id) ? { amount: paid.get(p.person_id).amount, paid_at: paid.get(p.person_id).paid_at } : null,
     };
   }).sort((a, b) => b.split_fraction - a.split_fraction || a.name.localeCompare(b.name));
 
@@ -134,4 +136,22 @@ async function setRemaining(d, month, body) {
     month, remaining, body.note ? String(body.note) : null, basis);
 }
 
-module.exports = { splitMonth, setRemaining };
+// Marks someone paid for the month at what their payout is right now, or
+// clears it. The amount is kept so a payout that changes afterwards shows.
+async function setPaid(d, month, body) {
+  if (!MONTH.test(month)) throw new RevenueError(422, 'month must be YYYY-MM-01');
+  const personId = Number(body.person_id);
+  if (!body.paid) {
+    await d.run(`DELETE FROM rev_split_payments WHERE month = $1 AND person_id = $2`, month, personId);
+    return;
+  }
+  const row = (await splitMonth(d, month)).people.find(p => p.person_id === personId);
+  if (!row) throw new RevenueError(404, 'That person is not in this month\'s split');
+  if (row.payout === null) throw new RevenueError(422, 'Enter what the group made or has left before marking anyone paid');
+  await d.run(
+    `INSERT INTO rev_split_payments (month, person_id, amount) VALUES ($1, $2, $3::double precision)
+     ON CONFLICT (month, person_id) DO UPDATE SET amount = EXCLUDED.amount, paid_at = to_char(now() AT TIME ZONE 'utc', 'YYYY-MM-DD HH24:MI:SS')`,
+    month, personId, Math.round(row.payout));
+}
+
+module.exports = { splitMonth, setRemaining, setPaid };

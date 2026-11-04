@@ -682,6 +682,7 @@ function buildRouter(getPrisma) {
   // Revenue (new): the split of what the group has left (split.js).
   get('/split/:month', req => split.splitMonth(rd(), req.params.month));
   router.put('/split/:month', h(req => split.setRemaining(db(), req.params.month, req.body || {})));
+  post('/split/:month/paid', req => split.setPaid(db(), req.params.month, req.body || {}));
   // Standard-payout people's resolved earnings. Informational only - Roblox's
   // group % split pays these out automatically, outside this system.
   get('/auto-payouts/:month', byMethod('standard'));
