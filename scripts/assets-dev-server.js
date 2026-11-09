@@ -13,6 +13,7 @@ const fs = require('fs');
 
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'assets-dev-secret';
 process.env.BOT_SECRET = process.env.BOT_SECRET || 'assets-dev-bot-secret';
+process.env.STUDIO_WORKER_SECRET = process.env.STUDIO_WORKER_SECRET || 'assets-dev-studio-secret';
 process.env.ASSETS_ENABLED = 'true';
 process.env.REVENUE_ENABLED = 'true';
 process.env.ASSET_AGENT_ENABLED = process.env.ASSET_AGENT_ENABLED || 'true';
@@ -242,6 +243,7 @@ async function main() {
   // --models a.blend,b.blend loads those files at start.
   app.use('/api/bot/models', require('../src/routes/models').botRouter());
   app.use('/api/models', require('../src/routes/models').pageRouter());
+  app.use('/api/studio-worker', require('../src/routes/models').workerRouter());
   for (const file of String(option('models', '')).split(',').filter(Boolean)) {
     const { id } = await require('../src/models/store').create({ name: path.basename(file), blend: fs.readFileSync(file), uploadedBy: 'Dev server' }, prisma);
     console.log(`Model ${path.basename(file)}: http://localhost:${option('port', 4321)}/models/?id=${id}`);

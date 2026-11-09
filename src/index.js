@@ -80,6 +80,7 @@ app.use('/api/assets', assetRoutes);
 app.use('/api/payouts', require('./routes/payouts'));
 app.use('/api/revenue', require('./routes/revenue'));
 app.use('/api/models', require('./routes/models').pageRouter());
+app.use('/api/studio-worker', require('./routes/models').workerRouter());
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
