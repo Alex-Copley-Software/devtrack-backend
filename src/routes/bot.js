@@ -301,6 +301,45 @@ router.post('/dev-tags', botAuth, async (req, res) => {
   }
 });
 
+// The name the bot puts on a Linear issue for each dev ("Give task"), so it's
+// typed once and offered again next time. Keyed by Discord user id.
+let linearNamesReady = false;
+async function linearNames() {
+  if (!linearNamesReady) {
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "LinearDevName" ("discordId" TEXT PRIMARY KEY, "name" TEXT NOT NULL, "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+    linearNamesReady = true;
+  }
+}
+
+// GET /api/bot/linear-names?ids=1,2,3 -> { names: { "1": "Bryan" } }
+router.get('/linear-names', botAuth, async (req, res) => {
+  const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, 100);
+  try {
+    await linearNames();
+    const rows = ids.length ? await prisma.$queryRawUnsafe(`SELECT "discordId", "name" FROM "LinearDevName" WHERE "discordId" = ANY($1::text[])`, ids) : [];
+    res.json({ names: Object.fromEntries(rows.map(r => [r.discordId, r.name])) });
+  } catch (err) {
+    console.error('[Bot] Linear names failed:', err.message);
+    res.status(500).json({ error: 'Could not read the names' });
+  }
+});
+
+// PUT /api/bot/linear-names/:discordId { name }
+router.put('/linear-names/:discordId', botAuth, async (req, res) => {
+  const name = String(req.body?.name || '').trim().slice(0, 40);
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  try {
+    await linearNames();
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "LinearDevName" ("discordId", "name") VALUES ($1, $2)
+       ON CONFLICT ("discordId") DO UPDATE SET "name" = EXCLUDED."name", "updatedAt" = CURRENT_TIMESTAMP`, String(req.params.discordId), name);
+    res.json({ success: true, name });
+  } catch (err) {
+    console.error('[Bot] Saving a Linear name failed:', err.message);
+    res.status(500).json({ error: 'Could not save the name' });
+  }
+});
+
 // PATCH /api/bot/report/:id
 router.patch('/report/:id', botAuth, async (req, res) => {
   try {
