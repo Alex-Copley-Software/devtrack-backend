@@ -159,12 +159,13 @@ async function setAssignments(id, assignments, prisma = getPrisma()) {
   return clean;
 }
 
-async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exportFbx) {
+// options: embedTextures (Path Mode Copy + Embed Textures) and smallScale (Scale 0.01), both yes unless told no.
+async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exportFbx, options = {}) {
   const model = await get(id, prisma);
   if (model.status !== 'ready') throw new ModelError(409, 'The model is not ready yet');
   const { data } = await file(id, 'blend', prisma);
   const steps = plan(model.parts, model.assignments);
-  const fbx = await exportFbx(data, steps);
+  const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01 });
   await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "exportedAt" = now(), "exportedBy" = $2 WHERE id = $1`, id, by || null);
   return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps };
 }

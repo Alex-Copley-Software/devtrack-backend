@@ -1,6 +1,9 @@
 # Renames the parts and exports an FBX:
 #   blender -b -Y --factory-startup model.blend --python export.py -- plan.json out.fbx
-# plan.json  { "rename": { "Cube.012": "Head", ... }, "drop": ["Cube.003", ...] }
+# plan.json  { "rename": { "Cube.012": "Head", ... }, "drop": ["Cube.003", ...],
+#              "embed": true, "scale": 0.01 }
+# embed  Path Mode Copy with Embed Textures ticked (false: Path Mode Auto, not embedded)
+# scale  the export dialog's Scale (0.01 or 1.0)
 # Parts not named in the plan keep their Blender name. The .blend is never saved.
 import bpy, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -11,6 +14,8 @@ with open(plan_path, encoding='utf-8') as f:
     plan = json.load(f)
 rename = plan.get('rename', {})
 drop = set(plan.get('drop', []))
+embed = bool(plan.get('embed', True))
+scale = float(plan.get('scale', 0.01))
 
 show_everything()
 by_name = {o.name: o for o in parts()}
@@ -42,9 +47,9 @@ if missing:
 bpy.ops.export_scene.fbx(
     filepath=fbx, use_selection=False, use_visible=False,
     object_types={'MESH', 'ARMATURE', 'EMPTY'},
-    apply_unit_scale=True, axis_forward='-Z', axis_up='Y',
+    global_scale=scale, apply_unit_scale=True, axis_forward='-Z', axis_up='Y',
     use_mesh_modifiers=True, mesh_smooth_type='FACE',
     add_leaf_bones=False, bake_anim=False,
-    path_mode='COPY', embed_textures=True,
+    path_mode='COPY' if embed else 'AUTO', embed_textures=embed,
 )
 print('DT_EXPORTED', json.dumps(sorted(o.name for o in parts())))

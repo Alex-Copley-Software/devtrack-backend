@@ -48,6 +48,12 @@ test('a .blend is stored, converted, named and planned for export', async () => 
   assert.equal(out.name, 'Unit.fbx');
   assert.equal(out.data.toString(), 'FBX');
   assert.deepEqual(given.blend, BLEND);
+  assert.equal(given.plan.embed, true, 'textures embedded unless told no');
+  assert.equal(given.plan.scale, 0.01, 'scaled to 0.01 unless told no');
+  const plain = await store.exportModel(id, 'Alex', prisma, async (blend, plan) => plan, { embedTextures: false, smallScale: false });
+  assert.equal(plain.data.embed, false);
+  assert.equal(plain.data.scale, 1);
+  delete given.plan.embed; delete given.plan.scale;
   assert.deepEqual(given.plan, {
     rename: {
       Arm: 'Right Arm', 'Arm.001': 'Left Arm', Cube: 'Head', Head: 'Head Accessory 1', Hair: 'Head Accessory 2',
@@ -72,7 +78,7 @@ test('real Blender: convert and export', { skip: !(process.env.BLENDER_PATH && p
   assert.equal(glb.subarray(0, 4).toString(), 'glTF');
   assert.ok(parts.length > 1);
   const [first, second] = parts;
-  const fbx = await blender.exportFbx(blend, { rename: { [first.name]: 'Head', [second.name]: 'Head Accessory 1' }, drop: [] });
+  const fbx = await blender.exportFbx(blend, { rename: { [first.name]: 'Head', [second.name]: 'Head Accessory 1' }, drop: [], embed: true, scale: 0.01 });
   assert.match(fbx.subarray(0, 20).toString('latin1'), /Kaydara FBX Binary/);
   assert.ok(fbx.includes(Buffer.from('Head Accessory 1')));
 });

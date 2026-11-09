@@ -44,7 +44,8 @@ function pageRouter() {
   }
   router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments) })));
   router.post('/:id/export', wrap(async (req, res) => {
-    const { name, data, plan } = await store.exportModel(req.params.id, req.user?.name || req.user?.email);
+    const { embedTextures, smallScale } = req.body || {};
+    const { name, data, plan } = await store.exportModel(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale });
     res.set('Content-Type', 'application/octet-stream');
     res.set('X-Renamed', String(Object.keys(plan.rename).length));
     res.set('X-Dropped', String(plan.drop.length));
