@@ -65,6 +65,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/bot/assets', require('./routes/bot-assets'));
+app.use('/api/bot/models', require('./routes/models').botRouter());
 app.use('/api/bot', botRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/history', historyRoutes);
@@ -78,6 +79,7 @@ app.use('/api/roblox-dump', robloxDumpRoutes);
 app.use('/api/assets', assetRoutes);
 app.use('/api/payouts', require('./routes/payouts'));
 app.use('/api/revenue', require('./routes/revenue'));
+app.use('/api/models', require('./routes/models').pageRouter());
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
@@ -108,3 +110,6 @@ require('./discord-notifier').startOutbox();
 
 // No-op unless ASSETS_ENABLED and ASSET_SHEET_EXPORT are both true.
 require('./assets/sheets/exporter').startNightlyExport();
+
+// The model viewer's Blender: downloaded shortly after start-up on Railway.
+require('./models/blender').prefetch();

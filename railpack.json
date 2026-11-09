@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "deploy": {
+    "aptPackages": [
+      "xz-utils", "libx11-6", "libxi6", "libxxf86vm1", "libxfixes3", "libxrender1", "libxext6",
+      "libxkbcommon0", "libsm6", "libice6", "libgl1", "libegl1", "libglu1-mesa", "libgomp1",
+      "libwayland-client0", "libwayland-cursor0", "libwayland-egl1", "libdecor-0-0"
+    ]
+  }
+}

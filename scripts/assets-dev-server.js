@@ -238,13 +238,22 @@ async function main() {
   app.use('/api/revenue', require('../src/routes/revenue'));
   try { app.use('/api/bot/assets', require('../src/routes/bot-assets')); } catch { /* added in a later phase */ }
 
+  // The model viewer (/models/). Needs BLENDER_PATH set to a local blender.exe.
+  // --models a.blend,b.blend loads those files at start.
+  app.use('/api/bot/models', require('../src/routes/models').botRouter());
+  app.use('/api/models', require('../src/routes/models').pageRouter());
+  for (const file of String(option('models', '')).split(',').filter(Boolean)) {
+    const { id } = await require('../src/models/store').create({ name: path.basename(file), blend: fs.readFileSync(file), uploadedBy: 'Dev server' }, prisma);
+    console.log(`Model ${path.basename(file)}: http://localhost:${option('port', 4321)}/models/?id=${id}`);
+  }
+
   app.get('/dev-login', (req, res) => {
     const user = USERS[req.query.as] || USERS.admin;
     const token = jwt.sign(user, process.env.JWT_SECRET, { expiresIn: '7d' });
     res.send(`<script>
       localStorage.setItem('devtrack_token', ${JSON.stringify(token)});
       localStorage.setItem('devtrack_user', ${JSON.stringify(JSON.stringify({ ...user, pageAccess: ['bugs', 'assets'] }))});
-      location.href = ${JSON.stringify(req.query.to === 'revenue' ? '/revenue/' : '/assets/')};
+      location.href = ${JSON.stringify(req.query.to === 'revenue' ? '/revenue/' : String(req.query.to || '').startsWith('/') ? req.query.to : '/assets/')};
     </script>`);
   });
 
