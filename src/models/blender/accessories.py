@@ -31,6 +31,9 @@ def _bring_in(acc):
         if o.name not in bpy.context.scene.collection.objects:
             bpy.context.scene.collection.objects.link(o)
     bpy.data.scenes.remove(loaded)
+    # Appended objects' matrix_world isn't worked out until the scene is updated; read before that, an
+    # object's own scale (and its parents') is missing and the accessory comes out the wrong size.
+    bpy.context.view_layer.update()
     return new
 
 
