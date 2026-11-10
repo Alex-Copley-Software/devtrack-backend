@@ -48,7 +48,7 @@ test('a model is queued, claimed, reported on and finished', async () => {
   assert.equal(await store.studioQueued(prisma), 1);
 
   const job = await store.claimStudio(prisma);
-  assert.deepEqual(job, { id, name: 'Gowther', fbxName: 'Gowther.fbx', options: { embedTextures: false, smallScale: true, turn: 180 } });
+  assert.deepEqual(job, { kind: 'import', id, name: 'Gowther', fbxName: 'Gowther.fbx', options: { embedTextures: false, smallScale: true, turn: 180 } });
   assert.equal((await store.get(id, prisma)).studio.status, 'uploading');
   assert.equal(await store.claimStudio(prisma), null, 'taken once only');
   assert.equal((await store.studioFbx(id, prisma)).data.toString(), 'FBX bytes', 'the FBX is kept');
@@ -89,6 +89,48 @@ test('a failure keeps its error, and a job the Mac went quiet on fails by itself
   const stale = (await store.get(b, prisma)).studio;
   assert.equal(stale.status, 'failed');
   assert.match(stale.error, /stopped answering/);
+});
+
+test('an .rbxm is asked for, saved by the Mac, and kept for the bot to post', async () => {
+  const prisma = await createDb();
+  const id = await readyModel(prisma);
+  await assert.rejects(store.requestRbxm(id, 'Alex', prisma), /not in Studio yet/, 'only once it is in Studio');
+  await store.sendToStudio(id, 'Alex', prisma, async () => Buffer.from('FBX'));
+  await store.claimStudio(prisma);
+  await store.reportStudio(id, { status: 'done', result: { name: 'Gowther_2', welded: [], unmatched: [] } }, prisma);
+
+  const asked = await store.requestRbxm(id, 'Sam', prisma);
+  assert.equal(asked.status, 'queued');
+  assert.equal(asked.unit, 'Gowther_2', 'the unit as it was named in Studio');
+  await assert.rejects(store.requestRbxm(id, 'Sam', prisma), /already being saved/);
+  assert.equal(await store.studioQueued(prisma), 1, 'the worker hears about it');
+  assert.deepEqual(await store.claimStudio(prisma), { kind: 'rbxm', id, unit: 'Gowther_2' });
+  assert.equal((await store.get(id, prisma)).rbxm.status, 'saving');
+  await assert.rejects(store.rbxmFile(id, prisma), /No .rbxm/);
+
+  await assert.rejects(store.saveRbxm(id, Buffer.from('not a model'), prisma), /not an .rbxm/);
+  const rbxm = Buffer.concat([Buffer.from('<roblox!'), Buffer.alloc(100)]);
+  const saved = await store.saveRbxm(id, rbxm, prisma);
+  assert.equal(saved.status, 'done');
+  assert.equal(saved.size, 108);
+  assert.deepEqual(saved.post, { state: 'posting' });
+  await store.setRbxmPost(id, { state: 'posted' }, prisma);
+  assert.deepEqual((await store.get(id, prisma)).rbxm.post, { state: 'posted' });
+  const file = await store.rbxmFile(id, prisma);
+  assert.equal(file.name, 'Gowther_2.rbxm');
+  assert.ok(file.data.equals(rbxm));
+  await assert.rejects(store.saveRbxm(id, rbxm, prisma), /not being saved/, 'once only');
+
+  // A failure keeps its error and the last good file; a job the Mac went quiet on fails by itself.
+  await store.requestRbxm(id, 'Sam', prisma);
+  await store.claimStudio(prisma);
+  await store.failRbxm(id, 'Gowther_2 is not in Workspace.Workplate.Units any more', prisma);
+  assert.match((await store.get(id, prisma)).rbxm.error, /any more/);
+  assert.ok((await store.rbxmFile(id, prisma)).data.equals(rbxm));
+  await store.requestRbxm(id, 'Sam', prisma);
+  await store.claimStudio(prisma);
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "rbxmAt" = now() - interval '${store.STUDIO_STALE_MIN + 1} minutes' WHERE id = $1`, id);
+  assert.match((await store.get(id, prisma)).rbxm.error, /stopped answering/);
 });
 
 test('a model that is not ready cannot be sent', async () => {

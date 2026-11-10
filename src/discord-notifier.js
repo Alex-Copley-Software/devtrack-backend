@@ -201,4 +201,10 @@ async function qaCheckUpdate(payload) {
   }
 }
 
-module.exports = { startOutbox, drainOutbox, notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState, qaCheck, qaCheckUpdate };
+// Model viewer: the bot fetches a .rbxm saved from Studio and posts it to its channel.
+// true once posted, false when it's waiting in the outbox; throws when the bot refuses it (no channel set).
+function postRbxm(payload) {
+  return deliver('/model-rbxm', payload, { timeout: 60000 });
+}
+
+module.exports = { postRbxm, startOutbox, drainOutbox, notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState, qaCheck, qaCheckUpdate };

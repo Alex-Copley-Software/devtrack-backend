@@ -11,6 +11,10 @@
 // (~/RobloxPipeline/tools/studio_worker.py), which uploads it to Roblox and
 // imports it into Studio. studioStatus: queued → uploading → importing → done,
 // or failed at any step.
+//
+// "Get .rbxm" asks the same worker to save the unit, as it is in Studio now,
+// as an .rbxm, which the bot then posts to its channel. rbxmStatus: queued →
+// saving → done, or failed.
 
 const { getPrisma, newId } = require('../assets/db');
 const blender = require('./blender');
@@ -45,7 +49,9 @@ async function ensureSchema(prisma = getPrisma()) {
     "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
   )`);
   for (const col of ['"studioStatus" TEXT', '"studioFbx" BYTEA', '"studioFbxName" TEXT', '"studioOptions" JSONB', '"studioAssetId" TEXT',
-    '"studioError" TEXT', '"studioResult" JSONB', '"studioBy" TEXT', '"studioQueuedAt" TIMESTAMP', '"studioAt" TIMESTAMP']) {
+    '"studioError" TEXT', '"studioResult" JSONB', '"studioBy" TEXT', '"studioQueuedAt" TIMESTAMP', '"studioAt" TIMESTAMP',
+    '"rbxmStatus" TEXT', '"rbxm" BYTEA', '"rbxmUnit" TEXT', '"rbxmSize" INTEGER', '"rbxmError" TEXT', '"rbxmPost" JSONB', '"rbxmBy" TEXT',
+    '"rbxmQueuedAt" TIMESTAMP', '"rbxmAt" TIMESTAMP']) {
     await prisma.$executeRawUnsafe(`ALTER TABLE "ModelFile" ADD COLUMN IF NOT EXISTS ${col}`);
   }
   ready.add(prisma);
@@ -56,8 +62,10 @@ const json = v => (typeof v === 'string' ? JSON.parse(v) : v);
 const STUDIO_ACTIVE = ['queued', 'uploading', 'importing'];
 const STUDIO_REPORTS = ['uploading', 'importing', 'done', 'failed'];
 const STUDIO_STALE_MIN = 15; // a job the Mac took and then went quiet on for this long has failed
+const RBXM_ACTIVE = ['queued', 'saving'];
 const SUMMARY_COLUMNS = `id, name, "uploadedBy", "sourceUrl", status, error, blender, parts, assignments, "exportedAt", "exportedBy",
-  "createdAt", "updatedAt", "studioStatus", "studioAssetId", "studioError", "studioResult", "studioOptions", "studioBy", "studioQueuedAt", "studioAt"`;
+  "createdAt", "updatedAt", "studioStatus", "studioAssetId", "studioError", "studioResult", "studioOptions", "studioBy", "studioQueuedAt", "studioAt",
+  "rbxmStatus", "rbxmUnit", "rbxmSize", "rbxmError", "rbxmPost", "rbxmBy", "rbxmAt"`;
 
 // The final name of every part, and the parts left out.
 // Accessories are numbered per group in part order: Head Accessory 1, 2, ...
@@ -103,6 +111,9 @@ const summary = r => {
       status: r.studioStatus, assetId: r.studioAssetId, error: r.studioError, result: json(r.studioResult), options: json(r.studioOptions),
       by: r.studioBy, queuedAt: r.studioQueuedAt, at: r.studioAt,
     } : null,
+    rbxm: r.rbxmStatus ? {
+      status: r.rbxmStatus, unit: r.rbxmUnit, size: r.rbxmSize, error: r.rbxmError, post: json(r.rbxmPost), by: r.rbxmBy, at: r.rbxmAt,
+    } : null,
   };
 };
 
@@ -110,6 +121,9 @@ async function expireStudio(prisma) {
   await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'failed', "studioAt" = now(),
     "studioError" = 'The Mac worker stopped answering partway through. Send it again.'
     WHERE "studioStatus" IN ('uploading', 'importing') AND "studioAt" < now() - interval '${STUDIO_STALE_MIN} minutes'`);
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "rbxmStatus" = 'failed', "rbxmAt" = now(),
+    "rbxmError" = 'The Mac worker stopped answering partway through. Try again.'
+    WHERE "rbxmStatus" = 'saving' AND "rbxmAt" < now() - interval '${STUDIO_STALE_MIN} minutes'`);
 }
 
 // Turning a .blend into the viewer's GLB. Started on upload, and again when
@@ -217,10 +231,22 @@ async function sendToStudio(id, by, prisma = getPrisma(), exportFbx = blender.ex
   return (await get(id, prisma)).studio;
 }
 
+// Ask the Mac to save the unit, as it is in Studio now, as an .rbxm. Only once it's in Studio.
+async function requestRbxm(id, by, prisma = getPrisma()) {
+  const model = await get(id, prisma);
+  const unit = model.studio?.status === 'done' && model.studio.result?.name;
+  if (!unit) throw new ModelError(409, 'It is not in Studio yet. Send it to Studio first.');
+  const queued = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "rbxmStatus" = 'queued', "rbxmUnit" = $2, "rbxmError" = NULL,
+    "rbxmPost" = NULL, "rbxmBy" = $3, "rbxmQueuedAt" = now(), "rbxmAt" = now()
+    WHERE id = $1 AND ("rbxmStatus" IS NULL OR "rbxmStatus" NOT IN ('queued', 'saving'))`, id, unit, by || null);
+  if (!queued) throw new ModelError(409, 'The .rbxm is already being saved');
+  return (await get(id, prisma)).rbxm;
+}
+
 // The Mac worker: how many jobs are waiting, take the oldest, fetch its FBX, say how it went.
 async function studioQueued(prisma = getPrisma()) {
   await ensureSchema(prisma);
-  const [row] = await prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "ModelFile" WHERE "studioStatus" = 'queued'`);
+  const [row] = await prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM "ModelFile" WHERE "studioStatus" = 'queued' OR "rbxmStatus" = 'queued'`);
   return row.n;
 }
 
@@ -230,8 +256,11 @@ async function claimStudio(prisma = getPrisma()) {
   const [row] = await prisma.$queryRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'uploading', "studioAt" = now()
     WHERE id = (SELECT id FROM "ModelFile" WHERE "studioStatus" = 'queued' ORDER BY "studioQueuedAt" LIMIT 1 FOR UPDATE SKIP LOCKED)
     RETURNING id, name, "studioFbxName", "studioOptions"`);
-  if (!row) return null;
-  return { id: row.id, name: row.name.replace(/\.blend\d*$/i, ''), fbxName: row.studioFbxName, options: json(row.studioOptions) };
+  if (row) return { kind: 'import', id: row.id, name: row.name.replace(/\.blend\d*$/i, ''), fbxName: row.studioFbxName, options: json(row.studioOptions) };
+  const [save] = await prisma.$queryRawUnsafe(`UPDATE "ModelFile" SET "rbxmStatus" = 'saving', "rbxmAt" = now()
+    WHERE id = (SELECT id FROM "ModelFile" WHERE "rbxmStatus" = 'queued' ORDER BY "rbxmQueuedAt" LIMIT 1 FOR UPDATE SKIP LOCKED)
+    RETURNING id, "rbxmUnit"`);
+  return save ? { kind: 'rbxm', id: save.id, unit: save.rbxmUnit } : null;
 }
 
 async function studioFbx(id, prisma = getPrisma()) {
@@ -254,6 +283,36 @@ async function reportStudio(id, { status, assetId, error, result } = {}, prisma 
   if (!done) throw new ModelError(409, 'That model is not being sent to Studio');
 }
 
+// The worker hands over the .rbxm (or why it couldn't); it's then waiting to be posted to Discord.
+async function saveRbxm(id, data, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  if (!Buffer.isBuffer(data) || data.subarray(0, 8).toString('latin1') !== '<roblox!') throw new ModelError(400, 'That is not an .rbxm file');
+  const done = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "rbxmStatus" = 'done', rbxm = $2, "rbxmSize" = $3, "rbxmError" = NULL,
+    "rbxmPost" = '{"state":"posting"}'::jsonb, "rbxmAt" = now() WHERE id = $1 AND "rbxmStatus" = 'saving'`, id, data, data.length);
+  if (!done) throw new ModelError(409, 'That model is not being saved as an .rbxm');
+  return (await get(id, prisma)).rbxm;
+}
+
+async function failRbxm(id, error, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  const done = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "rbxmStatus" = 'failed', "rbxmError" = $2, "rbxmAt" = now()
+    WHERE id = $1 AND "rbxmStatus" = 'saving'`, id, String(error || 'Failed').slice(0, 2000));
+  if (!done) throw new ModelError(409, 'That model is not being saved as an .rbxm');
+}
+
+// post: { state: 'posted' | 'waiting' (the bot is away; it's in the outbox) | 'failed', error }
+async function setRbxmPost(id, post, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "rbxmPost" = $2::jsonb WHERE id = $1`, id, JSON.stringify(post));
+}
+
+async function rbxmFile(id, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  const [row] = await prisma.$queryRawUnsafe(`SELECT "rbxmUnit" AS unit, rbxm FROM "ModelFile" WHERE id = $1 AND rbxm IS NOT NULL`, id);
+  if (!row) throw new ModelError(404, 'No .rbxm saved for that model yet');
+  return { name: `${row.unit}.rbxm`, data: Buffer.from(row.rbxm) };
+}
+
 async function remove(id, prisma = getPrisma()) {
   await ensureSchema(prisma);
   await prisma.$executeRawUnsafe(`DELETE FROM "ModelFile" WHERE id = $1`, id);
@@ -261,4 +320,5 @@ async function remove(id, prisma = getPrisma()) {
 
 module.exports = { ensureSchema, create, list, get, file, setAssignments, exportModel, remove,
   sendToStudio, studioQueued, claimStudio, studioFbx, reportStudio, STUDIO_STALE_MIN, STUDIO_TURNS,
+  requestRbxm, saveRbxm, failRbxm, setRbxmPost, rbxmFile,
   plan, checkAssignments, ModelError, PRIMARY, SECONDARY, DROP };
