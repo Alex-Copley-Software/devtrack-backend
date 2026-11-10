@@ -1,5 +1,6 @@
-# Opens a .blend and writes what the model viewer needs:
+# Opens a .blend (or imports an .fbx) and writes what the model viewer needs:
 #   blender -b -Y --factory-startup model.blend --python inspect.py -- out.glb out.json
+#   blender -b -Y --factory-startup --python inspect.py -- out.glb out.json model.fbx
 # out.glb   the model for the browser; each part carries its Blender object
 #           name in its extras (three.js: userData.dt_part)
 # out.json  { blender, parts: [{ name, hidden, verts, faces, materials, parent, collection, center }] }
@@ -8,7 +9,12 @@ from mathutils import Vector
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from common import show_everything, parts
 
-glb, meta = sys.argv[sys.argv.index('--') + 1:][:2]
+args = sys.argv[sys.argv.index('--') + 1:]
+glb, meta = args[:2]
+# An FBX (an accessory added on the page): Blender started without a file, so empty it and import that.
+if len(args) > 2:
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    bpy.ops.import_scene.fbx(filepath=args[2])
 
 hidden = {o.name for o in bpy.context.scene.objects if o.hide_get() or o.hide_viewport or not o.visible_get()}
 show_everything()

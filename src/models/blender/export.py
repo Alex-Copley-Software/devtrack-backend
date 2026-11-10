@@ -1,9 +1,10 @@
 # Renames the parts and exports an FBX:
 #   blender -b -Y --factory-startup model.blend --python export.py -- plan.json out.fbx
 # plan.json  { "rename": { "Cube.012": "Head", ... }, "drop": ["Cube.003", ...],
-#              "embed": true, "scale": 0.01 }
+#              "embed": true, "scale": 0.01, "accessories": [...] }
 # embed  Path Mode Copy with Embed Textures ticked (false: Path Mode Auto, not embedded)
 # scale  the export dialog's Scale (0.01 or 1.0)
+# accessories  see accessories.py
 # Parts not named in the plan keep their Blender name. The .blend is never saved.
 import bpy, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -43,6 +44,11 @@ for o, new in moving:
 missing = [o for o, new in moving if o.name != new]
 if missing:
     raise SystemExit('Could not rename: ' + ', '.join(o.name for o in missing))
+
+# Weapons and other accessories, each where it was put on the page (accessories.py).
+if plan.get('accessories'):
+    from accessories import add_accessories
+    add_accessories(plan['accessories'])
 
 bpy.ops.export_scene.fbx(
     filepath=fbx, use_selection=False, use_visible=False,

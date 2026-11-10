@@ -4,8 +4,19 @@
 // was named on the viewer. Table "ModelFile", made on first use.
 //
 // What a part is called is stored as its category ("Head", "Head Accessory",
-// or "drop" to leave it out); the final names, with accessory numbers, are
-// worked out from that at export (plan()), so numbering never goes stale.
+// or "drop" to leave it out) plus, for accessories, a word for it ("Hood").
+// The final names are worked out at export (plan()), in the house style of a
+// finished unit (Cid): the body meshes are Head, Torso, ArmRight, ArmLeft,
+// LegRight, LegLeft; an accessory is its limb's mesh name and its word
+// ("Head Hood", "ArmRight Sleeve"), or "<limb> Accessory N" with no word.
+//
+// Weapons and other accessories: any model can be attached to a unit
+// ("ModelAccessory": which model, its name, the spot it hangs from, and where
+// it sits, saved from the page). At export Blender adds its meshes to the
+// unit's FBX at that spot, named "A<n> <mesh>", plus a marker "A<n> Handle"
+// where the hand grips; the Mac turns those into the Cid structure (a Model
+// under the limb with a Handle part, a Motor6D to each mesh and a Weld from
+// the limb to the Handle).
 //
 // "Send to Studio" keeps an FBX on the model and queues it for the Mac worker
 // (~/RobloxPipeline/tools/studio_worker.py), which uploads it to Roblox and
@@ -23,6 +34,13 @@ const PRIMARY = ['Head', 'Torso', 'Right Arm', 'Left Arm', 'Right Leg', 'Left Le
 const SECONDARY = PRIMARY.map(p => `${p} Accessory`);
 const DROP = 'drop';
 const CATEGORIES = [...PRIMARY, ...SECONDARY];
+// The mesh name each body category gets in Studio (a finished unit's house style).
+const MESH_NAME = { Head: 'Head', Torso: 'Torso', 'Right Arm': 'ArmRight', 'Left Arm': 'ArmLeft', 'Right Leg': 'LegRight', 'Left Leg': 'LegLeft' };
+const FROM_MESH_NAME = Object.fromEntries(Object.entries(MESH_NAME).map(([k, v]) => [v.toLowerCase(), k]));
+// Where an accessory can hang from, and the rig part its Handle is welded to.
+const SPOTS = {
+  'right-hand': 'Right Arm', 'left-hand': 'Left Arm', back: 'Torso', waist: 'Torso', head: 'Head', 'right-leg': 'Right Leg', 'left-leg': 'Left Leg',
+};
 
 class ModelError extends Error {
   constructor(status, message) { super(message); this.status = status; }
@@ -48,7 +66,18 @@ async function ensureSchema(prisma = getPrisma()) {
     "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
   )`);
-  for (const col of ['"studioStatus" TEXT', '"studioFbx" BYTEA', '"studioFbxName" TEXT', '"studioOptions" JSONB', '"studioAssetId" TEXT',
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "ModelAccessory" (
+    "id" TEXT PRIMARY KEY,
+    "unitId" TEXT NOT NULL,
+    "accessoryId" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "spot" TEXT NOT NULL,
+    "placement" JSONB,
+    "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
+    "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
+  )`);
+  for (const col of ['"labels" JSONB NOT NULL DEFAULT \'{}\'::jsonb', '"kind" TEXT NOT NULL DEFAULT \'unit\'', '"format" TEXT NOT NULL DEFAULT \'blend\'',
+    '"studioStatus" TEXT', '"studioFbx" BYTEA', '"studioFbxName" TEXT', '"studioOptions" JSONB', '"studioAssetId" TEXT',
     '"studioError" TEXT', '"studioResult" JSONB', '"studioBy" TEXT', '"studioQueuedAt" TIMESTAMP', '"studioAt" TIMESTAMP',
     '"rbxmStatus" TEXT', '"rbxm" BYTEA', '"rbxmUnit" TEXT', '"rbxmSize" INTEGER', '"rbxmError" TEXT', '"rbxmPost" JSONB', '"rbxmBy" TEXT',
     '"rbxmQueuedAt" TIMESTAMP', '"rbxmAt" TIMESTAMP']) {
@@ -63,23 +92,53 @@ const STUDIO_ACTIVE = ['queued', 'uploading', 'importing'];
 const STUDIO_REPORTS = ['uploading', 'importing', 'done', 'failed'];
 const STUDIO_STALE_MIN = 15; // a job the Mac took and then went quiet on for this long has failed
 const RBXM_ACTIVE = ['queued', 'saving'];
-const SUMMARY_COLUMNS = `id, name, "uploadedBy", "sourceUrl", status, error, blender, parts, assignments, "exportedAt", "exportedBy",
+const SUMMARY_COLUMNS = `id, name, kind, format, labels, "uploadedBy", "sourceUrl", status, error, blender, parts, assignments, "exportedAt", "exportedBy",
   "createdAt", "updatedAt", "studioStatus", "studioAssetId", "studioError", "studioResult", "studioOptions", "studioBy", "studioQueuedAt", "studioAt",
   "rbxmStatus", "rbxmUnit", "rbxmSize", "rbxmError", "rbxmPost", "rbxmBy", "rbxmAt"`;
 
-// The final name of every part, and the parts left out.
-// Accessories are numbered per group in part order: Head Accessory 1, 2, ...
-function plan(parts, assignments) {
+// The final name of every part, and the parts left out (see the top of this file).
+// Accessories without a word are numbered per limb in part order: "Head Accessory 1", 2...
+// Two that would end up with the same name get " 2", " 3" on the second and on.
+function plan(parts, assignments, labels = {}) {
   const rename = {};
   const drop = [];
   const count = {};
+  const used = new Set();
+  const unique = name => {
+    let out = name;
+    for (let n = 2; used.has(out.toLowerCase()); n++) out = `${name} ${n}`;
+    used.add(out.toLowerCase());
+    return out;
+  };
   for (const p of parts) {
     const cat = assignments[p.name];
     if (cat === DROP) { drop.push(p.name); continue; }
-    if (PRIMARY.includes(cat)) rename[p.name] = cat;
-    else if (SECONDARY.includes(cat)) { count[cat] = (count[cat] || 0) + 1; rename[p.name] = `${cat} ${count[cat]}`; }
+    if (PRIMARY.includes(cat)) rename[p.name] = unique(MESH_NAME[cat]);
+  }
+  for (const p of parts) {
+    const cat = assignments[p.name];
+    if (!SECONDARY.includes(cat)) continue;
+    const limb = MESH_NAME[cat.replace(/ Accessory$/, '')];
+    const word = cleanLabel(labels[p.name]);
+    if (word) rename[p.name] = unique(`${limb} ${word}`);
+    else { count[cat] = (count[cat] || 0) + 1; rename[p.name] = unique(`${limb} Accessory ${count[cat]}`); }
   }
   return { rename, drop };
+}
+
+const cleanLabel = v => String(v ?? '').replace(/[^\p{L}\p{N} _-]+/gu, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+
+function checkLabels(parts, labels) {
+  if (labels == null) return {};
+  if (typeof labels !== 'object' || Array.isArray(labels)) throw new ModelError(400, 'labels must be an object');
+  const names = new Set(parts.map(p => p.name));
+  const clean = {};
+  for (const [part, word] of Object.entries(labels)) {
+    if (!names.has(part)) throw new ModelError(400, `No part called "${part}"`);
+    const w = cleanLabel(word);
+    if (w) clean[part] = w;
+  }
+  return clean;
 }
 
 function checkAssignments(parts, assignments) {
@@ -104,7 +163,7 @@ const summary = r => {
   const parts = json(r.parts) || [];
   const assignments = json(r.assignments) || {};
   return {
-    id: r.id, name: r.name, uploadedBy: r.uploadedBy, sourceUrl: r.sourceUrl, status: r.status, error: r.error,
+    id: r.id, name: r.name, kind: r.kind || 'unit', format: r.format || 'blend', uploadedBy: r.uploadedBy, sourceUrl: r.sourceUrl, status: r.status, error: r.error,
     blender: r.blender, partCount: parts.length, assigned: parts.filter(p => assignments[p.name]).length,
     exportedAt: r.exportedAt, exportedBy: r.exportedBy, createdAt: r.createdAt, updatedAt: r.updatedAt,
     studio: r.studioStatus ? {
@@ -134,11 +193,15 @@ function startConvert(id, prisma = getPrisma(), inspect = blender.inspect) {
   converting.add(id);
   (async () => {
     try {
-      const [row] = await prisma.$queryRawUnsafe(`SELECT "blend" FROM "ModelFile" WHERE id = $1`, id);
+      const [row] = await prisma.$queryRawUnsafe(`SELECT "blend", format FROM "ModelFile" WHERE id = $1`, id);
       if (!row) return;
-      const { glb, parts, blender: version } = await inspect(Buffer.from(row.blend));
+      const { glb, parts, blender: version } = await inspect(Buffer.from(row.blend), row.format || 'blend');
       const assignments = {};
-      for (const p of parts) if (PRIMARY.includes(p.name)) assignments[p.name] = p.name; // already named right
+      // Parts already named right: "Head", "Right Arm", or the house style "ArmRight".
+      for (const p of parts) {
+        const cat = PRIMARY.includes(p.name) ? p.name : FROM_MESH_NAME[p.name.toLowerCase()];
+        if (cat && !Object.values(assignments).includes(cat)) assignments[p.name] = cat;
+      }
       await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET status = 'ready', error = NULL, glb = $2, parts = $3::jsonb, blender = $4,
         assignments = $5::jsonb, "updatedAt" = now() WHERE id = $1`, id, glb, JSON.stringify(parts), version, JSON.stringify(assignments));
       console.log(`[Models] ${id}: ${parts.length} parts`);
@@ -151,17 +214,19 @@ function startConvert(id, prisma = getPrisma(), inspect = blender.inspect) {
   })();
 }
 
-async function create({ name, blend, uploadedBy, sourceUrl }, prisma = getPrisma(), inspect) {
+// kind: 'unit' (from Discord) or 'accessory' (added on a unit's page). An accessory can also be an FBX.
+async function create({ name, blend, uploadedBy, sourceUrl, kind = 'unit' }, prisma = getPrisma(), inspect) {
   await ensureSchema(prisma);
   if (!blend?.length) throw new ModelError(400, 'No file');
-  // Plain, zstd-compressed (Blender 3+) or gzip-compressed (older) .blend.
+  // Plain, zstd-compressed (Blender 3+) or gzip-compressed (older) .blend; or a binary FBX.
   const head = blend.subarray(0, 4).toString('hex');
-  if (blend.subarray(0, 7).toString('latin1') !== 'BLENDER' && head !== '28b52ffd' && !head.startsWith('1f8b')) {
-    throw new ModelError(400, 'That is not a .blend file');
-  }
+  const isBlend = blend.subarray(0, 7).toString('latin1') === 'BLENDER' || head === '28b52ffd' || head.startsWith('1f8b');
+  const isFbx = blend.subarray(0, 18).toString('latin1') === 'Kaydara FBX Binary';
+  if (!isBlend && !isFbx) throw new ModelError(400, 'That is not a .blend file or a binary .fbx');
+  if (!['unit', 'accessory'].includes(kind)) throw new ModelError(400, 'kind must be unit or accessory');
   const id = newId();
-  await prisma.$executeRawUnsafe(`INSERT INTO "ModelFile" (id, name, "uploadedBy", "sourceUrl", blend) VALUES ($1, $2, $3, $4, $5)`,
-    id, String(name || 'model.blend').slice(0, 200), uploadedBy || null, sourceUrl || null, blend);
+  await prisma.$executeRawUnsafe(`INSERT INTO "ModelFile" (id, name, "uploadedBy", "sourceUrl", blend, kind, format) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    id, String(name || 'model.blend').slice(0, 200), uploadedBy || null, sourceUrl || null, blend, kind, isFbx ? 'fbx' : 'blend');
   startConvert(id, prisma, inspect);
   return { id };
 }
@@ -179,7 +244,11 @@ async function get(id, prisma = getPrisma(), inspect) {
   const [row] = await prisma.$queryRawUnsafe(`SELECT ${SUMMARY_COLUMNS} FROM "ModelFile" WHERE id = $1`, id);
   if (!row) throw new ModelError(404, 'No such model');
   if (row.status === 'converting') startConvert(id, prisma, inspect); // a restart may have cut it short
-  return { ...summary(row), parts: json(row.parts) || [], assignments: json(row.assignments) || {}, categories: { primary: PRIMARY, secondary: SECONDARY } };
+  return {
+    ...summary(row), parts: json(row.parts) || [], assignments: json(row.assignments) || {}, labels: json(row.labels) || {},
+    categories: { primary: PRIMARY, secondary: SECONDARY, meshNames: MESH_NAME, spots: SPOTS },
+    accessories: await accessoriesOf(id, prisma), attachedTo: await attachedTo(id, prisma),
+  };
 }
 
 async function file(id, column, prisma = getPrisma()) {
@@ -190,23 +259,112 @@ async function file(id, column, prisma = getPrisma()) {
   return { name: row.name, data: Buffer.from(row.data) };
 }
 
-async function setAssignments(id, assignments, prisma = getPrisma()) {
+async function setAssignments(id, assignments, prisma = getPrisma(), labels) {
   const model = await get(id, prisma);
   if (model.status !== 'ready') throw new ModelError(409, 'The model is not ready yet');
   const clean = checkAssignments(model.parts, assignments);
-  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET assignments = $2::jsonb, "updatedAt" = now() WHERE id = $1`, id, JSON.stringify(clean));
+  const words = labels === undefined ? model.labels : checkLabels(model.parts, labels);
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET assignments = $2::jsonb, labels = $3::jsonb, "updatedAt" = now() WHERE id = $1`,
+    id, JSON.stringify(clean), JSON.stringify(words));
   return clean;
+}
+
+// ── weapons and other accessories ──
+
+async function accessoriesOf(unitId, prisma) {
+  const rows = await prisma.$queryRawUnsafe(`SELECT a.id, a."accessoryId", a.name, a.spot, a.placement, m.name AS "fileName", m.status,
+      m.error, m.parts, m.assignments FROM "ModelAccessory" a LEFT JOIN "ModelFile" m ON m.id = a."accessoryId"
+    WHERE a."unitId" = $1 ORDER BY a."createdAt"`, unitId);
+  return rows.map(r => ({
+    id: r.id, accessoryId: r.accessoryId, name: r.name, spot: r.spot, limb: SPOTS[r.spot], placement: json(r.placement),
+    file: r.fileName ? { name: r.fileName, status: r.status, error: r.error, parts: (json(r.parts) || []).length } : null,
+  }));
+}
+
+async function attachedTo(accessoryId, prisma) {
+  return prisma.$queryRawUnsafe(`SELECT a.id, a."unitId", m.name FROM "ModelAccessory" a JOIN "ModelFile" m ON m.id = a."unitId"
+    WHERE a."accessoryId" = $1 ORDER BY a."createdAt"`, accessoryId);
+}
+
+const accessoryName = v => String(v ?? '').replace(/\.(blend\d*|fbx)$/i, '').replace(/[_]+/g, ' ').replace(/[^\p{L}\p{N} '()-]+/gu, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+
+function checkPlacement(p) {
+  if (p == null) return null;
+  const nums = (v, n) => Array.isArray(v) && v.length === n && v.every(x => typeof x === 'number' && Number.isFinite(x));
+  if (!p || typeof p !== 'object' || !nums(p.matrix, 16) || !nums(p.handle, 3)) {
+    throw new ModelError(400, 'placement must be { matrix: 16 numbers, handle: 3 numbers }');
+  }
+  return { matrix: p.matrix, handle: p.handle };
+}
+
+async function addAccessory(unitId, { accessoryId, name, spot = 'right-hand' } = {}, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  if (accessoryId === unitId) throw new ModelError(400, 'A model can\'t be its own accessory');
+  const [unit] = await prisma.$queryRawUnsafe(`SELECT id FROM "ModelFile" WHERE id = $1`, unitId);
+  const [acc] = await prisma.$queryRawUnsafe(`SELECT id, name FROM "ModelFile" WHERE id = $1`, accessoryId);
+  if (!unit || !acc) throw new ModelError(404, 'No such model');
+  if (!SPOTS[spot]) throw new ModelError(400, `spot must be one of ${Object.keys(SPOTS).join(', ')}`);
+  const id = newId();
+  await prisma.$executeRawUnsafe(`INSERT INTO "ModelAccessory" (id, "unitId", "accessoryId", name, spot) VALUES ($1, $2, $3, $4, $5)`,
+    id, unitId, accessoryId, accessoryName(name) || accessoryName(acc.name) || 'Accessory', spot);
+  return (await accessoriesOf(unitId, prisma)).find(a => a.id === id);
+}
+
+async function updateAccessory(unitId, id, body = {}, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  const [row] = await prisma.$queryRawUnsafe(`SELECT id FROM "ModelAccessory" WHERE id = $1 AND "unitId" = $2`, id, unitId);
+  if (!row) throw new ModelError(404, 'No such accessory on that model');
+  if ('name' in body) {
+    const name = accessoryName(body.name);
+    if (!name) throw new ModelError(400, 'A name is required');
+    await prisma.$executeRawUnsafe(`UPDATE "ModelAccessory" SET name = $2, "updatedAt" = now() WHERE id = $1`, id, name);
+  }
+  if ('spot' in body) {
+    if (!SPOTS[body.spot]) throw new ModelError(400, `spot must be one of ${Object.keys(SPOTS).join(', ')}`);
+    await prisma.$executeRawUnsafe(`UPDATE "ModelAccessory" SET spot = $2, "updatedAt" = now() WHERE id = $1`, id, body.spot);
+  }
+  if ('placement' in body) {
+    await prisma.$executeRawUnsafe(`UPDATE "ModelAccessory" SET placement = $2::jsonb, "updatedAt" = now() WHERE id = $1`,
+      id, JSON.stringify(checkPlacement(body.placement)));
+  }
+  return (await accessoriesOf(unitId, prisma)).find(a => a.id === id);
+}
+
+async function removeAccessory(unitId, id, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  await prisma.$executeRawUnsafe(`DELETE FROM "ModelAccessory" WHERE id = $1 AND "unitId" = $2`, id, unitId);
+}
+
+// What Blender needs to add a unit's accessories to its FBX, and what the Mac needs to build them.
+async function accessoryExport(unitId, prisma) {
+  const accs = await accessoriesOf(unitId, prisma);
+  const forBlender = [];
+  const forStudio = [];
+  for (const [i, a] of accs.entries()) {
+    if (a.file?.status !== 'ready') throw new ModelError(409, `The accessory ${a.name} is not ready yet`);
+    if (!a.placement) throw new ModelError(409, `Position ${a.name} on the unit first (Position on the page)`);
+    const [m] = await prisma.$queryRawUnsafe(`SELECT blend, format, parts, assignments FROM "ModelFile" WHERE id = $1`, a.accessoryId);
+    const left = json(m.assignments) || {};
+    const meshes = (json(m.parts) || []).filter(p => left[p.name] !== DROP && p.verts > 0).map(p => p.name);
+    if (!meshes.length) throw new ModelError(409, `The accessory ${a.name} has no meshes to add`);
+    const prefix = `A${i + 1}`;
+    forBlender.push({ prefix, data: Buffer.from(m.blend), format: m.format || 'blend', meshes, matrix: a.placement.matrix, handle: a.placement.handle });
+    forStudio.push({ name: a.name, spot: a.spot, limb: a.limb, handle: `${prefix} Handle`, meshes: Object.fromEntries(meshes.map(n => [`${prefix} ${n}`, n])) });
+  }
+  return { forBlender, forStudio };
 }
 
 // options: embedTextures (Path Mode Copy + Embed Textures) and smallScale (Scale 0.01), both yes unless told no.
 async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exportFbx, options = {}) {
   const model = await get(id, prisma);
   if (model.status !== 'ready') throw new ModelError(409, 'The model is not ready yet');
+  if (model.format === 'fbx') throw new ModelError(400, 'This one is already an FBX. Attach it to a unit as an accessory instead.');
   const { data } = await file(id, 'blend', prisma);
-  const steps = plan(model.parts, model.assignments);
-  const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01 });
+  const steps = plan(model.parts, model.assignments, model.labels);
+  const { forBlender, forStudio } = await accessoryExport(id, prisma);
+  const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01, accessories: forBlender });
   await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "exportedAt" = now(), "exportedBy" = $2 WHERE id = $1`, id, by || null);
-  return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps };
+  return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps, accessories: forStudio };
 }
 
 // ── Send to Studio ──
@@ -220,8 +378,8 @@ async function sendToStudio(id, by, prisma = getPrisma(), exportFbx = blender.ex
   if (!STUDIO_TURNS.includes(turn)) throw new ModelError(400, `turn must be one of ${STUDIO_TURNS.join(', ')}`);
   const model = await get(id, prisma);
   if (STUDIO_ACTIVE.includes(model.studio?.status)) throw new ModelError(409, 'It is already on its way to Studio');
-  const { name, data } = await exportModel(id, by, prisma, exportFbx, options);
-  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, turn };
+  const { name, data, accessories } = await exportModel(id, by, prisma, exportFbx, options);
+  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, turn, accessories };
   const queued = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'queued', "studioFbx" = $2, "studioFbxName" = $3,
     "studioOptions" = $4::jsonb, "studioAssetId" = NULL, "studioError" = NULL, "studioResult" = NULL, "studioBy" = $5,
     "studioQueuedAt" = now(), "studioAt" = now()
@@ -315,10 +473,12 @@ async function rbxmFile(id, prisma = getPrisma()) {
 
 async function remove(id, prisma = getPrisma()) {
   await ensureSchema(prisma);
+  await prisma.$executeRawUnsafe(`DELETE FROM "ModelAccessory" WHERE "unitId" = $1 OR "accessoryId" = $1`, id);
   await prisma.$executeRawUnsafe(`DELETE FROM "ModelFile" WHERE id = $1`, id);
 }
 
 module.exports = { ensureSchema, create, list, get, file, setAssignments, exportModel, remove,
   sendToStudio, studioQueued, claimStudio, studioFbx, reportStudio, STUDIO_STALE_MIN, STUDIO_TURNS,
   requestRbxm, saveRbxm, failRbxm, setRbxmPost, rbxmFile,
-  plan, checkAssignments, ModelError, PRIMARY, SECONDARY, DROP };
+  addAccessory, updateAccessory, removeAccessory,
+  plan, checkAssignments, ModelError, PRIMARY, SECONDARY, DROP, MESH_NAME, SPOTS };

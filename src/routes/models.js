@@ -74,7 +74,14 @@ function pageRouter() {
       res.send(data);
     }));
   }
-  router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments) })));
+  router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments, undefined, req.body?.labels) })));
+  // Weapons and other accessories: upload one from the page (.blend or .fbx), attach it, position it.
+  router.post('/upload', express.raw({ type: () => true, limit: '40mb' }), wrap(async (req, res) => {
+    res.status(201).json(await store.create({ name: header(req, 'x-file-name'), blend: req.body, uploadedBy: req.user?.name || req.user?.email, kind: 'accessory' }));
+  }));
+  router.post('/:id/accessories', wrap(async (req, res) => res.status(201).json(await store.addAccessory(req.params.id, req.body || {}))));
+  router.patch('/:id/accessories/:accId', wrap(async (req, res) => res.json(await store.updateAccessory(req.params.id, req.params.accId, req.body || {}))));
+  router.delete('/:id/accessories/:accId', wrap(async (req, res) => { await store.removeAccessory(req.params.id, req.params.accId); res.json({ ok: true }); }));
   router.post('/:id/export', wrap(async (req, res) => {
     const { embedTextures, smallScale } = req.body || {};
     const { name, data, plan } = await store.exportModel(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale });

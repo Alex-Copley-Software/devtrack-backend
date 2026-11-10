@@ -55,7 +55,8 @@ function run(blendFile, script, args) {
   const job = queue.then(async () => {
     const bin = await blenderPath();
     return new Promise((resolve, reject) => {
-      execFile(bin, ['-b', '-Y', '--factory-startup', '-noaudio', blendFile, '--python-exit-code', '1',
+      // No .blend (an FBX accessory): Blender starts empty and the script imports the file.
+      execFile(bin, ['-b', '-Y', '--factory-startup', '-noaudio', ...(blendFile ? [blendFile] : []), '--python-exit-code', '1',
         '--python', path.join(SCRIPTS, script), '--', ...args], { timeout: RUN_MS, maxBuffer: 32 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (!err) return resolve(stdout);
@@ -74,26 +75,34 @@ async function withTemp(fn) {
   try { return await fn(dir); } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 }
 
-// .blend in, { glb, parts, blender } out.
-function inspect(blend) {
+// .blend (or .fbx) in, { glb, parts, blender } out.
+function inspect(blend, format = 'blend') {
   return withTemp(async dir => {
-    const file = path.join(dir, 'model.blend');
+    const file = path.join(dir, format === 'fbx' ? 'model.fbx' : 'model.blend');
     fs.writeFileSync(file, blend);
     const glb = path.join(dir, 'model.glb');
     const meta = path.join(dir, 'model.json');
-    await run(file, 'inspect.py', [glb, meta]);
+    if (format === 'fbx') await run(null, 'inspect.py', [glb, meta, file]);
+    else await run(file, 'inspect.py', [glb, meta]);
     const info = JSON.parse(fs.readFileSync(meta, 'utf8'));
     return { glb: fs.readFileSync(glb), parts: info.parts, blender: info.blender };
   });
 }
 
-// .blend + { rename: {old: new}, drop: [old] } in, FBX bytes out.
+// .blend + { rename: {old: new}, drop: [old], embed, scale, accessories } in, FBX bytes out.
+// Each accessory brings its file as data; it's written next to the plan for Blender to add.
 function exportFbx(blend, plan) {
   return withTemp(async dir => {
     const file = path.join(dir, 'model.blend');
     fs.writeFileSync(file, blend);
+    const accessories = (plan.accessories || []).map((a, i) => {
+      const accFile = path.join(dir, `accessory${i + 1}.${a.format === 'fbx' ? 'fbx' : 'blend'}`);
+      fs.writeFileSync(accFile, a.data);
+      const { data, ...rest } = a;
+      return { ...rest, path: accFile };
+    });
     const planFile = path.join(dir, 'plan.json');
-    fs.writeFileSync(planFile, JSON.stringify(plan));
+    fs.writeFileSync(planFile, JSON.stringify({ ...plan, accessories }));
     const fbx = path.join(dir, 'model.fbx');
     await run(file, 'export.py', [planFile, fbx]);
     return fs.readFileSync(fbx);
