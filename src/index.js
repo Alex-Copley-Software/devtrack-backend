@@ -66,6 +66,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/bot/assets', require('./routes/bot-assets'));
 app.use('/api/bot/models', require('./routes/models').botRouter());
+app.use('/api/bot/devs', require('./routes/devs').botRouter());
 app.use('/api/bot', botRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/history', historyRoutes);
@@ -80,6 +81,7 @@ app.use('/api/assets', assetRoutes);
 app.use('/api/payouts', require('./routes/payouts'));
 app.use('/api/revenue', require('./routes/revenue'));
 app.use('/api/models', require('./routes/models').pageRouter());
+app.use('/api/devs', require('./routes/devs').pageRouter());
 app.use('/api/studio-worker', require('./routes/models').workerRouter());
 
 app.get('/api/health', (req, res) => {

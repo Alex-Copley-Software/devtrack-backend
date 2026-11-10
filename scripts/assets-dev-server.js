@@ -243,6 +243,9 @@ async function main() {
   // --models a.blend,b.blend loads those files at start.
   app.use('/api/bot/models', require('../src/routes/models').botRouter());
   app.use('/api/models', require('../src/routes/models').pageRouter());
+  // The Developers page (/developers/): starts from the demo asset roster.
+  app.use('/api/bot/devs', require('../src/routes/devs').botRouter());
+  app.use('/api/devs', require('../src/routes/devs').pageRouter());
   app.use('/api/studio-worker', require('../src/routes/models').workerRouter());
   for (const file of String(option('models', '')).split(',').filter(Boolean)) {
     const { id } = await require('../src/models/store').create({ name: path.basename(file), blend: fs.readFileSync(file), uploadedBy: 'Dev server' }, prisma);
