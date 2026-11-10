@@ -1,10 +1,11 @@
 # Bone chains for the parts that bend (wings, capes, hair), before the FBX is made (export.py).
 # The body stays R6 and welded; only these meshes are skinned. Each rig in the plan:
 #   { part, mesh: its final name, kind, bones: per chain, smooth: 0.05..1,
-#     chains: [{ root: [x, y, z], tip: [x, y, z] }] in the viewer's (glTF) space,
+#     chains: [{ root: [x, y, z], tip: [x, y, z], mid: the joints between, if moved }] in the viewer's (glTF) space,
 #     names: the bone names, chain by chain: "<mesh> A1".."A<n>", "<mesh> B1"... }
 #
-# An armature "<mesh> Rig" gets a straight chain of bones from each root to its tip, and the mesh is
+# An armature "<mesh> Rig" gets a chain of bones from each root to its tip, joint to joint (evenly spaced on a
+# straight line unless the joints were moved on the page to curve it, a tail say), and the mesh is
 # weighted to them by weights_for() below. The Models page works out the same weights with the same
 # steps (rigWeights() in models/index.html), so its preview is what Studio gets; change one, change both.
 import bpy
@@ -15,19 +16,34 @@ FROM_GLTF = TO_GLTF.inverted()
 MAX_INFLUENCES = 4
 
 
+def chain_points(ch, bones):
+    """The chain's joints, root to tip (bones + 1 of them), in the viewer's space."""
+    root, tip = Vector(ch['root']), Vector(ch['tip'])
+    mid = ch.get('mid')
+    if mid and len(mid) == bones - 1:
+        return [root, *(Vector(m) for m in mid), tip]
+    return [root + (tip - root) * (k / bones) for k in range(bones + 1)]
+
+
 def weights_for(p, chains, bones, smooth):
     """[(chain, bone, weight)] for a point p, all in the same space; up to 4, adding up to 1.
+    chains: each chain's joints, root to tip (chain_points).
 
-    Along a chain, a point belongs to the bone it's beside, blending into the next one around the joint
-    (smooth: 1 blends the whole way between bone middles, small values give hard steps). Across chains,
-    a point leans to the nearest chain (inverse square of its distance to the chain's line)."""
+    Along a chain, a point belongs to the bone it's beside (the nearest one), blending into the next one
+    around the joint (smooth: 1 blends the whole way between bone middles, small values give hard steps).
+    Across chains, a point leans to the nearest chain (inverse square of its distance to the chain)."""
     per = []
-    for c, (root, tip) in enumerate(chains):
-        d = tip - root
-        l2 = max(d.length_squared, 1e-12)
-        t = min(1.0, max(0.0, (p - root).dot(d) / l2))
-        dist = (p - (root + d * t)).length
-        per.append((c, t, dist, l2 ** 0.5))
+    for c, pts in enumerate(chains):
+        best, length = None, 0.0
+        for k in range(bones):
+            a, d = pts[k], pts[k + 1] - pts[k]
+            l2 = max(d.length_squared, 1e-12)
+            length += l2 ** 0.5
+            t = min(1.0, max(0.0, (p - a).dot(d) / l2))
+            dist = (p - (a + d * t)).length
+            if best is None or dist < best[1]:
+                best = (k + t, dist)
+        per.append((c, best[0] / bones, best[1], length))
     avg_len = sum(q[3] for q in per) / len(per)
     eps = (0.05 * avg_len) ** 2 + 1e-12
     across = [1.0 / (q[2] * q[2] + eps) for q in per]
@@ -55,8 +71,8 @@ def _add(rig):
         raise SystemExit(f"Bending part {rig['mesh']}: no such mesh")
     if any(m.type == 'ARMATURE' for m in o.modifiers):
         raise SystemExit(f"{o.name} already has an armature in the .blend; take it off there, or rig it there instead")
-    chains = [(FROM_GLTF @ Vector(ch['root']), FROM_GLTF @ Vector(ch['tip'])) for ch in rig['chains']]
     n = rig['bones']
+    chains = [[FROM_GLTF @ q for q in chain_points(ch, n)] for ch in rig['chains']]
     names = rig['names']
 
     data = bpy.data.armatures.new(f"{o.name} Rig")
@@ -64,12 +80,12 @@ def _add(rig):
     bpy.context.scene.collection.objects.link(arm)
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode='EDIT')
-    for c, (root, tip) in enumerate(chains):
+    for c, pts in enumerate(chains):
         prev = None
         for k in range(n):
             b = data.edit_bones.new(names[c * n + k])
-            b.head = root + (tip - root) * (k / n)
-            b.tail = root + (tip - root) * ((k + 1) / n)
+            b.head = pts[k]
+            b.tail = pts[k + 1]
             if prev:
                 b.parent = prev
                 b.use_connect = True

@@ -20,7 +20,7 @@
 //
 // Bending parts (wings, capes, hair): the body stays R6, welded; an accessory part can be given
 // a bone chain ("rigs", per part: kind, bones per chain, chains, smooth, and each chain's root and
-// tip in the viewer's space). At export Blender makes an armature "<mesh> Rig" with bones
+// tip in the viewer's space, plus "mid", its inner joints, once any is moved to curve it). At export Blender makes an armature "<mesh> Rig" with bones
 // "<mesh> A1", "A2"... and weights every vertex along the chain (rig.py; the page works out the
 // same weights for its preview), so the mesh comes into Studio skinned, its bones inside it.
 // "Download rigged .blend" saves that same file for touching up the weights by hand; uploaded back
@@ -328,7 +328,12 @@ function checkRigs(parts, rigs) {
     const chains = r.chains.map(c => {
       if (!c || !finite3(c.root) || !finite3(c.tip)) throw new ModelError(400, `${part}: each chain needs a root and a tip`);
       if (Math.hypot(c.tip[0] - c.root[0], c.tip[1] - c.root[1], c.tip[2] - c.root[2]) < 1e-6) throw new ModelError(400, `${part}: a chain's root and tip are the same point`);
-      return { root: c.root, tip: c.tip };
+      if (c.mid == null) return { root: c.root, tip: c.tip };
+      // The joints between the bones, moved by hand to curve the chain (a tail); without them the bones are evenly spaced on a line.
+      if (!Array.isArray(c.mid) || c.mid.length !== bones - 1 || !c.mid.every(finite3)) throw new ModelError(400, `${part}: a chain's mid needs ${bones - 1} points (one per joint)`);
+      const pts = [c.root, ...c.mid, c.tip];
+      if (pts.some((p, k) => k > 0 && Math.hypot(p[0] - pts[k - 1][0], p[1] - pts[k - 1][1], p[2] - pts[k - 1][2]) < 1e-6)) throw new ModelError(400, `${part}: two joints of a chain are the same point`);
+      return { root: c.root, tip: c.tip, mid: c.mid };
     });
     clean[part] = { kind: r.kind, bones, smooth, chains };
   }

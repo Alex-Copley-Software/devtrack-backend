@@ -147,6 +147,12 @@ test('bending parts: a cape gets bones, a rigged .blend can be downloaded, edite
   await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, bones: 9 } }), /1 to 8 bones/);
   await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, chains: [{ root: [0, 1, 0], tip: [0, 1, 0] }] } }), /same point/);
   await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, kind: 'tail' } }), /kind must be/);
+  // Joints moved to curve a chain: one per joint between the bones, none on top of the next.
+  const curl = [[0, 2.4, 0.7], [0.4, 1.8, 0.9], [0.3, 1.1, 1.2]];
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, chains: [{ ...cape.chains[0], mid: curl.slice(1) }] } }), /mid needs 3 points/);
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, chains: [{ ...cape.chains[0], mid: [cape.chains[0].root, ...curl.slice(1)] }] } }), /same point/);
+  await store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, chains: [{ ...cape.chains[0], mid: curl }] } });
+  assert.deepEqual((await store.get(id, prisma)).rigs.Hair.chains[0].mid, curl);
   // A rig on a body part (Cube is Torso) is kept but not made: the body stays R6.
   await store.setAssignments(id, names, prisma, { Hair: 'Cape' }, undefined, { Hair: cape, Cube: { ...cape, chains: cape.chains.slice(0, 1) } });
   assert.equal(Object.keys((await store.get(id, prisma)).rigs).length, 2);
