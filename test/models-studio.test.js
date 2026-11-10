@@ -36,18 +36,19 @@ test('a model is queued, claimed, reported on and finished', async () => {
   assert.equal(await store.claimStudio(prisma), null, 'nothing to take');
 
   let given = null;
-  const studio = await store.sendToStudio(id, 'Alex', prisma, async (blend, plan) => { given = plan; return Buffer.from('FBX bytes'); }, { smallScale: true, embedTextures: false });
+  const studio = await store.sendToStudio(id, 'Alex', prisma, async (blend, plan) => { given = plan; return Buffer.from('FBX bytes'); }, { smallScale: true, embedTextures: false, turn: 180 });
   assert.equal(studio.status, 'queued');
   assert.equal(studio.by, 'Alex');
-  assert.deepEqual(studio.options, { embedTextures: false, smallScale: true });
+  assert.deepEqual(studio.options, { embedTextures: false, smallScale: true, turn: 180 });
   assert.equal(given.embed, false, 'exported with the chosen options');
   assert.equal(given.scale, 0.01);
   assert.deepEqual(given.rename, { Cube: 'Head', 'Cube.001': 'Torso' });
   await assert.rejects(store.sendToStudio(id, 'Alex', prisma, async () => Buffer.from('again')), /already on its way/);
+  await assert.rejects(store.sendToStudio(id, 'Alex', prisma, async () => Buffer.from('x'), { turn: 45 }), /turn must be one of/, 'quarter turns only');
   assert.equal(await store.studioQueued(prisma), 1);
 
   const job = await store.claimStudio(prisma);
-  assert.deepEqual(job, { id, name: 'Gowther', fbxName: 'Gowther.fbx', options: { embedTextures: false, smallScale: true } });
+  assert.deepEqual(job, { id, name: 'Gowther', fbxName: 'Gowther.fbx', options: { embedTextures: false, smallScale: true, turn: 180 } });
   assert.equal((await store.get(id, prisma)).studio.status, 'uploading');
   assert.equal(await store.claimStudio(prisma), null, 'taken once only');
   assert.equal((await store.studioFbx(id, prisma)).data.toString(), 'FBX bytes', 'the FBX is kept');
@@ -69,7 +70,7 @@ test('a model is queued, claimed, reported on and finished', async () => {
   assert.equal(again.status, 'queued');
   assert.equal(again.assetId, null);
   assert.equal(again.result, null);
-  assert.deepEqual(again.options, { embedTextures: true, smallScale: true });
+  assert.deepEqual(again.options, { embedTextures: true, smallScale: true, turn: 0 }, 'not turned unless asked');
   assert.equal((await store.list(prisma))[0].studio.status, 'queued');
 });
 

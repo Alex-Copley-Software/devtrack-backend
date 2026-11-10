@@ -61,8 +61,8 @@ function pageRouter() {
     res.send(data);
   }));
   router.post('/:id/studio', wrap(async (req, res) => {
-    const { embedTextures, smallScale } = req.body || {};
-    const studio = await store.sendToStudio(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale });
+    const { embedTextures, smallScale, turn } = req.body || {};
+    const studio = await store.sendToStudio(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale, turn });
     res.status(202).json({ studio, studioWorker: workerSeen() });
   }));
   router.delete('/:id', wrap(async (req, res) => { await store.remove(req.params.id); res.json({ ok: true }); }));

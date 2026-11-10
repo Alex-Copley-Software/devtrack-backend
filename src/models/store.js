@@ -197,12 +197,17 @@ async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exp
 
 // ── Send to Studio ──
 
+// Degrees the unit is turned (about the vertical, + is to its left) before it's rigged, for blend files that face the wrong way.
+const STUDIO_TURNS = [0, 180, 90, -90];
+
 // Export the FBX with the page's options, keep it, and queue it for the Mac.
 async function sendToStudio(id, by, prisma = getPrisma(), exportFbx = blender.exportFbx, options = {}) {
+  const turn = Number(options.turn ?? 0);
+  if (!STUDIO_TURNS.includes(turn)) throw new ModelError(400, `turn must be one of ${STUDIO_TURNS.join(', ')}`);
   const model = await get(id, prisma);
   if (STUDIO_ACTIVE.includes(model.studio?.status)) throw new ModelError(409, 'It is already on its way to Studio');
   const { name, data } = await exportModel(id, by, prisma, exportFbx, options);
-  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false };
+  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, turn };
   const queued = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'queued', "studioFbx" = $2, "studioFbxName" = $3,
     "studioOptions" = $4::jsonb, "studioAssetId" = NULL, "studioError" = NULL, "studioResult" = NULL, "studioBy" = $5,
     "studioQueuedAt" = now(), "studioAt" = now()
@@ -255,5 +260,5 @@ async function remove(id, prisma = getPrisma()) {
 }
 
 module.exports = { ensureSchema, create, list, get, file, setAssignments, exportModel, remove,
-  sendToStudio, studioQueued, claimStudio, studioFbx, reportStudio, STUDIO_STALE_MIN,
+  sendToStudio, studioQueued, claimStudio, studioFbx, reportStudio, STUDIO_STALE_MIN, STUDIO_TURNS,
   plan, checkAssignments, ModelError, PRIMARY, SECONDARY, DROP };
