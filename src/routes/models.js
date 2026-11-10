@@ -74,7 +74,7 @@ function pageRouter() {
       res.send(data);
     }));
   }
-  router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments, undefined, req.body?.labels) })));
+  router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments, undefined, req.body?.labels, req.body?.doubleSided) })));
   // Weapons and other accessories: upload one from the page (.blend or .fbx), attach it, position it.
   router.post('/upload', express.raw({ type: () => true, limit: '40mb' }), wrap(async (req, res) => {
     res.status(201).json(await store.create({ name: header(req, 'x-file-name'), blend: req.body, uploadedBy: req.user?.name || req.user?.email, kind: 'accessory' }));

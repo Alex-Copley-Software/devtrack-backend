@@ -258,7 +258,7 @@ async function main() {
     res.send(`<script>
       localStorage.setItem('devtrack_token', ${JSON.stringify(token)});
       localStorage.setItem('devtrack_user', ${JSON.stringify(JSON.stringify({ ...user, pageAccess: ['bugs', 'assets'] }))});
-      location.href = ${JSON.stringify(req.query.to === 'revenue' ? '/revenue/' : String(req.query.to || '').startsWith('/') ? req.query.to : '/assets/')};
+      location.href = ${JSON.stringify(req.query.to === 'revenue' ? '/revenue/' : String(req.query.to || '').startsWith('/') ? req.query.to : '/models/')};
     </script>`);
   });
 

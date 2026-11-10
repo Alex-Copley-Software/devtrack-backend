@@ -115,10 +115,19 @@ test('a weapon is uploaded, attached, positioned and goes into the FBX with what
   assert.deepEqual(a.data, FBX);
   assert.deepEqual(a.meshes, ['Sword'], 'empty meshes and parts left out of the accessory stay out');
   assert.deepEqual(a.matrix, matrix);
-  assert.deepEqual(out.accessories, [{ name: 'Cid Sword', spot: 'left-hand', limb: 'Left Arm', handle: 'A1 Handle', meshes: { 'A1 Sword': 'Sword' } }]);
+  assert.deepEqual(out.accessories, [{ name: 'Cid Sword', spot: 'left-hand', limb: 'Left Arm', handle: 'A1 Handle', meshes: { 'A1 Sword': 'Sword' }, doubleSided: false }]);
+  assert.deepEqual(out.doubleSided, []);
 
+  // Double sided: a unit part by its final name (a dropped one doesn't count), and every mesh of a marked accessory.
+  await assert.rejects(store.setAssignments(unit, { Arm: 'Right Arm', Junk: 'drop' }, prisma, undefined, ['Nope']), /No part/);
+  await store.setAssignments(unit, { Arm: 'Right Arm', Junk: 'drop' }, prisma, undefined, ['Arm', 'Hair', 'Junk']);
+  assert.deepEqual((await store.get(unit, prisma)).doubleSided, ['Arm', 'Hair', 'Junk']);
+  await store.setAssignments(unit, { Arm: 'Right Arm', Junk: 'drop' }, prisma); // saving names alone leaves it as it was
+  assert.deepEqual((await store.get(unit, prisma)).doubleSided, ['Arm', 'Hair', 'Junk']);
+  assert.equal((await store.updateAccessory(unit, acc.id, { doubleSided: true }, prisma)).doubleSided, true);
   const studio = await store.sendToStudio(unit, 'Alex', prisma, async () => Buffer.from('FBX'));
-  assert.deepEqual(studio.options.accessories, out.accessories, 'the Mac gets the accessories with the job');
+  assert.deepEqual(studio.options.accessories.map(x => x.meshes), out.accessories.map(x => x.meshes), 'the Mac gets the accessories with the job');
+  assert.deepEqual(studio.options.doubleSided, ['ArmRight', 'Hair', 'A1 Sword']);
 
   await store.removeAccessory(unit, acc.id, prisma);
   assert.deepEqual((await store.get(unit, prisma)).accessories, []);

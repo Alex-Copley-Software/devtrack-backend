@@ -18,6 +18,10 @@
 // under the limb with a Handle part, a Motor6D to each mesh and a Weld from
 // the limb to the Handle).
 //
+// Double sided: any part, and any accessory as a whole, can be marked to show
+// both faces in Studio (MeshPart.DoubleSided, which only Studio and plugins can
+// set). The Studio job carries the FBX names of those meshes; the Mac sets it.
+//
 // "Send to Studio" keeps an FBX on the model and queues it for the Mac worker
 // (~/RobloxPipeline/tools/studio_worker.py), which uploads it to Roblox and
 // imports it into Studio. studioStatus: queued → uploading → importing → done,
@@ -73,10 +77,12 @@ async function ensureSchema(prisma = getPrisma()) {
     "name" TEXT NOT NULL,
     "spot" TEXT NOT NULL,
     "placement" JSONB,
+    "doubleSided" BOOLEAN NOT NULL DEFAULT false,
     "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
   )`);
-  for (const col of ['"labels" JSONB NOT NULL DEFAULT \'{}\'::jsonb', '"kind" TEXT NOT NULL DEFAULT \'unit\'', '"format" TEXT NOT NULL DEFAULT \'blend\'',
+  await prisma.$executeRawUnsafe(`ALTER TABLE "ModelAccessory" ADD COLUMN IF NOT EXISTS "doubleSided" BOOLEAN NOT NULL DEFAULT false`);
+  for (const col of ['"labels" JSONB NOT NULL DEFAULT \'{}\'::jsonb', '"doubleSided" JSONB NOT NULL DEFAULT \'[]\'::jsonb', '"kind" TEXT NOT NULL DEFAULT \'unit\'', '"format" TEXT NOT NULL DEFAULT \'blend\'',
     '"studioStatus" TEXT', '"studioFbx" BYTEA', '"studioFbxName" TEXT', '"studioOptions" JSONB', '"studioAssetId" TEXT',
     '"studioError" TEXT', '"studioResult" JSONB', '"studioBy" TEXT', '"studioQueuedAt" TIMESTAMP', '"studioAt" TIMESTAMP',
     '"rbxmStatus" TEXT', '"rbxm" BYTEA', '"rbxmUnit" TEXT', '"rbxmSize" INTEGER', '"rbxmError" TEXT', '"rbxmPost" JSONB', '"rbxmBy" TEXT',
@@ -92,7 +98,7 @@ const STUDIO_ACTIVE = ['queued', 'uploading', 'importing'];
 const STUDIO_REPORTS = ['uploading', 'importing', 'done', 'failed'];
 const STUDIO_STALE_MIN = 15; // a job the Mac took and then went quiet on for this long has failed
 const RBXM_ACTIVE = ['queued', 'saving'];
-const SUMMARY_COLUMNS = `id, name, kind, format, labels, "uploadedBy", "sourceUrl", status, error, blender, parts, assignments, "exportedAt", "exportedBy",
+const SUMMARY_COLUMNS = `id, name, kind, format, labels, "doubleSided", "uploadedBy", "sourceUrl", status, error, blender, parts, assignments, "exportedAt", "exportedBy",
   "createdAt", "updatedAt", "studioStatus", "studioAssetId", "studioError", "studioResult", "studioOptions", "studioBy", "studioQueuedAt", "studioAt",
   "rbxmStatus", "rbxmUnit", "rbxmSize", "rbxmError", "rbxmPost", "rbxmBy", "rbxmAt"`;
 
@@ -246,6 +252,7 @@ async function get(id, prisma = getPrisma(), inspect) {
   if (row.status === 'converting') startConvert(id, prisma, inspect); // a restart may have cut it short
   return {
     ...summary(row), parts: json(row.parts) || [], assignments: json(row.assignments) || {}, labels: json(row.labels) || {},
+    doubleSided: json(row.doubleSided) || [],
     categories: { primary: PRIMARY, secondary: SECONDARY, meshNames: MESH_NAME, spots: SPOTS },
     accessories: await accessoriesOf(id, prisma), attachedTo: await attachedTo(id, prisma),
   };
@@ -259,24 +266,32 @@ async function file(id, column, prisma = getPrisma()) {
   return { name: row.name, data: Buffer.from(row.data) };
 }
 
-async function setAssignments(id, assignments, prisma = getPrisma(), labels) {
+async function setAssignments(id, assignments, prisma = getPrisma(), labels, doubleSided) {
   const model = await get(id, prisma);
   if (model.status !== 'ready') throw new ModelError(409, 'The model is not ready yet');
   const clean = checkAssignments(model.parts, assignments);
   const words = labels === undefined ? model.labels : checkLabels(model.parts, labels);
-  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET assignments = $2::jsonb, labels = $3::jsonb, "updatedAt" = now() WHERE id = $1`,
-    id, JSON.stringify(clean), JSON.stringify(words));
+  let both = model.doubleSided;
+  if (doubleSided !== undefined) {
+    if (!Array.isArray(doubleSided)) throw new ModelError(400, 'doubleSided must be a list of part names');
+    const names = new Set(model.parts.map(p => p.name));
+    const bad = doubleSided.find(n => !names.has(n));
+    if (bad !== undefined) throw new ModelError(400, `No part called "${bad}"`);
+    both = [...new Set(doubleSided)];
+  }
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET assignments = $2::jsonb, labels = $3::jsonb, "doubleSided" = $4::jsonb, "updatedAt" = now() WHERE id = $1`,
+    id, JSON.stringify(clean), JSON.stringify(words), JSON.stringify(both));
   return clean;
 }
 
 // ── weapons and other accessories ──
 
 async function accessoriesOf(unitId, prisma) {
-  const rows = await prisma.$queryRawUnsafe(`SELECT a.id, a."accessoryId", a.name, a.spot, a.placement, m.name AS "fileName", m.status,
+  const rows = await prisma.$queryRawUnsafe(`SELECT a.id, a."accessoryId", a.name, a.spot, a.placement, a."doubleSided", m.name AS "fileName", m.status,
       m.error, m.parts, m.assignments FROM "ModelAccessory" a LEFT JOIN "ModelFile" m ON m.id = a."accessoryId"
     WHERE a."unitId" = $1 ORDER BY a."createdAt"`, unitId);
   return rows.map(r => ({
-    id: r.id, accessoryId: r.accessoryId, name: r.name, spot: r.spot, limb: SPOTS[r.spot], placement: json(r.placement),
+    id: r.id, accessoryId: r.accessoryId, name: r.name, spot: r.spot, limb: SPOTS[r.spot], placement: json(r.placement), doubleSided: !!r.doubleSided,
     file: r.fileName ? { name: r.fileName, status: r.status, error: r.error, parts: (json(r.parts) || []).length } : null,
   }));
 }
@@ -323,6 +338,9 @@ async function updateAccessory(unitId, id, body = {}, prisma = getPrisma()) {
     if (!SPOTS[body.spot]) throw new ModelError(400, `spot must be one of ${Object.keys(SPOTS).join(', ')}`);
     await prisma.$executeRawUnsafe(`UPDATE "ModelAccessory" SET spot = $2, "updatedAt" = now() WHERE id = $1`, id, body.spot);
   }
+  if ('doubleSided' in body) {
+    await prisma.$executeRawUnsafe(`UPDATE "ModelAccessory" SET "doubleSided" = $2, "updatedAt" = now() WHERE id = $1`, id, body.doubleSided === true);
+  }
   if ('placement' in body) {
     await prisma.$executeRawUnsafe(`UPDATE "ModelAccessory" SET placement = $2::jsonb, "updatedAt" = now() WHERE id = $1`,
       id, JSON.stringify(checkPlacement(body.placement)));
@@ -349,7 +367,7 @@ async function accessoryExport(unitId, prisma) {
     if (!meshes.length) throw new ModelError(409, `The accessory ${a.name} has no meshes to add`);
     const prefix = `A${i + 1}`;
     forBlender.push({ prefix, data: Buffer.from(m.blend), format: m.format || 'blend', meshes, matrix: a.placement.matrix, handle: a.placement.handle });
-    forStudio.push({ name: a.name, spot: a.spot, limb: a.limb, handle: `${prefix} Handle`, meshes: Object.fromEntries(meshes.map(n => [`${prefix} ${n}`, n])) });
+    forStudio.push({ name: a.name, spot: a.spot, limb: a.limb, handle: `${prefix} Handle`, meshes: Object.fromEntries(meshes.map(n => [`${prefix} ${n}`, n])), doubleSided: a.doubleSided });
   }
   return { forBlender, forStudio };
 }
@@ -364,7 +382,13 @@ async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exp
   const { forBlender, forStudio } = await accessoryExport(id, prisma);
   const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01, accessories: forBlender });
   await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "exportedAt" = now(), "exportedBy" = $2 WHERE id = $1`, id, by || null);
-  return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps, accessories: forStudio };
+  // The meshes to show both faces of, by the name they have in the FBX.
+  const dropped = new Set(steps.drop);
+  const doubleSided = [
+    ...model.doubleSided.filter(n => !dropped.has(n)).map(n => steps.rename[n] || n),
+    ...forStudio.filter(a => a.doubleSided).flatMap(a => Object.keys(a.meshes)),
+  ];
+  return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps, accessories: forStudio, doubleSided };
 }
 
 // ── Send to Studio ──
@@ -378,8 +402,8 @@ async function sendToStudio(id, by, prisma = getPrisma(), exportFbx = blender.ex
   if (!STUDIO_TURNS.includes(turn)) throw new ModelError(400, `turn must be one of ${STUDIO_TURNS.join(', ')}`);
   const model = await get(id, prisma);
   if (STUDIO_ACTIVE.includes(model.studio?.status)) throw new ModelError(409, 'It is already on its way to Studio');
-  const { name, data, accessories } = await exportModel(id, by, prisma, exportFbx, options);
-  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, turn, accessories };
+  const { name, data, accessories, doubleSided } = await exportModel(id, by, prisma, exportFbx, options);
+  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, turn, accessories, doubleSided };
   const queued = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'queued', "studioFbx" = $2, "studioFbxName" = $3,
     "studioOptions" = $4::jsonb, "studioAssetId" = NULL, "studioError" = NULL, "studioResult" = NULL, "studioBy" = $5,
     "studioQueuedAt" = now(), "studioAt" = now()
