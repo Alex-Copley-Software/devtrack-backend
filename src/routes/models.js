@@ -66,7 +66,7 @@ function pageRouter() {
     const { studio, rbxm } = await store.get(req.params.id);
     res.json({ studio, rbxm, studioWorker: workerSeen() });
   }));
-  for (const [route, column, type] of [['glb', 'glb', 'model/gltf-binary'], ['blend', 'blend', 'application/octet-stream']]) {
+  for (const [route, column, type] of [['glb', 'glb', 'model/gltf-binary'], ['blend', 'blend', 'application/octet-stream'], ['edited-glb', 'editedGlb', 'model/gltf-binary']]) {
     router.get(`/:id/${route}`, wrap(async (req, res) => {
       const { name, data } = await store.file(req.params.id, column);
       res.set('Content-Type', type);
@@ -74,11 +74,17 @@ function pageRouter() {
       res.send(data);
     }));
   }
-  router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments, undefined, req.body?.labels, req.body?.doubleSided) })));
+  router.put('/:id/assignments', wrap(async (req, res) => res.json({ assignments: await store.setAssignments(req.params.id, req.body?.assignments, undefined, req.body?.labels, req.body?.doubleSided, req.body?.rigs) })));
   // Weapons and other accessories: upload one from the page (.blend or .fbx), attach it, position it.
   router.post('/upload', express.raw({ type: () => true, limit: '40mb' }), wrap(async (req, res) => {
     res.status(201).json(await store.create({ name: header(req, 'x-file-name'), blend: req.body, uploadedBy: req.user?.name || req.user?.email, kind: 'accessory' }));
   }));
+  // Bending parts: the rigged unit as a .blend to touch up in Blender, and that file uploaded back.
+  router.post('/:id/rigged-blend', wrap(async (req, res) => sendFile(res, await store.rigBlend(req.params.id))));
+  router.post('/:id/edited', express.raw({ type: () => true, limit: '60mb' }), wrap(async (req, res) => {
+    res.status(202).json(await store.uploadEdited(req.params.id, req.body, req.user?.name || req.user?.email));
+  }));
+  router.delete('/:id/edited', wrap(async (req, res) => { await store.removeEdited(req.params.id); res.json({ ok: true }); }));
   router.post('/:id/accessories', wrap(async (req, res) => res.status(201).json(await store.addAccessory(req.params.id, req.body || {}))));
   router.patch('/:id/accessories/:accId', wrap(async (req, res) => res.json(await store.updateAccessory(req.params.id, req.params.accId, req.body || {}))));
   router.delete('/:id/accessories/:accId', wrap(async (req, res) => { await store.removeAccessory(req.params.id, req.params.accId); res.json({ ok: true }); }));

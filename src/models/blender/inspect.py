@@ -42,4 +42,9 @@ bpy.ops.export_scene.gltf(
 )
 
 with open(meta, 'w', encoding='utf-8') as f:
-    json.dump({'blender': bpy.app.version_string, 'parts': out}, f)
+    # A rigged .blend (downloaded from the page, edited, uploaded back): what it was made from, and its bones.
+    skinned = sorted(o.name for o in bpy.context.scene.objects
+                     if o.type == 'MESH' and any(m.type == 'ARMATURE' and m.object for m in o.modifiers))
+    arms = [o for o in bpy.context.scene.objects if o.type == 'ARMATURE']
+    json.dump({'blender': bpy.app.version_string, 'parts': out, 'config': bpy.context.scene.get('dt_config'),
+               'skinned': skinned, 'armatures': len(arms), 'bones': sum(len(a.data.bones) for a in arms)}, f)

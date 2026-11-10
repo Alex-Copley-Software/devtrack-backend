@@ -59,7 +59,7 @@ test('a .blend is stored, converted, named and planned for export', async () => 
   assert.equal(given.plan.fixFaces, false, 'faces left alone unless asked (Invert Negative Faces defaults to No)');
   const inverted = await store.exportModel(id, 'Alex', prisma, async (blend, plan) => plan, { invertFaces: true });
   assert.equal(inverted.data.fixFaces, true);
-  delete given.plan.embed; delete given.plan.scale; delete given.plan.fixFaces;
+  delete given.plan.embed; delete given.plan.scale; delete given.plan.fixFaces; delete given.plan.rigs;
   assert.deepEqual(given.plan.accessories, []);
   delete given.plan.accessories;
   // The house style of a finished unit: ArmRight, "Head Hair", numbered when there's no word, " 2" on a repeat.
@@ -134,6 +134,68 @@ test('a weapon is uploaded, attached, positioned and goes into the FBX with what
 
   await store.removeAccessory(unit, acc.id, prisma);
   assert.deepEqual((await store.get(unit, prisma)).accessories, []);
+});
+
+test('bending parts: a cape gets bones, a rigged .blend can be downloaded, edited and used while it still matches', async () => {
+  const prisma = await createDb();
+  const { id } = await store.create({ name: 'Cid.blend', blend: BLEND }, prisma, fakeInspect);
+  await until(async () => (await store.get(id, prisma, fakeInspect)).status === 'ready');
+  const names = { Cube: 'Torso', Hair: 'Torso Accessory', Strap: 'Head Accessory' };
+  const cape = { kind: 'cape', bones: 4, smooth: 0.6, chains: [{ root: [0, 3, 0.5], tip: [0, 0.5, 0.9] }, { root: [0.5, 3, 0.5], tip: [0.6, 0.5, 0.9] }] };
+
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Nope: cape }), /No part/);
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, bones: 9 } }), /1 to 8 bones/);
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, chains: [{ root: [0, 1, 0], tip: [0, 1, 0] }] } }), /same point/);
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...cape, kind: 'tail' } }), /kind must be/);
+  // A rig on a body part (Cube is Torso) is kept but not made: the body stays R6.
+  await store.setAssignments(id, names, prisma, { Hair: 'Cape' }, undefined, { Hair: cape, Cube: { ...cape, chains: cape.chains.slice(0, 1) } });
+  assert.equal(Object.keys((await store.get(id, prisma)).rigs).length, 2);
+
+  let given = null;
+  const out = await store.exportModel(id, 'Alex', prisma, async (blend, p) => { given = p; return Buffer.from('FBX'); });
+  assert.equal(given.rigs.length, 1, 'only the accessory part is rigged');
+  const [r] = given.rigs;
+  assert.equal(r.mesh, 'Torso Cape');
+  assert.deepEqual(r.names, ['Torso Cape A1', 'Torso Cape A2', 'Torso Cape A3', 'Torso Cape A4', 'Torso Cape B1', 'Torso Cape B2', 'Torso Cape B3', 'Torso Cape B4']);
+  assert.deepEqual(out.rigged, [{ mesh: 'Torso Cape', bones: r.names }]);
+  const studio = await store.sendToStudio(id, 'Alex', prisma, async () => Buffer.from('FBX'));
+  assert.deepEqual(studio.options.rigged, out.rigged, 'the Mac learns which meshes bend');
+  await store.claimStudio(prisma);
+  await store.reportStudio(id, { status: 'done', result: {} }, prisma);
+
+  // Download: the same plan, saved as a .blend, marked with what it was made from.
+  const model = await store.get(id, prisma);
+  let saved = null;
+  const dl = await store.rigBlend(id, prisma, async (blend, p) => { saved = p; return Buffer.from('BLENDER rigged'); });
+  assert.equal(dl.name, 'Cid_rigged.blend');
+  assert.equal(saved.configHash, model.configHash);
+  assert.equal(saved.rigs.length, 1);
+
+  // Upload it back, edited: used for the FBX while it matches, with nothing left for Blender to add.
+  const EDITED = Buffer.concat([Buffer.from('BLENDER-edited'), Buffer.alloc(16)]);
+  await assert.rejects(store.uploadEdited(id, Buffer.from('nope'), 'Alex', prisma), /not a \.blend/);
+  const editedInspect = async () => ({ glb: Buffer.from('glTF edited'), parts: PARTS, config: model.configHash, skinned: ['Torso Cape', 'Head Accessory 1'], armatures: 2, bones: 11 });
+  await store.uploadEdited(id, EDITED, 'Alex', prisma, editedInspect);
+  await until(async () => (await store.get(id, prisma, editedInspect)).edited?.status === 'ready');
+  const withEdit = await store.get(id, prisma);
+  assert.equal(withEdit.edited.matches, true);
+  assert.equal(withEdit.edited.info.bones, 11);
+  assert.equal((await store.file(id, 'editedGlb', prisma)).data.toString(), 'glTF edited');
+  let fromEdit = null;
+  const e = await store.exportModel(id, 'Alex', prisma, async (blend, p) => { fromEdit = { blend, p }; return Buffer.from('FBX'); });
+  assert.deepEqual(fromEdit.blend, EDITED, 'made from the edited file');
+  assert.deepEqual(fromEdit.p.rigs, []);
+  assert.deepEqual(fromEdit.p.rename, {});
+  assert.deepEqual(e.rigged, [{ mesh: 'Torso Cape' }, { mesh: 'Head Accessory 1' }], 'every skinned mesh in it, added bones and all');
+
+  // A change on the page makes the edited file out of date: it's refused rather than quietly used.
+  await store.setAssignments(id, { ...names, Junk: 'drop' }, prisma);
+  assert.equal((await store.get(id, prisma)).edited.matches, false);
+  await assert.rejects(store.exportModel(id, 'Alex', prisma, async () => Buffer.from('FBX')), /changed since the rigged \.blend/);
+  await store.removeEdited(id, prisma);
+  assert.equal((await store.get(id, prisma)).edited, null);
+  const back = await store.exportModel(id, 'Alex', prisma, async (blend, p) => p);
+  assert.equal(back.data.rigs.length, 1, 'back to the automatic rig');
 });
 
 test('a conversion that fails says why', async () => {

@@ -18,6 +18,15 @@
 // under the limb with a Handle part, a Motor6D to each mesh and a Weld from
 // the limb to the Handle).
 //
+// Bending parts (wings, capes, hair): the body stays R6, welded; an accessory part can be given
+// a bone chain ("rigs", per part: kind, bones per chain, chains, smooth, and each chain's root and
+// tip in the viewer's space). At export Blender makes an armature "<mesh> Rig" with bones
+// "<mesh> A1", "A2"... and weights every vertex along the chain (rig.py; the page works out the
+// same weights for its preview), so the mesh comes into Studio skinned, its bones inside it.
+// "Download rigged .blend" saves that same file for touching up the weights by hand; uploaded back
+// ("edited"), it's used for the FBX instead, as long as the names and rig it was made from are
+// still the page's (configHash).
+//
 // Double sided: any part, and any accessory as a whole, can be marked to show
 // both faces in Studio (MeshPart.DoubleSided, which only Studio and plugins can
 // set). The Studio job carries the FBX names of those meshes; the Mac sets it.
@@ -82,7 +91,9 @@ async function ensureSchema(prisma = getPrisma()) {
     "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
   )`);
   await prisma.$executeRawUnsafe(`ALTER TABLE "ModelAccessory" ADD COLUMN IF NOT EXISTS "doubleSided" BOOLEAN NOT NULL DEFAULT false`);
-  for (const col of ['"labels" JSONB NOT NULL DEFAULT \'{}\'::jsonb', '"doubleSided" JSONB NOT NULL DEFAULT \'[]\'::jsonb', '"kind" TEXT NOT NULL DEFAULT \'unit\'', '"format" TEXT NOT NULL DEFAULT \'blend\'',
+  for (const col of ['"rigs" JSONB NOT NULL DEFAULT \'{}\'::jsonb', '"editedBlend" BYTEA', '"editedGlb" BYTEA', '"editedInfo" JSONB',
+    '"editedStatus" TEXT', '"editedError" TEXT', '"editedAt" TIMESTAMP', '"editedBy" TEXT',
+    '"labels" JSONB NOT NULL DEFAULT \'{}\'::jsonb', '"doubleSided" JSONB NOT NULL DEFAULT \'[]\'::jsonb', '"kind" TEXT NOT NULL DEFAULT \'unit\'', '"format" TEXT NOT NULL DEFAULT \'blend\'',
     '"studioStatus" TEXT', '"studioFbx" BYTEA', '"studioFbxName" TEXT', '"studioOptions" JSONB', '"studioAssetId" TEXT',
     '"studioError" TEXT', '"studioResult" JSONB', '"studioBy" TEXT', '"studioQueuedAt" TIMESTAMP', '"studioAt" TIMESTAMP',
     '"rbxmStatus" TEXT', '"rbxm" BYTEA', '"rbxmUnit" TEXT', '"rbxmSize" INTEGER', '"rbxmError" TEXT', '"rbxmPost" JSONB', '"rbxmBy" TEXT',
@@ -100,7 +111,10 @@ const STUDIO_STALE_MIN = 15; // a job the Mac took and then went quiet on for th
 const RBXM_ACTIVE = ['queued', 'saving'];
 const SUMMARY_COLUMNS = `id, name, kind, format, labels, "doubleSided", "uploadedBy", "sourceUrl", status, error, blender, parts, assignments, "exportedAt", "exportedBy",
   "createdAt", "updatedAt", "studioStatus", "studioAssetId", "studioError", "studioResult", "studioOptions", "studioBy", "studioQueuedAt", "studioAt",
-  "rbxmStatus", "rbxmUnit", "rbxmSize", "rbxmError", "rbxmPost", "rbxmBy", "rbxmAt"`;
+  "rbxmStatus", "rbxmUnit", "rbxmSize", "rbxmError", "rbxmPost", "rbxmBy", "rbxmAt",
+  rigs, "editedInfo", "editedStatus", "editedError", "editedAt", "editedBy"`;
+const RIG_KINDS = ['cape', 'hair', 'wing', 'custom'];
+const CHAIN_LETTERS = 'ABC';
 
 // The final name of every part, and the parts left out (see the top of this file).
 // Accessories without a word are numbered per limb in part order: "Head Accessory 1", 2...
@@ -250,12 +264,20 @@ async function get(id, prisma = getPrisma(), inspect) {
   const [row] = await prisma.$queryRawUnsafe(`SELECT ${SUMMARY_COLUMNS} FROM "ModelFile" WHERE id = $1`, id);
   if (!row) throw new ModelError(404, 'No such model');
   if (row.status === 'converting') startConvert(id, prisma, inspect); // a restart may have cut it short
-  return {
+  if (row.editedStatus === 'converting') startEditedConvert(id, prisma, inspect);
+  const model = {
     ...summary(row), parts: json(row.parts) || [], assignments: json(row.assignments) || {}, labels: json(row.labels) || {},
-    doubleSided: json(row.doubleSided) || [],
+    doubleSided: json(row.doubleSided) || [], rigs: json(row.rigs) || {},
     categories: { primary: PRIMARY, secondary: SECONDARY, meshNames: MESH_NAME, spots: SPOTS },
     accessories: await accessoriesOf(id, prisma), attachedTo: await attachedTo(id, prisma),
   };
+  model.configHash = configHash(model, model.accessories);
+  const info = json(row.editedInfo);
+  model.edited = row.editedStatus ? {
+    status: row.editedStatus, error: row.editedError, at: row.editedAt, by: row.editedBy, info,
+    matches: row.editedStatus === 'ready' && info?.config === model.configHash,
+  } : null;
+  return model;
 }
 
 async function file(id, column, prisma = getPrisma()) {
@@ -266,7 +288,7 @@ async function file(id, column, prisma = getPrisma()) {
   return { name: row.name, data: Buffer.from(row.data) };
 }
 
-async function setAssignments(id, assignments, prisma = getPrisma(), labels, doubleSided) {
+async function setAssignments(id, assignments, prisma = getPrisma(), labels, doubleSided, rigs) {
   const model = await get(id, prisma);
   if (model.status !== 'ready') throw new ModelError(409, 'The model is not ready yet');
   const clean = checkAssignments(model.parts, assignments);
@@ -279,9 +301,60 @@ async function setAssignments(id, assignments, prisma = getPrisma(), labels, dou
     if (bad !== undefined) throw new ModelError(400, `No part called "${bad}"`);
     both = [...new Set(doubleSided)];
   }
-  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET assignments = $2::jsonb, labels = $3::jsonb, "doubleSided" = $4::jsonb, "updatedAt" = now() WHERE id = $1`,
-    id, JSON.stringify(clean), JSON.stringify(words), JSON.stringify(both));
+  const bones = rigs === undefined ? model.rigs : checkRigs(model.parts, rigs);
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET assignments = $2::jsonb, labels = $3::jsonb, "doubleSided" = $4::jsonb, rigs = $5::jsonb,
+    "updatedAt" = now() WHERE id = $1`, id, JSON.stringify(clean), JSON.stringify(words), JSON.stringify(both), JSON.stringify(bones));
   return clean;
+}
+
+// ── bending parts ──
+
+const finite3 = v => Array.isArray(v) && v.length === 3 && v.every(x => typeof x === 'number' && Number.isFinite(x));
+
+function checkRigs(parts, rigs) {
+  if (rigs == null) return {};
+  if (typeof rigs !== 'object' || Array.isArray(rigs)) throw new ModelError(400, 'rigs must be an object');
+  const names = new Set(parts.map(p => p.name));
+  const clean = {};
+  for (const [part, r] of Object.entries(rigs)) {
+    if (!r) continue;
+    if (!names.has(part)) throw new ModelError(400, `No part called "${part}"`);
+    if (!RIG_KINDS.includes(r.kind)) throw new ModelError(400, `${part}: kind must be one of ${RIG_KINDS.join(', ')}`);
+    const bones = Number(r.bones);
+    if (!Number.isInteger(bones) || bones < 1 || bones > 8) throw new ModelError(400, `${part}: 1 to 8 bones per chain`);
+    const smooth = Number(r.smooth ?? 0.6);
+    if (!(smooth >= 0.05 && smooth <= 1)) throw new ModelError(400, `${part}: smooth must be between 0.05 and 1`);
+    if (!Array.isArray(r.chains) || r.chains.length < 1 || r.chains.length > CHAIN_LETTERS.length) throw new ModelError(400, `${part}: 1 to 3 chains`);
+    const chains = r.chains.map(c => {
+      if (!c || !finite3(c.root) || !finite3(c.tip)) throw new ModelError(400, `${part}: each chain needs a root and a tip`);
+      if (Math.hypot(c.tip[0] - c.root[0], c.tip[1] - c.root[1], c.tip[2] - c.root[2]) < 1e-6) throw new ModelError(400, `${part}: a chain's root and tip are the same point`);
+      return { root: c.root, tip: c.tip };
+    });
+    clean[part] = { kind: r.kind, bones, smooth, chains };
+  }
+  return clean;
+}
+
+// The bone names of a part's rig: "<mesh> A1".."A<n>", then "B1".. for a second chain.
+const boneNames = (mesh, rig) => rig.chains.flatMap((c, ci) => Array.from({ length: rig.bones }, (_, k) => `${mesh} ${CHAIN_LETTERS[ci]}${k + 1}`));
+
+// The rigs that will be made: only on accessory parts that are in the FBX, by their final name.
+function rigPlan(model, steps) {
+  const dropped = new Set(steps.drop);
+  return model.parts.filter(p => model.rigs[p.name] && SECONDARY.includes(model.assignments[p.name]) && !dropped.has(p.name) && steps.rename[p.name])
+    .map(p => {
+      const r = model.rigs[p.name];
+      const mesh = steps.rename[p.name];
+      return { part: p.name, mesh, kind: r.kind, bones: r.bones, smooth: r.smooth, chains: r.chains, names: boneNames(mesh, r) };
+    });
+}
+
+// What a rigged .blend was made from: the names, the rigs and the accessories. An edited .blend is only
+// used while this is still the same, so a file made before a change can't quietly undo it.
+function configHash(model, accs) {
+  const steps = plan(model.parts, model.assignments, model.labels);
+  const cfg = { rename: steps.rename, drop: steps.drop, rigs: rigPlan(model, steps), acc: (accs || []).map(a => [a.accessoryId, a.name, a.spot, a.placement]) };
+  return require('crypto').createHash('sha1').update(JSON.stringify(cfg)).digest('hex').slice(0, 12);
 }
 
 // ── weapons and other accessories ──
@@ -373,15 +446,42 @@ async function accessoryExport(unitId, prisma) {
 }
 
 // options: embedTextures (Path Mode Copy + Embed Textures) and smallScale (Scale 0.01), both yes unless told no.
-async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exportFbx, options = {}) {
+// Everything an export needs: the file, the plan for Blender and what the Mac gets with it. With an edited
+// .blend that still matches, the file is that one and Blender has nothing left to add.
+async function buildExport(id, prisma, options = {}) {
   const model = await get(id, prisma);
   if (model.status !== 'ready') throw new ModelError(409, 'The model is not ready yet');
   if (model.format === 'fbx') throw new ModelError(400, 'This one is already an FBX. Attach it to a unit as an accessory instead.');
-  const { data } = await file(id, 'blend', prisma);
   const steps = plan(model.parts, model.assignments, model.labels);
   const { forBlender, forStudio } = await accessoryExport(id, prisma);
-  const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01,
-    fixFaces: options.invertFaces === true, accessories: forBlender });
+  const rigs = rigPlan(model, steps);
+  const settings = { embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01, fixFaces: options.invertFaces === true };
+  let data, blenderPlan, rigged;
+  if (model.edited?.status === 'ready' && !options.ignoreEdited) {
+    if (!model.edited.matches) {
+      throw new ModelError(409, 'Names, bending parts or accessories changed since the rigged .blend was downloaded. Download it again and redo the edits, or remove the edited .blend to use the automatic rig.');
+    }
+    data = (await file(id, 'editedBlend', prisma)).data;
+    blenderPlan = { rename: {}, drop: [], ...settings, accessories: [], rigs: [] };
+    rigged = (model.edited.info?.skinned || []).map(mesh => ({ mesh }));
+  } else {
+    data = (await file(id, 'blend', prisma)).data;
+    blenderPlan = { ...steps, ...settings, accessories: forBlender, rigs };
+    rigged = rigs.map(r => ({ mesh: r.mesh, bones: r.names }));
+  }
+  return { model, steps, data, blenderPlan, forStudio, rigged };
+}
+
+// "Download rigged .blend": the unit as it goes to Studio (names, accessories, bones and weights) as a .blend.
+async function rigBlend(id, prisma = getPrisma(), saveBlend = blender.saveBlend) {
+  const { model, data, blenderPlan } = await buildExport(id, prisma, { ignoreEdited: true, embedTextures: true, smallScale: false });
+  const out = await saveBlend(data, { ...blenderPlan, scale: 1, configHash: model.configHash });
+  return { name: model.name.replace(/\.blend\d*$/i, '') + '_rigged.blend', data: out };
+}
+
+async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exportFbx, options = {}) {
+  const { model, steps, data, blenderPlan, forStudio, rigged } = await buildExport(id, prisma, options);
+  const fbx = await exportFbx(data, blenderPlan);
   await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "exportedAt" = now(), "exportedBy" = $2 WHERE id = $1`, id, by || null);
   // The meshes to show both faces of, by the name they have in the FBX.
   const dropped = new Set(steps.drop);
@@ -389,7 +489,49 @@ async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exp
     ...model.doubleSided.filter(n => !dropped.has(n)).map(n => steps.rename[n] || n),
     ...forStudio.filter(a => a.doubleSided).flatMap(a => Object.keys(a.meshes)),
   ];
-  return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps, accessories: forStudio, doubleSided };
+  return { name: model.name.replace(/\.blend\d*$/i, '') + '.fbx', data: fbx, plan: steps, accessories: forStudio, doubleSided, rigged };
+}
+
+// ── an edited rigged .blend, uploaded back ──
+
+const convertingEdited = new Set();
+function startEditedConvert(id, prisma = getPrisma(), inspect = blender.inspect) {
+  if (convertingEdited.has(id)) return;
+  convertingEdited.add(id);
+  (async () => {
+    try {
+      const [row] = await prisma.$queryRawUnsafe(`SELECT "editedBlend" FROM "ModelFile" WHERE id = $1`, id);
+      if (!row?.editedBlend) return;
+      const got = await inspect(Buffer.from(row.editedBlend), 'blend');
+      const info = { config: got.config || null, skinned: got.skinned || [], armatures: got.armatures || 0, bones: got.bones || 0, parts: (got.parts || []).length };
+      await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "editedStatus" = 'ready', "editedError" = NULL, "editedGlb" = $2, "editedInfo" = $3::jsonb WHERE id = $1`,
+        id, got.glb, JSON.stringify(info));
+    } catch (err) {
+      console.error(`[Models] edited .blend for ${id} failed:`, err.message);
+      await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "editedStatus" = 'failed', "editedError" = $2 WHERE id = $1`, id, err.message.slice(0, 2000)).catch(() => {});
+    } finally {
+      convertingEdited.delete(id);
+    }
+  })();
+}
+
+async function uploadEdited(id, data, by, prisma = getPrisma(), inspect) {
+  const model = await get(id, prisma);
+  if (model.status !== 'ready' || model.format !== 'blend') throw new ModelError(409, 'Only a unit opened from a .blend can take an edited .blend');
+  const head = data?.subarray(0, 4).toString('hex');
+  if (!data?.length || !(data.subarray(0, 7).toString('latin1') === 'BLENDER' || head === '28b52ffd' || head?.startsWith('1f8b'))) {
+    throw new ModelError(400, 'That is not a .blend file');
+  }
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "editedBlend" = $2, "editedGlb" = NULL, "editedInfo" = NULL, "editedStatus" = 'converting',
+    "editedError" = NULL, "editedAt" = now(), "editedBy" = $3 WHERE id = $1`, id, data, by || null);
+  startEditedConvert(id, prisma, inspect);
+  return (await get(id, prisma, inspect)).edited;
+}
+
+async function removeEdited(id, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "editedBlend" = NULL, "editedGlb" = NULL, "editedInfo" = NULL, "editedStatus" = NULL,
+    "editedError" = NULL, "editedAt" = NULL, "editedBy" = NULL WHERE id = $1`, id);
 }
 
 // ── Send to Studio ──
@@ -403,8 +545,8 @@ async function sendToStudio(id, by, prisma = getPrisma(), exportFbx = blender.ex
   if (!STUDIO_TURNS.includes(turn)) throw new ModelError(400, `turn must be one of ${STUDIO_TURNS.join(', ')}`);
   const model = await get(id, prisma);
   if (STUDIO_ACTIVE.includes(model.studio?.status)) throw new ModelError(409, 'It is already on its way to Studio');
-  const { name, data, accessories, doubleSided } = await exportModel(id, by, prisma, exportFbx, options);
-  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, invertFaces: options.invertFaces === true, turn, accessories, doubleSided };
+  const { name, data, accessories, doubleSided, rigged } = await exportModel(id, by, prisma, exportFbx, options);
+  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, invertFaces: options.invertFaces === true, turn, accessories, doubleSided, rigged };
   const queued = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'queued', "studioFbx" = $2, "studioFbxName" = $3,
     "studioOptions" = $4::jsonb, "studioAssetId" = NULL, "studioError" = NULL, "studioResult" = NULL, "studioBy" = $5,
     "studioQueuedAt" = now(), "studioAt" = now()
@@ -505,5 +647,5 @@ async function remove(id, prisma = getPrisma()) {
 module.exports = { ensureSchema, create, list, get, file, setAssignments, exportModel, remove,
   sendToStudio, studioQueued, claimStudio, studioFbx, reportStudio, STUDIO_STALE_MIN, STUDIO_TURNS,
   requestRbxm, saveRbxm, failRbxm, setRbxmPost, rbxmFile,
-  addAccessory, updateAccessory, removeAccessory,
+  addAccessory, updateAccessory, removeAccessory, rigBlend, uploadEdited, removeEdited, checkRigs, configHash,
   plan, checkAssignments, ModelError, PRIMARY, SECONDARY, DROP, MESH_NAME, SPOTS };

@@ -85,13 +85,23 @@ function inspect(blend, format = 'blend') {
     if (format === 'fbx') await run(null, 'inspect.py', [glb, meta, file]);
     else await run(file, 'inspect.py', [glb, meta]);
     const info = JSON.parse(fs.readFileSync(meta, 'utf8'));
-    return { glb: fs.readFileSync(glb), parts: info.parts, blender: info.blender };
+    // config, skinned, armatures, bones: what a rigged .blend (edited and uploaded back) holds
+    return { ...info, glb: fs.readFileSync(glb) };
   });
 }
 
-// .blend + { rename: {old: new}, drop: [old], embed, scale, accessories } in, FBX bytes out.
+// .blend + { rename: {old: new}, drop: [old], embed, scale, fixFaces, accessories, rigs } in, FBX bytes out.
 // Each accessory brings its file as data; it's written next to the plan for Blender to add.
 function exportFbx(blend, plan) {
+  return runExport(blend, plan, 'model.fbx');
+}
+
+// The same, saved as a .blend (textures packed in) instead of exported: "Download rigged .blend".
+function saveBlend(blend, plan) {
+  return runExport(blend, { ...plan, saveBlend: true }, 'rigged.blend');
+}
+
+function runExport(blend, plan, outName) {
   return withTemp(async dir => {
     const file = path.join(dir, 'model.blend');
     fs.writeFileSync(file, blend);
@@ -103,9 +113,9 @@ function exportFbx(blend, plan) {
     });
     const planFile = path.join(dir, 'plan.json');
     fs.writeFileSync(planFile, JSON.stringify({ ...plan, accessories }));
-    const fbx = path.join(dir, 'model.fbx');
-    await run(file, 'export.py', [planFile, fbx]);
-    return fs.readFileSync(fbx);
+    const out = path.join(dir, outName);
+    await run(file, 'export.py', [planFile, out]);
+    return fs.readFileSync(out);
   });
 }
 
@@ -115,4 +125,4 @@ function prefetch() {
   setTimeout(() => blenderPath().catch(err => console.error('[Blender]', err.message)), 30 * 1000);
 }
 
-module.exports = { inspect, exportFbx, prefetch, VERSION };
+module.exports = { inspect, exportFbx, saveBlend, prefetch, VERSION };

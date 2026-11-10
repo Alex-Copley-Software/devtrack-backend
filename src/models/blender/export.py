@@ -5,6 +5,8 @@
 # embed  Path Mode Copy with Embed Textures ticked (false: Path Mode Auto, not embedded)
 # scale  the export dialog's Scale (0.01 or 1.0)
 # accessories  see accessories.py
+# rigs  bone chains for bending parts, see rig.py
+# saveBlend, configHash  save a .blend instead of exporting ("Download rigged .blend"), marked with what it was made from
 # fixFaces  Roblox's importer option "Invert Negative Faces": turn every mesh's faces to point outward,
 #           and flip mirrored (negatively scaled) objects so they aren't inside out
 # Parts not named in the plan keep their Blender name. The .blend is never saved.
@@ -52,6 +54,11 @@ if plan.get('accessories'):
     from accessories import add_accessories
     add_accessories(plan['accessories'])
 
+# Bones and weights for the parts that bend (rig.py).
+if plan.get('rigs'):
+    from rig import add_rigs
+    add_rigs(plan['rigs'])
+
 if plan.get('fixFaces'):
     import bmesh
     done = set()
@@ -68,6 +75,27 @@ if plan.get('fixFaces'):
         bm.to_mesh(o.data)
         bm.free()
         o.data.update()
+
+README = '''DevTrack: this unit as it goes to Studio. Touch up the weights here, then upload this file back on
+the unit's Models page ("Upload edited .blend"); the FBX is then made from it.
+
+Keep the names: the meshes (Head, Torso, ArmRight... "Torso Cape"), the weapons' "A1 ..." meshes and their
+"A1 Handle" cubes. A bending part's bones must start with its mesh's name ("Torso Cape A1") and live in its
+armature ("Torso Cape Rig"); you can add bones, move them and repaint the weights.
+If you change names, bending parts or weapons on the page, download a fresh copy: an older one won't be used.
+'''
+
+if plan.get('saveBlend'):
+    bpy.context.scene['dt_config'] = plan.get('configHash') or ''
+    text = bpy.data.texts.get('DevTrack README') or bpy.data.texts.new('DevTrack README')
+    text.from_string(README)
+    try:
+        bpy.ops.file.pack_all()
+    except RuntimeError as e:
+        print('Could not pack every texture:', e)
+    bpy.ops.wm.save_as_mainfile(filepath=fbx, copy=True, compress=True)
+    print('DT_SAVED', fbx)
+    raise SystemExit(0)
 
 bpy.ops.export_scene.fbx(
     filepath=fbx, use_selection=False, use_visible=False,
