@@ -380,7 +380,8 @@ async function exportModel(id, by, prisma = getPrisma(), exportFbx = blender.exp
   const { data } = await file(id, 'blend', prisma);
   const steps = plan(model.parts, model.assignments, model.labels);
   const { forBlender, forStudio } = await accessoryExport(id, prisma);
-  const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01, accessories: forBlender });
+  const fbx = await exportFbx(data, { ...steps, embed: options.embedTextures !== false, scale: options.smallScale === false ? 1 : 0.01,
+    fixFaces: options.invertFaces === true, accessories: forBlender });
   await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "exportedAt" = now(), "exportedBy" = $2 WHERE id = $1`, id, by || null);
   // The meshes to show both faces of, by the name they have in the FBX.
   const dropped = new Set(steps.drop);
@@ -403,7 +404,7 @@ async function sendToStudio(id, by, prisma = getPrisma(), exportFbx = blender.ex
   const model = await get(id, prisma);
   if (STUDIO_ACTIVE.includes(model.studio?.status)) throw new ModelError(409, 'It is already on its way to Studio');
   const { name, data, accessories, doubleSided } = await exportModel(id, by, prisma, exportFbx, options);
-  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, turn, accessories, doubleSided };
+  const opts = { embedTextures: options.embedTextures !== false, smallScale: options.smallScale !== false, invertFaces: options.invertFaces === true, turn, accessories, doubleSided };
   const queued = await prisma.$executeRawUnsafe(`UPDATE "ModelFile" SET "studioStatus" = 'queued', "studioFbx" = $2, "studioFbxName" = $3,
     "studioOptions" = $4::jsonb, "studioAssetId" = NULL, "studioError" = NULL, "studioResult" = NULL, "studioBy" = $5,
     "studioQueuedAt" = now(), "studioAt" = now()

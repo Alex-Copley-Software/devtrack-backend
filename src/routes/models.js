@@ -83,8 +83,8 @@ function pageRouter() {
   router.patch('/:id/accessories/:accId', wrap(async (req, res) => res.json(await store.updateAccessory(req.params.id, req.params.accId, req.body || {}))));
   router.delete('/:id/accessories/:accId', wrap(async (req, res) => { await store.removeAccessory(req.params.id, req.params.accId); res.json({ ok: true }); }));
   router.post('/:id/export', wrap(async (req, res) => {
-    const { embedTextures, smallScale } = req.body || {};
-    const { name, data, plan } = await store.exportModel(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale });
+    const { embedTextures, smallScale, invertFaces } = req.body || {};
+    const { name, data, plan } = await store.exportModel(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale, invertFaces });
     res.set('Content-Type', 'application/octet-stream');
     res.set('X-Renamed', String(Object.keys(plan.rename).length));
     res.set('X-Dropped', String(plan.drop.length));
@@ -93,8 +93,8 @@ function pageRouter() {
     res.send(data);
   }));
   router.post('/:id/studio', wrap(async (req, res) => {
-    const { embedTextures, smallScale, turn } = req.body || {};
-    const studio = await store.sendToStudio(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale, turn });
+    const { embedTextures, smallScale, invertFaces, turn } = req.body || {};
+    const studio = await store.sendToStudio(req.params.id, req.user?.name || req.user?.email, undefined, undefined, { embedTextures, smallScale, invertFaces, turn });
     res.status(202).json({ studio, studioWorker: workerSeen() });
   }));
   router.post('/:id/rbxm', wrap(async (req, res) => {

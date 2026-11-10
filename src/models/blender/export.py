@@ -5,6 +5,8 @@
 # embed  Path Mode Copy with Embed Textures ticked (false: Path Mode Auto, not embedded)
 # scale  the export dialog's Scale (0.01 or 1.0)
 # accessories  see accessories.py
+# fixFaces  Roblox's importer option "Invert Negative Faces": turn every mesh's faces to point outward,
+#           and flip mirrored (negatively scaled) objects so they aren't inside out
 # Parts not named in the plan keep their Blender name. The .blend is never saved.
 import bpy, json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -49,6 +51,23 @@ if missing:
 if plan.get('accessories'):
     from accessories import add_accessories
     add_accessories(plan['accessories'])
+
+if plan.get('fixFaces'):
+    import bmesh
+    done = set()
+    for o in bpy.context.scene.objects:
+        if o.type != 'MESH' or o.data in done:
+            continue
+        done.add(o.data)
+        bm = bmesh.new()
+        bm.from_mesh(o.data)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        if o.matrix_world.determinant() < 0:
+            for f in bm.faces:
+                f.normal_flip()
+        bm.to_mesh(o.data)
+        bm.free()
+        o.data.update()
 
 bpy.ops.export_scene.fbx(
     filepath=fbx, use_selection=False, use_visible=False,

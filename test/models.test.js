@@ -56,7 +56,10 @@ test('a .blend is stored, converted, named and planned for export', async () => 
   const plain = await store.exportModel(id, 'Alex', prisma, async (blend, plan) => plan, { embedTextures: false, smallScale: false });
   assert.equal(plain.data.embed, false);
   assert.equal(plain.data.scale, 1);
-  delete given.plan.embed; delete given.plan.scale;
+  assert.equal(given.plan.fixFaces, false, 'faces left alone unless asked (Invert Negative Faces defaults to No)');
+  const inverted = await store.exportModel(id, 'Alex', prisma, async (blend, plan) => plan, { invertFaces: true });
+  assert.equal(inverted.data.fixFaces, true);
+  delete given.plan.embed; delete given.plan.scale; delete given.plan.fixFaces;
   assert.deepEqual(given.plan.accessories, []);
   delete given.plan.accessories;
   // The house style of a finished unit: ArmRight, "Head Hair", numbered when there's no word, " 2" on a repeat.
