@@ -216,6 +216,7 @@ async function main() {
 
   const app = express();
   app.use('/api/revenue/admin/import', express.json({ limit: '25mb' }));
+  app.use('/api/models', express.json({ limit: '5mb' }));
   app.use(express.json());
   app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
   app.get('/api/config', (req, res) => res.json({ assetsEnabled: true, assetAgentEnabled: process.env.ASSET_AGENT_ENABLED === 'true', discordServerId: '900000000000000000' }));

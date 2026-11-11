@@ -222,3 +222,31 @@ test('real Blender: convert and export', { skip: !(process.env.BLENDER_PATH && p
   assert.match(fbx.subarray(0, 20).toString('latin1'), /Kaydara FBX Binary/);
   assert.ok(fbx.includes(Buffer.from('Head Accessory 1')));
 });
+
+test('bending parts: anchor/loosen paint is checked, kept, and gives the rig a Base bone', async () => {
+  const prisma = await createDb();
+  const { id } = await store.create({ name: 'Cid.blend', blend: BLEND }, prisma, fakeInspect);
+  await until(async () => (await store.get(id, prisma, fakeInspect)).status === 'ready');
+  const names = { Cube: 'Torso', Hair: 'Torso Accessory' };
+  const tail = { kind: 'custom', bones: 3, smooth: 0.6, chains: [{ root: [0, 3, 0.5], tip: [0, 0.5, 0.9] }] };
+  const paint = [{ p: [0, 2.9, 0.5], r: 0.4, to: 0, s: 1 }, { p: [0, 0.6, 0.9], r: 0.3, to: 2, s: 0.35 }];
+
+  for (const bad of [{ p: [0, 1], r: 1, to: 0, s: 1 }, { p: [0, 1, 0], r: 0, to: 0, s: 1 }, { p: [0, 1, 0], r: 1, to: 3, s: 1 }, { p: [0, 1, 0], r: 1, to: 0, s: 2 }]) {
+    await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...tail, paint: [bad] } }), /each paint dab/);
+  }
+  await assert.rejects(store.setAssignments(id, names, prisma, undefined, undefined, { Hair: { ...tail, paint: Array(2001).fill(paint[0]) } }), /at most 2000/);
+
+  await store.setAssignments(id, names, prisma, { Hair: 'Tail' }, undefined, { Hair: { ...tail, paint } });
+  assert.deepEqual((await store.get(id, prisma)).rigs.Hair.paint, paint);
+  let given = null;
+  const out = await store.exportModel(id, 'Alex', prisma, async (blend, p) => { given = p; return Buffer.from('FBX'); });
+  assert.deepEqual(given.rigs[0].paint, paint, 'Blender gets the paint');
+  assert.deepEqual(given.rigs[0].names, ['Torso Tail A1', 'Torso Tail A2', 'Torso Tail A3', 'Torso Tail Base']);
+  assert.deepEqual(out.rigged, [{ mesh: 'Torso Tail', bones: given.rigs[0].names }]);
+
+  // No paint (or all of it cleared): no Base bone.
+  await store.setAssignments(id, names, prisma, { Hair: 'Tail' }, undefined, { Hair: { ...tail, paint: [] } });
+  assert.equal((await store.get(id, prisma)).rigs.Hair.paint, undefined);
+  await store.exportModel(id, 'Alex', prisma, async (blend, p) => { given = p; return Buffer.from('FBX'); });
+  assert.deepEqual(given.rigs[0].names, ['Torso Tail A1', 'Torso Tail A2', 'Torso Tail A3']);
+});

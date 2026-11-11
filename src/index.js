@@ -53,6 +53,9 @@ app.use('/api/roblox-dump/webhook', express.json({ limit: '10mb' }));
 // A revenue backup is a few hundred kilobytes of JSON, over the default limit too.
 app.use('/api/revenue/admin/import', express.json({ limit: '25mb' }));
 
+// A model's names come with its bending parts' anchor/loosen paint (up to 2,000 brush dabs a part).
+app.use('/api/models', express.json({ limit: '5mb' }));
+
 app.use(express.json());
 if (process.env.PROTECT_UPLOADS === 'true') {
   app.use('/uploads', authMiddleware, express.static(path.join(__dirname, '../uploads')));

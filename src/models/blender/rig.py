@@ -2,7 +2,8 @@
 # The body stays R6 and welded; only these meshes are skinned. Each rig in the plan:
 #   { part, mesh: its final name, kind, bones: per chain, smooth: 0.05..1,
 #     chains: [{ root: [x, y, z], tip: [x, y, z], mid: the joints between, if moved }] in the viewer's (glTF) space,
-#     names: the bone names, chain by chain: "<mesh> A1".."A<n>", "<mesh> B1"... }
+#     paint: [{ p: [x, y, z], r, to: 0 anchor | 1 normal | 2 loosen, s: strength }], brush dabs, same space,
+#     names: the bone names, chain by chain: "<mesh> A1".."A<n>", "<mesh> B1"..., then "<mesh> Base" if painted }
 #
 # An armature "<mesh> Rig" gets a chain of bones from each root to its tip, joint to joint (evenly spaced on a
 # straight line unless the joints were moved on the page to curve it, a tail say), and the mesh is
@@ -25,9 +26,22 @@ def chain_points(ch, bones):
     return [root + (tip - root) * (k / bones) for k in range(bones + 1)]
 
 
-def weights_for(p, chains, bones, smooth):
+def give_at(p, paint):
+    """How freely a point moves, from the paint: 1 unless painted, toward 0 where anchored, toward 2 where loosened.
+    The dabs apply in order, each pulling the give toward its own 'to', most at its centre."""
+    g = 1.0
+    for d in paint:
+        q = (p - d['p']).length_squared / (d['r'] * d['r'])
+        if q < 1.0:
+            g += (d['to'] - g) * d['s'] * (1.0 - q) * (1.0 - q)
+    return g
+
+
+def weights_for(p, chains, bones, smooth, give=1.0):
     """[(chain, bone, weight)] for a point p, all in the same space; up to 4, adding up to 1.
-    chains: each chain's joints, root to tip (chain_points).
+    chains: each chain's joints, root to tip (chain_points). give (give_at): below 1, that much of the point
+    goes to the Base bone instead (chain len(chains), bone 0), which no animation moves; above 1, the point is
+    weighted as if it were further down the chain, up to a bone further, so it swings more.
 
     Along a chain, a point belongs to the bone it's beside (the nearest one), blending into the next one
     around the joint (smooth: 1 blends the whole way between bone middles, small values give hard steps).
@@ -43,7 +57,10 @@ def weights_for(p, chains, bones, smooth):
             dist = (p - (a + d * t)).length
             if best is None or dist < best[1]:
                 best = (k + t, dist)
-        per.append((c, best[0] / bones, best[1], length))
+        t = best[0] / bones
+        if give > 1.0:
+            t = min(1.0, t + (give - 1.0) / bones)
+        per.append((c, t, best[1], length))
     avg_len = sum(q[3] for q in per) / len(per)
     eps = (0.05 * avg_len) ** 2 + 1e-12
     across = [1.0 / (q[2] * q[2] + eps) for q in per]
@@ -60,6 +77,9 @@ def weights_for(p, chains, bones, smooth):
             k = min(bones - 1, max(0, k))
             if w > 0:
                 out[(c, k)] = out.get((c, k), 0.0) + wc * w
+    if give < 1.0:
+        out = {key: w * max(0.0, give) for key, w in out.items()}
+        out[(len(chains), 0)] = 1.0 - max(0.0, give)
     top = sorted(out.items(), key=lambda kv: -kv[1])[:MAX_INFLUENCES]
     total = sum(w for _, w in top) or 1.0
     return [(c, k, w / total) for (c, k), w in top]
@@ -74,28 +94,41 @@ def _add(rig):
     n = rig['bones']
     chains = [[FROM_GLTF @ q for q in chain_points(ch, n)] for ch in rig['chains']]
     names = rig['names']
+    paint = [dict(d, p=FROM_GLTF @ Vector(d['p'])) for d in rig.get('paint') or []]
 
     data = bpy.data.armatures.new(f"{o.name} Rig")
     arm = bpy.data.objects.new(f"{o.name} Rig", data)
     bpy.context.scene.collection.objects.link(arm)
     bpy.context.view_layer.objects.active = arm
     bpy.ops.object.mode_set(mode='EDIT')
+    base = None
+    if paint:
+        # The bone that holds what was anchored: at the chains' roots, as the parent of each chain, never animated.
+        head = sum((pts[0] for pts in chains), Vector()) / len(chains)
+        along = sum(((pts[1] - pts[0]) for pts in chains), Vector())
+        if along.length < 1e-6:  # chains pointing opposite ways: follow the first
+            along = chains[0][1] - chains[0][0]
+        size = sum((pts[1] - pts[0]).length for pts in chains) / len(chains)
+        base = data.edit_bones.new(names[len(chains) * n])
+        base.head = head
+        base.tail = head + along.normalized() * max(size * 0.25, 1e-3)
     for c, pts in enumerate(chains):
-        prev = None
+        prev = base
         for k in range(n):
             b = data.edit_bones.new(names[c * n + k])
             b.head = pts[k]
             b.tail = pts[k + 1]
             if prev:
                 b.parent = prev
-                b.use_connect = True
+                b.use_connect = prev is not base
             prev = b
     bpy.ops.object.mode_set(mode='OBJECT')
 
     groups = [o.vertex_groups.get(nm) or o.vertex_groups.new(name=nm) for nm in names]
     mw = o.matrix_world
     for v in o.data.vertices:
-        for c, k, w in weights_for(mw @ v.co, chains, n, rig['smooth']):
+        p = mw @ v.co
+        for c, k, w in weights_for(p, chains, n, rig['smooth'], give_at(p, paint) if paint else 1.0):
             groups[c * n + k].add([v.index], w, 'REPLACE')
 
     mod = o.modifiers.new('Rig', 'ARMATURE')

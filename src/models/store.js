@@ -20,7 +20,8 @@
 //
 // Bending parts (wings, capes, hair): the body stays R6, welded; an accessory part can be given
 // a bone chain ("rigs", per part: kind, bones per chain, chains, smooth, and each chain's root and
-// tip in the viewer's space, plus "mid", its inner joints, once any is moved to curve it). At export Blender makes an armature "<mesh> Rig" with bones
+// tip in the viewer's space, plus "mid", its inner joints, once any is moved to curve it, and "paint",
+// brush dabs that anchor areas, which then move less, or loosen them, which then move more). At export Blender makes an armature "<mesh> Rig" with bones
 // "<mesh> A1", "A2"... and weights every vertex along the chain (rig.py; the page works out the
 // same weights for its preview), so the mesh comes into Studio skinned, its bones inside it.
 // "Download rigged .blend" saves that same file for touching up the weights by hand; uploaded back
@@ -115,6 +116,9 @@ const SUMMARY_COLUMNS = `id, name, kind, format, labels, "doubleSided", "uploade
   rigs, "editedInfo", "editedStatus", "editedError", "editedAt", "editedBy"`;
 const RIG_KINDS = ['cape', 'hair', 'wing', 'custom'];
 const CHAIN_LETTERS = 'ABC';
+// Anchor/loosen paint on a bending part: brush dabs { p: centre, r: radius, to: 0 anchor | 1 normal | 2 loosen, s: strength }.
+const PAINT_TO = [0, 1, 2];
+const MAX_DABS = 2000;
 
 // The final name of every part, and the parts left out (see the top of this file).
 // Accessories without a word are numbered per limb in part order: "Head Accessory 1", 2...
@@ -335,13 +339,28 @@ function checkRigs(parts, rigs) {
       if (pts.some((p, k) => k > 0 && Math.hypot(p[0] - pts[k - 1][0], p[1] - pts[k - 1][1], p[2] - pts[k - 1][2]) < 1e-6)) throw new ModelError(400, `${part}: two joints of a chain are the same point`);
       return { root: c.root, tip: c.tip, mid: c.mid };
     });
-    clean[part] = { kind: r.kind, bones, smooth, chains };
+    const out = { kind: r.kind, bones, smooth, chains };
+    if (r.paint != null) {
+      if (!Array.isArray(r.paint) || r.paint.length > MAX_DABS) throw new ModelError(400, `${part}: paint must be a list of at most ${MAX_DABS} dabs`);
+      out.paint = r.paint.map(d => {
+        if (!d || !finite3(d.p) || !(d.r > 0 && d.r < 1e4) || !PAINT_TO.includes(d.to) || !(d.s > 0 && d.s <= 1)) {
+          throw new ModelError(400, `${part}: each paint dab needs p (a point), r > 0, to 0, 1 or 2, and s between 0 and 1`);
+        }
+        return { p: d.p, r: d.r, to: d.to, s: d.s };
+      });
+      if (!out.paint.length) delete out.paint;
+    }
+    clean[part] = out;
   }
   return clean;
 }
 
-// The bone names of a part's rig: "<mesh> A1".."A<n>", then "B1".. for a second chain.
-const boneNames = (mesh, rig) => rig.chains.flatMap((c, ci) => Array.from({ length: rig.bones }, (_, k) => `${mesh} ${CHAIN_LETTERS[ci]}${k + 1}`));
+// The bone names of a part's rig: "<mesh> A1".."A<n>", then "B1".. for a second chain, and last "<mesh> Base"
+// when it's painted: the bone at the root that no animation moves, holding what was anchored.
+const boneNames = (mesh, rig) => [
+  ...rig.chains.flatMap((c, ci) => Array.from({ length: rig.bones }, (_, k) => `${mesh} ${CHAIN_LETTERS[ci]}${k + 1}`)),
+  ...(rig.paint?.length ? [`${mesh} Base`] : []),
+];
 
 // The rigs that will be made: only on accessory parts that are in the FBX, by their final name.
 function rigPlan(model, steps) {
@@ -350,7 +369,7 @@ function rigPlan(model, steps) {
     .map(p => {
       const r = model.rigs[p.name];
       const mesh = steps.rename[p.name];
-      return { part: p.name, mesh, kind: r.kind, bones: r.bones, smooth: r.smooth, chains: r.chains, names: boneNames(mesh, r) };
+      return { part: p.name, mesh, kind: r.kind, bones: r.bones, smooth: r.smooth, chains: r.chains, paint: r.paint || [], names: boneNames(mesh, r) };
     });
 }
 
