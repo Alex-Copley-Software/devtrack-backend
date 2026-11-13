@@ -70,6 +70,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/bot/assets', require('./routes/bot-assets'));
 app.use('/api/bot/models', require('./routes/models').botRouter());
 app.use('/api/bot/devs', require('./routes/devs').botRouter());
+app.use('/api/bot/board', require('./routes/board').botRouter());
 app.use('/api/bot', botRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/history', historyRoutes);
@@ -85,6 +86,7 @@ app.use('/api/payouts', require('./routes/payouts'));
 app.use('/api/revenue', require('./routes/revenue'));
 app.use('/api/models', require('./routes/models').pageRouter());
 app.use('/api/devs', require('./routes/devs').pageRouter());
+app.use('/api/board', require('./routes/board').pageRouter());
 app.use('/api/studio-worker', require('./routes/models').workerRouter());
 
 app.get('/api/health', (req, res) => {
@@ -119,3 +121,7 @@ require('./assets/sheets/exporter').startNightlyExport();
 
 // The model viewer's Blender: downloaded shortly after start-up on Railway.
 require('./models/blender').prefetch();
+
+// The Assets board: Linear read every minute, Discord messages gone through every few hours, a daily check-in DM.
+require('./board/board').start();
+require('./board/triage').start();

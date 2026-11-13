@@ -247,6 +247,27 @@ async function main() {
   // The Developers page (/developers/): starts from the demo asset roster.
   app.use('/api/bot/devs', require('../src/routes/devs').botRouter());
   app.use('/api/devs', require('../src/routes/devs').pageRouter());
+  // The Assets board (/assets/). --board <issues.json> serves a saved copy of Linear's issues, and changes go to
+  // that copy instead of Linear; without it, LINEAR_API_KEY reads the real thing.
+  if (option('board')) {
+    const L = require('../src/board/linear');
+    const issues = JSON.parse(fs.readFileSync(option('board'), 'utf8'));
+    L.enabled = () => true;
+    L.allIssues = async () => issues;
+    L.setStatus = async (i, status, dev) => {
+      const types = { untasked: ['Todo', 'unstarted'], in_progress: ['In Progress', 'started'], done: ['Done', 'completed'] }[status];
+      const x = issues.find(y => y.id === i.id);
+      x.title = status === 'in_progress' ? `${L.withoutName(x.title)} - ${dev}` : status === 'untasked' ? L.withoutName(x.title) : x.title;
+      x.state = { name: types[0], type: types[1] };
+      if (status === 'in_progress') x.startedAt = new Date().toISOString();
+      if (status === 'done') x.completedAt = new Date().toISOString();
+      return { ...x };
+    };
+    console.log(`Assets board: ${issues.length} issues from ${option('board')} (changes stay local)`);
+  }
+  app.use('/api/bot/board', require('../src/routes/board').botRouter());
+  app.use('/api/board', require('../src/routes/board').pageRouter());
+  require('../src/board/board').start();
   app.use('/api/studio-worker', require('../src/routes/models').workerRouter());
   for (const file of String(option('models', '')).split(',').filter(Boolean)) {
     const { id } = await require('../src/models/store').create({ name: path.basename(file), blend: fs.readFileSync(file), uploadedBy: 'Dev server' }, prisma);

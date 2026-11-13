@@ -207,4 +207,13 @@ function postRbxm(payload) {
   return deliver('/model-rbxm', payload, { timeout: 60000 });
 }
 
-module.exports = { postRbxm, startOutbox, drainOutbox, notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState, qaCheck, qaCheckUpdate };
+// Assets board: the owner's daily check-in DM, and asking a dev how a task is going.
+// true once sent, false when it's waiting in the outbox; throws when the bot refuses it.
+function boardDigest(payload) {
+  return deliver('/board-digest', payload, { timeout: 20000 });
+}
+function boardPing(payload) {
+  return deliver('/board-ping', payload, { timeout: 20000 });
+}
+
+module.exports = { boardDigest, boardPing, postRbxm, startOutbox, drainOutbox, notify, alert, importStatus, patchFixNotice, notifyTesters, notifyReportPauseState, qaCheck, qaCheckUpdate };
