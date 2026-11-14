@@ -1,11 +1,12 @@
 // devs.js
-// The Developers page: who the devs are and where each one's 🟢/🟡 Linear dot
-// goes (a Discord category, forum, channel or forum post).
+// The Developers tab on the Assets page: who the devs are, where each one's 🟢/🟡
+// dot goes (a Discord category, forum, channel or forum post), and who is away.
 //
-//   "LinearDev"      one row per dev: the name on Linear titles ("Texture - Ruku"),
-//                    their Discord user (for Send to Linear), and the place for the dot
+//   "LinearDev"      one row per dev: their name, their Discord user (for Send to
+//                    Assets and Give task), the place for the dot, and Away. (The
+//                    tables kept their old names from when the board was in Linear.)
 //   "LinearDevMeta"  what the bot last reported: the server's channels (for the
-//                    picker) and each dev's dot and tasks in progress
+//                    picker) and each dev's dot
 //
 // The first time, the list is filled from the old asset roster ("AssetDev"),
 // keeping each dev's status post as their place.
@@ -27,6 +28,7 @@ async function ensureSchema(prisma = getPrisma()) {
     "createdAt" TIMESTAMP NOT NULL DEFAULT now(),
     "updatedAt" TIMESTAMP NOT NULL DEFAULT now()
   )`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "LinearDev" ADD COLUMN IF NOT EXISTS "away" BOOLEAN NOT NULL DEFAULT false`);
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS "LinearDevMeta" (
     "key" TEXT PRIMARY KEY,
     "value" JSONB NOT NULL,
@@ -67,11 +69,11 @@ function clean(body, partial) {
     const name = String(body.name ?? '').trim().replace(/\s+/g, ' ');
     if (!name) throw new DevError(400, 'A name is required');
     if (name.length > 60) throw new DevError(400, 'That name is too long');
-    if (name.includes(' - ')) throw new DevError(400, 'A name can\'t contain " - " (Linear titles end in " - Name")');
     out.name = name;
   }
   if (!partial || 'discordUserId' in body) out.discordUserId = snowflake(body.discordUserId);
   if (!partial || 'channelId' in body) out.channelId = snowflake(body.channelId);
+  if ('away' in body) out.away = body.away === true;
   return out;
 }
 
@@ -86,7 +88,7 @@ async function setMeta(prisma, key, value) {
 
 async function list(prisma = getPrisma()) {
   await ensureSchema(prisma);
-  return prisma.$queryRawUnsafe(`SELECT id, name, "discordUserId", "channelId", "createdAt", "updatedAt" FROM "LinearDev" ORDER BY lower(name)`);
+  return prisma.$queryRawUnsafe(`SELECT id, name, "discordUserId", "channelId", "away", "createdAt", "updatedAt" FROM "LinearDev" ORDER BY lower(name)`);
 }
 
 async function overview(prisma = getPrisma()) {
@@ -111,9 +113,29 @@ async function create(body, prisma = getPrisma()) {
   await ensureSchema(prisma);
   const d = clean(body || {}, false);
   await sameName(prisma, d.name);
+  if (d.discordUserId) {
+    const [taken] = await prisma.$queryRawUnsafe(`SELECT name FROM "LinearDev" WHERE "discordUserId" = $1`, d.discordUserId);
+    if (taken) throw new DevError(409, `That Discord account is already ${taken.name}'s`);
+  }
   const id = newId();
-  await prisma.$executeRawUnsafe(`INSERT INTO "LinearDev" (id, name, "discordUserId", "channelId") VALUES ($1, $2, $3, $4)`, id, d.name, d.discordUserId, d.channelId);
+  await prisma.$executeRawUnsafe(`INSERT INTO "LinearDev" (id, name, "discordUserId", "channelId", "away") VALUES ($1, $2, $3, $4, $5)`, id, d.name, d.discordUserId, d.channelId, d.away === true);
   return (await list(prisma)).find(x => x.id === id);
+}
+
+// The dev with this Discord account; someone given a task from Discord who isn't on the
+// list yet is added under their server name.
+async function forDiscord(discordUserId, name, prisma = getPrisma()) {
+  await ensureSchema(prisma);
+  const id = snowflake(discordUserId);
+  if (!id) throw new DevError(400, 'A Discord user is required');
+  const [have] = await prisma.$queryRawUnsafe(`SELECT id FROM "LinearDev" WHERE "discordUserId" = $1`, id);
+  if (have) return (await list(prisma)).find(x => x.id === have.id);
+  let clean = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 60) || `Dev ${id.slice(-4)}`;
+  // Someone already listed under that name but without a Discord account is them.
+  const [same] = await prisma.$queryRawUnsafe(`SELECT id, "discordUserId" FROM "LinearDev" WHERE lower(name) = lower($1)`, clean);
+  if (same && !same.discordUserId) return update(same.id, { discordUserId: id }, prisma);
+  if (same) clean = `${clean} (${id.slice(-4)})`;
+  return create({ name: clean, discordUserId: id }, prisma);
 }
 
 async function update(id, body, prisma = getPrisma()) {
@@ -144,11 +166,11 @@ async function setChannels(channels, prisma = getPrisma()) {
   await setMeta(prisma, 'channels', keep);
 }
 
-// From the bot after each sync: { [devId]: { dot, place: {id, name} | null, problem, tasks: [{identifier, title, url}] } }
+// From the bot after each sync: { [devId]: { dot, place: {id, name} | null, problem, tasks: [{identifier, label}] } }
 async function setStatus(status, prisma = getPrisma()) {
   await ensureSchema(prisma);
   if (!status || typeof status !== 'object') throw new DevError(400, 'status must be an object');
   await setMeta(prisma, 'status', status);
 }
 
-module.exports = { ensureSchema, list, overview, create, update, remove, setChannels, setStatus, DevError };
+module.exports = { ensureSchema, list, overview, create, update, remove, forDiscord, setChannels, setStatus, DevError };

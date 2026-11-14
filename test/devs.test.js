@@ -1,4 +1,4 @@
-// Developers page: the list of devs and where each one's Linear dot goes.
+// Developers: the list of devs and where each one's dot goes.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -37,7 +37,7 @@ test('devs are added, changed and removed; links and bad input are handled', asy
   assert.equal(ruku.name, 'Ruku');
   assert.equal(ruku.channelId, '222222222222222222', 'a pasted channel link keeps the channel ID');
   await assert.rejects(devs.create({ name: 'ruku' }, prisma), /already a dev called/);
-  await assert.rejects(devs.create({ name: 'Texture - Ruku' }, prisma), /" - "/);
+  await assert.rejects(devs.create({ name: 'Ruku Two', discordUserId: '111111111111111111' }, prisma), /already Ruku's/);
   await assert.rejects(devs.create({ name: 'X', channelId: 'general' }, prisma), /not a Discord ID/);
   await assert.rejects(devs.create({ name: '' }, prisma), /name is required/);
 

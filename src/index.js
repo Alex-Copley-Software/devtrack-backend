@@ -122,6 +122,7 @@ require('./assets/sheets/exporter').startNightlyExport();
 // The model viewer's Blender: downloaded shortly after start-up on Railway.
 require('./models/blender').prefetch();
 
-// The Assets board: Linear read every minute, Discord messages gone through every few hours, a daily check-in DM.
+// The Assets board: copied from Linear once (if it's empty and LINEAR_API_KEY is set), Discord messages
+// gone through every few hours, a daily check-in DM.
 require('./board/board').start();
 require('./board/triage').start();
