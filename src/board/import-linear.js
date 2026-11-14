@@ -107,7 +107,7 @@ async function importOnce(prisma, fetchAll = allIssues) {
     const status = statusOverride?.status || statusOf(i.state.type);
     const dev = statusOverride ? { devId: statusOverride.devId, devName: statusOverride.devName } : devOf(i.title);
     const id = statusOverride ? newId() : i.id;
-    await prisma.$executeRawUnsafe(`INSERT INTO "BoardTask" (id, identifier, "cardId", "parentId", name, status, "devId", "devName", "startedAt", "completedAt", "createdAt", "updatedAt")
+    await prisma.$executeRawUnsafe(`INSERT INTO "BoardCardTask" (id, identifier, "cardId", "parentId", name, status, "devId", "devName", "startedAt", "completedAt", "createdAt", "updatedAt")
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (id) DO NOTHING`,
     id, statusOverride ? ident() : i.identifier, cardId, parentId, nameOverride || withoutName(i.title), status,
     status === 'untasked' ? null : dev.devId, status === 'untasked' ? null : dev.devName,
