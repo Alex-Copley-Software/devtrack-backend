@@ -9,7 +9,7 @@
 // through the new messages against the board and suggests what to change: a task
 // finished, started (by whom), back to untasked, a note to keep, or a question that
 // needs an answer. They wait on the page as a list to go through; nothing changes
-// in Linear until it's applied there.
+// on the board until it's applied there.
 //
 // Check-ins: once a day (settings.digestHour, in settings.timezone) the owner gets
 // a DM listing the in-progress tasks nobody has heard about for settings.checkInDays,
@@ -77,7 +77,7 @@ async function addMessage(m, prisma = getPrisma(), download = fetch) {
 // ── going through them ──
 
 const SYSTEM = `You help Alex, who runs asset production for a Roblox game, keep the asset board up to date.
-The board lists units (characters) and their tasks (Mesh, Texture, Aura, VFX, Animations, Cosmetic, an item icon, and a Shiny version of some), each Untasked, In progress (with the developer doing it) or Done.
+The board lists cards (mostly units: characters) and their tasks (Animations, Mesh, Texture, Aura, Icons, VFX, Cosmetic...), some with subtasks of their own (Icons › Equipment, Texture › Shiny...), each Untasked, In progress (with the developer doing it) or Done.
 You get the board as it stands and the developers' recent Discord messages. Suggest the changes the messages clearly support, for Alex to approve:
 - mark_done: the developer says a task is finished or posts its final files.
 - mark_in_progress: a developer says they have started a task that is Untasked (dev: their name exactly as on the roster).
@@ -138,10 +138,10 @@ async function askClaude(userText) {
 const day = d => new Date(d).toISOString().slice(0, 10);
 
 function boardText(b) {
-  const lines = ['BOARD (identifier | unit › task | status | developer | in progress since)'];
-  for (const u of b.units) {
+  const lines = ['BOARD (identifier | card › task | status | developer | in progress since)'];
+  for (const u of b.cards) {
     for (const t of u.tasks) {
-      for (const x of [t, ...t.shinies]) {
+      for (const x of [t, ...t.subtasks]) {
         const label = x === t ? t.name : `${t.name} › ${x.name}`;
         lines.push(`${x.identifier} | ${u.name} › ${label} | ${x.status.replace('_', ' ')} | ${x.devName || '-'} | ${x.status === 'in_progress' && x.startedAt ? day(x.startedAt) : '-'}`);
       }
@@ -171,7 +171,7 @@ async function triage(prisma = getPrisma(), ask = askClaude) {
     }
     const b = await B.board(prisma);
     const ids = new Set(msgs.map(m => m.id));
-    const byIdent = new Map(b.units.flatMap(u => u.tasks.flatMap(t => [t, ...t.shinies])).map(x => [x.identifier, x]));
+    const byIdent = new Map(b.cards.flatMap(u => u.tasks.flatMap(t => [t, ...t.subtasks])).map(x => [x.identifier, x]));
     const roster = new Set(b.devs.map(d => d.name));
     let suggestions = [], error = null, model = null;
     try {
@@ -235,7 +235,7 @@ async function inbox(prisma = getPrisma()) {
   };
 }
 
-// Apply: the change in Linear (a status), or onto the board (a note); either way it leaves the list.
+// Apply: a status, or a note onto the task; either way it leaves the list.
 async function decide(id, decision, by, prisma = getPrisma(), opts = {}) {
   await B.ensureSchema(prisma);
   const [s] = await prisma.$queryRawUnsafe(`SELECT * FROM "BoardSuggestion" WHERE id = $1`, id);
@@ -250,7 +250,7 @@ async function decide(id, decision, by, prisma = getPrisma(), opts = {}) {
         const { byName } = await B.roster(prisma);
         devId = byName.get(String(s.dev || '').toLowerCase())?.id;
       }
-      await B.setStatus(s.issueId, status, devId, by, prisma, opts.setInLinear);
+      await B.setStatus(s.issueId, status, devId, by, prisma);
     } else if (s.action === 'add_note' && s.issueId) {
       const [cur] = await prisma.$queryRawUnsafe(`SELECT text FROM "BoardNote" WHERE "issueId" = $1`, s.issueId);
       const [m] = await prisma.$queryRawUnsafe(`SELECT url FROM "BoardMessage" WHERE id = $1`, json(s.messageIds)[0] || '');
@@ -279,8 +279,9 @@ async function digest(prisma = getPrisma(), send = notifier.boardDigest, now = n
   const lastSent = await B.getMeta('digest', prisma);
   if (!force && (!s.digestDm || local.hour < s.digestHour || lastSent?.date === local.date)) return null;
   const b = await B.board(prisma, now);
-  const stale = b.units.flatMap(u => u.tasks.flatMap(t => [t, ...t.shinies].filter(x => x.needsCheckin).map(x => ({
-    unit: u.name, task: x === t ? t.name : `${t.name} › ${x.name}`, dev: x.devName, days: Math.floor(x.quietDays), url: x.url,
+  const stale = b.cards.flatMap(u => u.tasks.flatMap(t => [t, ...t.subtasks].filter(x => x.needsCheckin).map(x => ({
+    unit: u.name, task: x === t ? t.name : `${t.name} › ${x.name}`, dev: x.devName, days: Math.floor(x.quietDays),
+    url: `${DASHBOARD()}/assets/?item=${encodeURIComponent(x.identifier)}`,
   })))).sort((a, b2) => b2.days - a.days);
   const payload = { date: local.date, stale, updates: b.inbox.open, url: `${DASHBOARD()}/assets/?show=checkin`, updatesUrl: `${DASHBOARD()}/assets/?show=updates` };
   await B.setMeta('digest', { date: local.date, at: now, stale: stale.length, updates: b.inbox.open }, prisma);

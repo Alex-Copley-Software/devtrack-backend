@@ -1,5 +1,5 @@
-// Developers and where their Linear dot goes.
-//   /api/devs       the Developers page (admins)
+// Developers: the Developers tab on the Assets page, and where each dev's dot goes.
+//   /api/devs       the page (admins)
 //   /api/bot/devs   the bot: the list, plus the channels and dots it reports back
 
 const express = require('express');
@@ -16,7 +16,7 @@ const wrap = fn => (req, res) => fn(req, res).catch(err => {
 // Tells the bot to look again now, so a change shows on Discord in seconds rather than at the next sync.
 function nudgeBot() {
   const url = process.env.BOT_WEBHOOK_URL || 'http://localhost:3002';
-  axios.post(`${url}/linear-refresh`, {}, { headers: { 'x-bot-secret': process.env.BOT_SECRET }, timeout: 5000 })
+  axios.post(`${url}/dots-refresh`, {}, { headers: { 'x-bot-secret': process.env.BOT_SECRET }, timeout: 5000 })
     .catch(err => console.error('[Devs] Could not nudge the bot:', err.code || err.message));
 }
 
