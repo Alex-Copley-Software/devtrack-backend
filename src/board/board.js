@@ -71,7 +71,7 @@ async function ensureSchema(prisma = getPrisma()) {
     `CREATE TABLE IF NOT EXISTS "BoardCard" ("id" TEXT PRIMARY KEY, "identifier" TEXT NOT NULL UNIQUE, "name" TEXT NOT NULL,
       "kind" TEXT NOT NULL DEFAULT 'unit', "updateId" TEXT, "rarity" TEXT, "element" TEXT, "notionUrl" TEXT,
       "archived" BOOLEAN NOT NULL DEFAULT false, "createdBy" TEXT, "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now())`,
-    `CREATE TABLE IF NOT EXISTS "BoardTask" ("id" TEXT PRIMARY KEY, "identifier" TEXT NOT NULL UNIQUE, "cardId" TEXT NOT NULL, "parentId" TEXT,
+    `CREATE TABLE IF NOT EXISTS "BoardCardTask" ("id" TEXT PRIMARY KEY, "identifier" TEXT NOT NULL UNIQUE, "cardId" TEXT NOT NULL, "parentId" TEXT,
       "name" TEXT NOT NULL, "status" TEXT NOT NULL DEFAULT 'untasked', "devId" TEXT, "devName" TEXT, "startedAt" TIMESTAMP, "completedAt" TIMESTAMP,
       "createdAt" TIMESTAMP NOT NULL DEFAULT now(), "updatedAt" TIMESTAMP NOT NULL DEFAULT now())`,
     `CREATE TABLE IF NOT EXISTS "BoardDelivery" ("id" TEXT PRIMARY KEY, "taskId" TEXT NOT NULL, "url" TEXT NOT NULL,
@@ -80,7 +80,7 @@ async function ensureSchema(prisma = getPrisma()) {
     `CREATE INDEX IF NOT EXISTS "BoardActivity_issue" ON "BoardActivity" ("issueId", "at")`,
     `CREATE INDEX IF NOT EXISTS "BoardMessage_triaged" ON "BoardMessage" ("triagedAt")`,
     `CREATE INDEX IF NOT EXISTS "BoardMessage_author" ON "BoardMessage" ("authorId", "postedAt")`,
-    `CREATE INDEX IF NOT EXISTS "BoardTask_card" ON "BoardTask" ("cardId")`,
+    `CREATE INDEX IF NOT EXISTS "BoardCardTask_card" ON "BoardCardTask" ("cardId")`,
     `CREATE INDEX IF NOT EXISTS "BoardDelivery_task" ON "BoardDelivery" ("taskId", "at")`,
   ];
   for (const sql of tables) await prisma.$executeRawUnsafe(sql);
@@ -162,7 +162,7 @@ const cleanName = (v, what = 'A name') => {
 async function nextIdentifier(prisma) {
   const [{ n }] = await prisma.$queryRawUnsafe(`SELECT COALESCE(MAX(num), 0)::int AS n FROM (
     SELECT substring(identifier from '(\\d+)$')::int AS num FROM "BoardCard"
-    UNION ALL SELECT substring(identifier from '(\\d+)$')::int FROM "BoardTask") x`);
+    UNION ALL SELECT substring(identifier from '(\\d+)$')::int FROM "BoardCardTask") x`);
   return `${PREFIX}-${n + 1}`;
 }
 
@@ -258,7 +258,7 @@ const daysSince = (d, now) => (d ? Math.max(0, (now - new Date(d)) / 86400000) :
 
 async function rows(prisma) {
   const cards = await prisma.$queryRawUnsafe(`SELECT * FROM "BoardCard" WHERE NOT archived ORDER BY "createdAt", identifier`);
-  const tasks = await prisma.$queryRawUnsafe(`SELECT t.* FROM "BoardTask" t JOIN "BoardCard" c ON c.id = t."cardId" WHERE NOT c.archived`);
+  const tasks = await prisma.$queryRawUnsafe(`SELECT t.* FROM "BoardCardTask" t JOIN "BoardCard" c ON c.id = t."cardId" WHERE NOT c.archived`);
   const updates = await prisma.$queryRawUnsafe(`SELECT * FROM "BoardUpdate" ORDER BY "createdAt", name`);
   return { cards, tasks, updates };
 }
@@ -359,7 +359,7 @@ async function board(prisma = getPrisma(), now = new Date()) {
 
 async function findTask(ref, prisma = getPrisma()) {
   await ensureSchema(prisma);
-  const [t] = await prisma.$queryRawUnsafe(`SELECT t.*, c.name AS "cardName" FROM "BoardTask" t JOIN "BoardCard" c ON c.id = t."cardId"
+  const [t] = await prisma.$queryRawUnsafe(`SELECT t.*, c.name AS "cardName" FROM "BoardCardTask" t JOIN "BoardCard" c ON c.id = t."cardId"
     WHERE (t.id = $1 OR upper(t.identifier) = upper($1)) AND NOT c.archived`, String(ref || ''));
   if (!t) throw new BoardError(404, `No task ${ref} on the board`);
   return t;
@@ -433,14 +433,14 @@ async function setStatus(ref, status, devId, by, prisma = getPrisma()) {
     if (!dev) throw new BoardError(400, 'Pick a developer from the Developers tab');
   }
   if (status === 'in_progress') {
-    await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET status = 'in_progress', "devId" = $2, "devName" = $3,
+    await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET status = 'in_progress', "devId" = $2, "devName" = $3,
       "startedAt" = CASE WHEN status = 'in_progress' AND "devId" = $2 THEN "startedAt" ELSE now() END, "completedAt" = NULL, "updatedAt" = now() WHERE id = $1`,
     t.id, dev.id, dev.name);
   } else if (status === 'done') {
-    await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET status = 'done', "completedAt" = CASE WHEN status = 'done' THEN "completedAt" ELSE now() END,
+    await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET status = 'done', "completedAt" = CASE WHEN status = 'done' THEN "completedAt" ELSE now() END,
       "updatedAt" = now() WHERE id = $1`, t.id);
   } else {
-    await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET status = 'untasked', "devId" = NULL, "devName" = NULL, "startedAt" = NULL,
+    await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET status = 'untasked', "devId" = NULL, "devName" = NULL, "startedAt" = NULL,
       "completedAt" = NULL, "updatedAt" = now() WHERE id = $1`, t.id);
   }
   if (t.status !== status || (dev && dev.id !== t.devId)) await event(prisma, t.id, t.status, status, dev?.name || t.devName, by);
@@ -449,7 +449,7 @@ async function setStatus(ref, status, devId, by, prisma = getPrisma()) {
 
 async function renameTask(ref, name, by, prisma = getPrisma()) {
   const t = await findTask(ref, prisma);
-  await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET name = $2, "updatedAt" = now() WHERE id = $1`, t.id, cleanName(name, 'A task name'));
+  await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET name = $2, "updatedAt" = now() WHERE id = $1`, t.id, cleanName(name, 'A task name'));
   return findTask(t.id, prisma);
 }
 
@@ -463,15 +463,15 @@ async function addTask(cardRef, { name, parentId } = {}, by, prisma = getPrisma(
     if (parent.parentId) throw new BoardError(400, 'A subtask can\'t have subtasks of its own');
   }
   const id = newId();
-  await prisma.$executeRawUnsafe(`INSERT INTO "BoardTask" (id, identifier, "cardId", "parentId", name) VALUES ($1, $2, $3, $4, $5)`,
+  await prisma.$executeRawUnsafe(`INSERT INTO "BoardCardTask" (id, identifier, "cardId", "parentId", name) VALUES ($1, $2, $3, $4, $5)`,
     id, await nextIdentifier(prisma), c.id, parent?.id || null, cleanName(name, 'A task name'));
   return findTask(id, prisma);
 }
 
 async function removeTask(ref, prisma = getPrisma()) {
   const t = await findTask(ref, prisma);
-  const ids = [t.id, ...(await prisma.$queryRawUnsafe(`SELECT id FROM "BoardTask" WHERE "parentId" = $1`, t.id)).map(r => r.id)];
-  await prisma.$executeRawUnsafe(`DELETE FROM "BoardTask" WHERE id = ANY($1::text[])`, ids);
+  const ids = [t.id, ...(await prisma.$queryRawUnsafe(`SELECT id FROM "BoardCardTask" WHERE "parentId" = $1`, t.id)).map(r => r.id)];
+  await prisma.$executeRawUnsafe(`DELETE FROM "BoardCardTask" WHERE id = ANY($1::text[])`, ids);
   await prisma.$executeRawUnsafe(`DELETE FROM "BoardDelivery" WHERE "taskId" = ANY($1::text[])`, ids);
   await prisma.$executeRawUnsafe(`DELETE FROM "BoardImage" WHERE "issueId" = ANY($1::text[])`, ids);
   await prisma.$executeRawUnsafe(`DELETE FROM "BoardNote" WHERE "issueId" = ANY($1::text[])`, ids);
@@ -568,13 +568,13 @@ async function deliver(ref, { url, files = [], note, devId, devName, by } = {}, 
     newId(), t.id, url, JSON.stringify((Array.isArray(files) ? files : []).slice(0, 10).map(f => String(f).slice(0, 120))), note ? String(note).slice(0, 1000) : null, name, by || null);
   // Someone who isn't on it yet gets it: their name is on the delivery, so it's theirs.
   if (dev && t.devId !== dev.id) {
-    await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET "devId" = $2, "devName" = $3, "startedAt" = COALESCE("startedAt", now()) WHERE id = $1`, t.id, dev.id, dev.name);
+    await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET "devId" = $2, "devName" = $3, "startedAt" = COALESCE("startedAt", now()) WHERE id = $1`, t.id, dev.id, dev.name);
   } else if (!t.devId && !t.devName && name) {
-    await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET "devName" = $2 WHERE id = $1`, t.id, name);
+    await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET "devName" = $2 WHERE id = $1`, t.id, name);
   }
   const was = t.status;
   if (was !== 'done') {
-    await prisma.$executeRawUnsafe(`UPDATE "BoardTask" SET status = 'done', "completedAt" = now(), "updatedAt" = now() WHERE id = $1`, t.id);
+    await prisma.$executeRawUnsafe(`UPDATE "BoardCardTask" SET status = 'done', "completedAt" = now(), "updatedAt" = now() WHERE id = $1`, t.id);
     await event(prisma, t.id, was, 'done', name, by);
   }
   return { task: await findTask(t.id, prisma), was };

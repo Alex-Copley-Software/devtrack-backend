@@ -17,6 +17,10 @@ const devs = require('../src/devs');
 async function createDb() {
   const pg = new PGlite();
   await pg.exec(`SET TIME ZONE 'UTC'`);
+  // The dashboard's older "Board Tasks" feature has its own "BoardTask" table in the same database;
+  // the Assets board must not trip over it (it did, on its first deploy).
+  await pg.exec(`CREATE TABLE "BoardTask" ("id" TEXT NOT NULL PRIMARY KEY, "title" TEXT NOT NULL, "status" TEXT NOT NULL DEFAULT 'todo')`);
+  await pg.exec(`INSERT INTO "BoardTask" (id, title) VALUES ('old-1', 'An old board task')`);
   return {
     $queryRawUnsafe: async (sql, ...values) => (await pg.query(sql, values)).rows,
     $executeRawUnsafe: async (sql, ...values) => (await pg.query(sql, values)).affectedRows ?? 0,
@@ -87,6 +91,9 @@ test('the one-time copy from Linear: cards, tasks, subtasks, statuses, devs, upd
   assert.deepEqual(icons.subtasks.map(s => [s.name, s.status, s.devName]), [['Equipment', 'done', 'Lyft'], ['Evo Item', 'done', 'Lyft']]);
   assert.deepEqual(u.tasks.find(t => t.name === 'Mesh').deliveries[0].files, ['rukia.fbx'], 'files sent to Linear are kept as a delivery');
   assert.deepEqual(b.counts, { untasked: 3, in_progress: 2, done: 4, checkin: 1 });
+
+  const [old] = await prisma.$queryRawUnsafe(`SELECT title FROM "BoardTask" WHERE id = 'old-1'`);
+  assert.equal(old.title, 'An old board task', 'the other feature\'s table is left alone');
 
   // Once only: a second start copies nothing.
   assert.equal(await I.importOnce(prisma, async () => { throw new Error('should not be asked'); }), null);
